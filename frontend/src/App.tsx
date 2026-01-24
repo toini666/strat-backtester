@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { api, type Strategy, type BacktestResult, type Contract } from './api';
+import { useState, useEffect, useCallback } from 'react';
+import { api, type Strategy, type BacktestResult, type Contract, type Trade, type BacktestMetrics } from './api';
 import './App.css';
 
 // Components
@@ -7,13 +7,16 @@ import { Layout } from './components/Layout';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
 
+// Type for strategy parameters
+type StrategyParams = Record<string, number | string | boolean>;
+
 function App() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [selectedStrategy, setSelectedStrategy] = useState<Strategy | null>(null);
-  const [params, setParams] = useState<Record<string, any>>({});
+  const [params, setParams] = useState<StrategyParams>({});
 
   // Data Config
-  const [dataSource, setDataSource] = useState('Yahoo'); // Yahoo or Topstep
+  const [dataSource, setDataSource] = useState<'Yahoo' | 'Topstep'>('Yahoo');
   const [ticker, setTicker] = useState('BTC-USD');
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
@@ -38,7 +41,10 @@ function App() {
     api.getStrategies().then(data => {
       setStrategies(data);
       if (data.length > 0) selectStrategy(data[0]);
-    }).catch(err => setError("Failed to load strategies: " + err.message));
+    }).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      setError("Failed to load strategies: " + message);
+    });
   }, []);
 
   // Fetch Topstep contracts when source changes
@@ -50,15 +56,18 @@ function App() {
           setContracts(data);
           if (data.length > 0) setSelectedContract(data[0]);
         })
-        .catch(err => setError("Topstep Error: " + (err.response?.data?.detail || err.message)))
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          setError("Topstep Error: " + message);
+        })
         .finally(() => setLoading(false));
     }
-  }, [dataSource]);
+  }, [dataSource, contracts.length]);
 
-  const selectStrategy = (strat: Strategy) => {
+  const selectStrategy = useCallback((strat: Strategy) => {
     setSelectedStrategy(strat);
     setParams({ ...strat.default_params });
-  };
+  }, []);
 
   const runBacktest = async () => {
     if (!selectedStrategy) return;
@@ -79,17 +88,18 @@ function App() {
         params
       );
       setResult(res);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
     } finally {
       setLoading(false);
     }
   };
 
   // Helper to calc metrics on a subset of trades
-  const calculateMetrics = (trades: any[], initialEquity: number) => {
-    let equity = initialEquity;
-    let peak = initialEquity;
+  const calculateMetrics = useCallback((trades: Trade[], equity: number): BacktestMetrics => {
+    let currentEquity = equity;
+    let peak = equity;
     let maxDrawdown = 0;
 
     let cumPnL = 0;
@@ -97,21 +107,21 @@ function App() {
 
     trades.forEach(t => {
       cumPnL += t.pnl;
-      equity += t.pnl;
-      if (equity > peak) peak = equity;
-      const dd = (peak - equity) / peak;
+      currentEquity += t.pnl;
+      if (currentEquity > peak) peak = currentEquity;
+      const dd = (peak - currentEquity) / peak;
       if (dd > maxDrawdown) maxDrawdown = dd;
       if (t.pnl > 0) winCount++;
     });
 
     return {
-      total_return: (cumPnL / initialEquity) * 100,
+      total_return: (cumPnL / equity) * 100,
       win_rate: trades.length > 0 ? (winCount / trades.length) * 100 : 0,
       total_trades: trades.length,
       max_drawdown: maxDrawdown * 100,
       sharpe_ratio: 0 // Hard to recalc without timeseries
     };
-  };
+  }, []);
 
   useEffect(() => {
     if (!result) {
@@ -130,20 +140,20 @@ function App() {
     });
 
     setFilteredResult({
-      metrics: { ...result.metrics, ...newMetrics }, // Override metrics
+      metrics: { ...result.metrics, ...newMetrics },
       trades: filteredTrades,
       equity_curve: newCurve
     });
 
-  }, [result, selectedSessions, initialEquity]);
+  }, [result, selectedSessions, initialEquity, calculateMetrics]);
 
-  const toggleSession = (sess: string) => {
-    if (selectedSessions.includes(sess)) {
-      setSelectedSessions(prev => prev.filter(s => s !== sess));
-    } else {
-      setSelectedSessions(prev => [...prev, sess]);
-    }
-  };
+  const toggleSession = useCallback((sess: string) => {
+    setSelectedSessions(prev =>
+      prev.includes(sess)
+        ? prev.filter(s => s !== sess)
+        : [...prev, sess]
+    );
+  }, []);
 
   // Calculate session stats for summary table
   const sessionStats = ['Asia', 'UK', 'US'].map(sess => {
@@ -157,15 +167,26 @@ function App() {
     <Layout>
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <Sidebar
-          dataSource={dataSource} setDataSource={setDataSource}
-          ticker={ticker} setTicker={setTicker}
-          contracts={contracts} selectedContract={selectedContract} setSelectedContract={setSelectedContract}
-          interval={interval} setInterval={setInterval}
-          days={days} setDays={setDays}
-          initialEquity={initialEquity} setInitialEquity={setInitialEquity}
-          riskPerTrade={riskPerTrade} setRiskPerTrade={setRiskPerTrade}
-          strategies={strategies} selectedStrategy={selectedStrategy} selectStrategy={selectStrategy}
-          params={params} setParams={setParams}
+          dataSource={dataSource}
+          setDataSource={(v) => setDataSource(v as 'Yahoo' | 'Topstep')}
+          ticker={ticker}
+          setTicker={setTicker}
+          contracts={contracts}
+          selectedContract={selectedContract}
+          setSelectedContract={setSelectedContract}
+          interval={interval}
+          setInterval={setInterval}
+          days={days}
+          setDays={setDays}
+          initialEquity={initialEquity}
+          setInitialEquity={setInitialEquity}
+          riskPerTrade={riskPerTrade}
+          setRiskPerTrade={setRiskPerTrade}
+          strategies={strategies}
+          selectedStrategy={selectedStrategy}
+          selectStrategy={selectStrategy}
+          params={params}
+          setParams={setParams}
           runBacktest={runBacktest}
           loading={loading}
           error={error}
