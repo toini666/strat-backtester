@@ -1,14 +1,19 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Dict, Any, List, Optional
+import logging
 import sys
 import os
 import inspect
+from datetime import datetime, timedelta
+from typing import Dict, Any, List, Optional
+
 import pandas as pd
 import numpy as np
 import vectorbt as vbt
 import yfinance as yf
-from datetime import datetime, timedelta
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field, field_validator
+
+# Configure module logger
+logger = logging.getLogger(__name__)
 
 # Add src to path to import strategies
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -22,17 +27,28 @@ topstep = TopstepClient()
 # --- Models ---
 
 class BacktestRequest(BaseModel):
-    strategy_name: str
-    ticker: str
-    source: str = "Yahoo" # Yahoo or Topstep
-    contract_id: Optional[str] = None # Required for Topstep
-    interval: str = "15m"
-    days: int = 14
-    params: Dict[str, Any] = {}
-    
-    # Risk Management
-    initial_equity: float = 50000.0
-    risk_per_trade: float = 0.01 # 1%
+    """Request model for backtest with validation."""
+    strategy_name: str = Field(..., min_length=1, description="Name of the strategy to run")
+    ticker: str = Field(..., min_length=1, description="Ticker symbol")
+    source: str = Field(default="Yahoo", pattern="^(Yahoo|Topstep)$", description="Data source: Yahoo or Topstep")
+    contract_id: Optional[str] = Field(default=None, description="Contract ID (required for Topstep)")
+    interval: str = Field(default="15m", pattern="^(1m|5m|15m|30m|1h|4h|1d)$", description="Data interval")
+    days: int = Field(default=14, ge=1, le=365, description="Number of days of historical data")
+    params: Dict[str, Any] = Field(default_factory=dict, description="Strategy parameters")
+
+    # Risk Management with validation
+    initial_equity: float = Field(default=50000.0, ge=1000, le=10000000, description="Initial equity")
+    risk_per_trade: float = Field(default=0.01, ge=0.001, le=0.1, description="Risk per trade (0.01 = 1%)")
+
+    @field_validator('params')
+    @classmethod
+    def validate_params(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate strategy parameters are within reasonable bounds."""
+        for key, value in v.items():
+            if isinstance(value, (int, float)):
+                if value < -10000 or value > 10000:
+                    raise ValueError(f"Parameter '{key}' value {value} is out of reasonable bounds (-10000 to 10000)")
+        return v
 
 class Trade(BaseModel):
     entry_time: str
@@ -81,7 +97,8 @@ def get_session(dt_str: str) -> str:
             return "US"
             
         return "Outside"
-    except:
+    except Exception as e:
+        logger.warning(f"Failed to parse session from timestamp '{dt_str}': {e}")
         return "Unknown" 
 
 class BacktestResult(BaseModel):
@@ -109,7 +126,7 @@ def load_strategies():
     from src.strategies.base import Strategy
     import importlib.util
 
-    print(f"Loading strategies from {strategies_path}...")
+    logger.info(f"Loading strategies from {strategies_path}...")
 
     for file_name in os.listdir(strategies_path):
         if file_name.endswith(".py") and file_name != "__init__.py" and file_name != "base.py" and file_name != "indicators.py":
@@ -128,9 +145,9 @@ def load_strategies():
                     for name, obj in inspect.getmembers(module):
                         if inspect.isclass(obj) and issubclass(obj, Strategy) and obj is not Strategy:
                             STRATEGIES[name] = obj
-                            print(f"Registered strategy: {name}")
+                            logger.info(f"Registered strategy: {name}")
             except Exception as e:
-                print(f"Failed to load strategy {file_name}: {e}")
+                logger.error(f"Failed to load strategy {file_name}: {e}")
 
 # Initial Load
 load_strategies()
@@ -276,7 +293,7 @@ def run_backtest(req: BacktestRequest):
                         fee_per_trade = FEES_MAP[k]
                         break
         except Exception as e:
-            print(f"Warning: Contract spec fetch failed: {e}")
+            logger.warning(f"Contract spec fetch failed: {e}")
             
     # Calculate Sizes
     risk_amount = req.initial_equity * req.risk_per_trade

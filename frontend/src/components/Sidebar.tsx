@@ -1,6 +1,10 @@
 import { Database, ShieldAlert, Settings, Play } from 'lucide-react';
 import { type Strategy, type Contract } from '../api';
 
+// Type for strategy parameters
+type StrategyParamValue = number | string | boolean;
+type StrategyParams = Record<string, StrategyParamValue>;
+
 interface SidebarProps {
     // Data State
     dataSource: string;
@@ -25,8 +29,8 @@ interface SidebarProps {
     strategies: Strategy[];
     selectedStrategy: Strategy | null;
     selectStrategy: (s: Strategy) => void;
-    params: Record<string, any>;
-    setParams: (fn: (prev: Record<string, any>) => Record<string, any>) => void;
+    params: StrategyParams;
+    setParams: (fn: (prev: StrategyParams) => StrategyParams) => void;
 
     // Actions
     runBacktest: () => void;
@@ -47,7 +51,7 @@ export function Sidebar({
     runBacktest, loading, error
 }: SidebarProps) {
 
-    const handleParamChange = (key: string, value: any) => {
+    const handleParamChange = (key: string, value: StrategyParamValue) => {
         setParams(prev => ({ ...prev, [key]: value }));
     };
 

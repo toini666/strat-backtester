@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # Backend API Service
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: nebular-apollo-backend
+    ports:
+      - "8001:8001"
+    environment:
+      - LOG_LEVEL=INFO
+      - ENV=production
+      - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+      - TOPSTEP_USERNAME=${TOPSTEP_USERNAME:-}
+      - TOPSTEPX_TOKEN=${TOPSTEPX_TOKEN:-}
+    volumes:
+      # Optional: mount local strategies for development
+      # - ./src/strategies:/app/src/strategies:ro
+      - ./libs:/app/libs:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Frontend Development Server (optional, for development)
+  frontend-dev:
+    image: node:20-alpine
+    container_name: nebular-apollo-frontend-dev
+    working_dir: /app
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8001
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    profiles:
+      - development
+
+# Networks
+networks:
+  default:
+    name: nebular-apollo-network

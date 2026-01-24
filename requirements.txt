@@ -1,3 +1,6 @@
+# Nebular Apollo Backtesting Engine - Python Dependencies
+# Install with: pip install -r requirements.txt
+
 # Core
 pandas>=2.0.0
 numpy<1.24.0  # Constrained by numba/vectorbt on Mac M1
@@ -22,7 +25,8 @@ plotly>=5.18.0
 fastapi>=0.109.0
 uvicorn>=0.27.0
 
-
+# Rate Limiting
+slowapi>=0.1.9
 
 # Configuration
 pydantic>=2.5.0
@@ -31,3 +35,8 @@ python-dotenv>=1.0.0
 
 # Utilities
 tqdm>=4.66.0
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+httpx>=0.26.0
