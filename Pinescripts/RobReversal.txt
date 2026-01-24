@@ -1,0 +1,306 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Antoine - Indicateur Rob Reversal 15min
+
+//@version=6
+indicator("Rob Reversal 15min", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS - PARAMÈTRES CONFIGURABLES
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Paramètres EMA
+emaLength = input.int(8, "Période EMA", minval=1, group="Filtre EMA")
+emaColor = input.color(color.orange, "Couleur EMA", group="Filtre EMA")
+
+// Paramètres de la stratégie
+takeProfit = input.float(35, "Take Profit (points)", minval=1, group="Stratégie")
+maxStopLoss = input.float(35, "Stop Loss Maximum (points)", minval=1, group="Stratégie")
+triggerBars = input.int(1, "Bougies pour déclencher", minval=1, maxval=10, group="Stratégie", tooltip="Nombre de bougies après le setup pour déclencher l'entrée")
+blockNewSignals = input.bool(false, "Bloquer signaux si trade en cours", group="Stratégie", tooltip="Si activé, n'affiche pas de nouveaux signaux tant que le TP ou SL n'est pas atteint")
+
+// Paramètres visuels
+showTradeSignals = input.bool(true, "Afficher les entrées de trade", group="Affichage")
+showLevels = input.bool(true, "Afficher les niveaux Entry/SL/TP", group="Affichage")
+levelColor = input.color(color.new(color.white, 50), "Couleur des niveaux", group="Affichage")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CALCULS - EMA ET CONDITIONS DE BASE
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Taille du tick automatique basée sur l'asset
+tickSize = syminfo.mintick
+
+// Calcul de l'EMA 8
+ema8 = ta.ema(close, emaLength)
+plot(ema8, "EMA 8", color=emaColor, linewidth=2)
+
+// Références aux bougies
+// Barre A = bougie précédente [1]
+// Barre B = bougie de signal [0] (bougie actuelle qui vient de clôturer)
+
+barA_open = open[1]
+barA_close = close[1]
+barA_high = high[1]
+barA_low = low[1]
+
+barB_open = open
+barB_close = close
+barB_high = high
+barB_low = low
+
+// Déterminer si les bougies sont haussières ou baissières
+barA_isBullish = barA_close > barA_open
+barA_isBearish = barA_close < barA_open
+
+// Calculer le haut et le bas du CORPS de Barre A (pas le range high/low)
+barA_bodyHigh = math.max(barA_open, barA_close)
+barA_bodyLow = math.min(barA_open, barA_close)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GESTION DU TRADE EN COURS
+// ══════════════════════════════════════════════════════════════════════════════
+
+var bool tradeInProgress = false
+var float activeEntryPrice = na
+var float activeSL = na
+var float activeTP = na
+var bool isLongTrade = false
+
+// Vérifier si le trade en cours a atteint TP ou SL
+if tradeInProgress
+    if isLongTrade
+        // Long : TP atteint si high >= TP, SL atteint si low <= SL
+        if high >= activeTP or low <= activeSL
+            tradeInProgress := false
+            activeEntryPrice := na
+            activeSL := na
+            activeTP := na
+    else
+        // Short : TP atteint si low <= TP, SL atteint si high >= SL
+        if low <= activeTP or high >= activeSL
+            tradeInProgress := false
+            activeEntryPrice := na
+            activeSL := na
+            activeTP := na
+
+// Condition pour autoriser de nouveaux signaux
+canShowNewSignals = not blockNewSignals or not tradeInProgress
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONDITIONS DE SETUP - LONG
+// ══════════════════════════════════════════════════════════════════════════════
+
+// 1. Contexte : Barre A doit être baissière
+longCondition1 = barA_isBearish
+
+// 2. Balayage : Barre B doit percer le bas de Barre A d'au moins 1 tick
+longCondition2 = barB_low < (barA_low - tickSize)
+
+// 3. Clôture interne : Barre B doit clôturer à l'intérieur du CORPS de Barre A
+//    (entre barA_bodyLow et barA_bodyHigh)
+longCondition3 = barB_close > barA_bodyLow and barB_close < barA_bodyHigh
+
+// 4. Filtre EMA : Clôture de Barre B au-dessus de l'EMA 8
+longCondition4 = barB_close > ema8
+
+// Setup LONG valide (toutes les conditions réunies)
+longSetupRaw = longCondition1 and longCondition2 and longCondition3 and longCondition4
+longSetup = longSetupRaw and canShowNewSignals
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONDITIONS DE SETUP - SHORT
+// ══════════════════════════════════════════════════════════════════════════════
+
+// 1. Contexte : Barre A doit être haussière
+shortCondition1 = barA_isBullish
+
+// 2. Balayage : Barre B doit percer le haut de Barre A d'au moins 1 tick
+shortCondition2 = barB_high > (barA_high + tickSize)
+
+// 3. Clôture interne : Barre B doit clôturer à l'intérieur du CORPS de Barre A
+shortCondition3 = barB_close < barA_bodyHigh and barB_close > barA_bodyLow
+
+// 4. Filtre EMA : Clôture de Barre B en dessous de l'EMA 8
+shortCondition4 = barB_close < ema8
+
+// Setup SHORT valide (toutes les conditions réunies)
+shortSetupRaw = shortCondition1 and shortCondition2 and shortCondition3 and shortCondition4
+shortSetup = shortSetupRaw and canShowNewSignals
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CALCUL DES NIVEAUX D'ENTRÉE, SL ET TP
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Variables pour stocker les niveaux et le compteur de bougies
+var float pendingLongEntry = na
+var float pendingLongSL = na
+var float pendingLongTP = na
+var bool pendingLongOrder = false
+var int longSetupBarIndex = 0
+
+var float pendingShortEntry = na
+var float pendingShortSL = na
+var float pendingShortTP = na
+var bool pendingShortOrder = false
+var int shortSetupBarIndex = 0
+
+// Quand un setup LONG est détecté
+if longSetup
+    pendingLongEntry := barB_high + tickSize
+    // Stop Loss : bas de Barre B, sauf si > maxStopLoss points
+    rawSL = pendingLongEntry - barB_low
+    pendingLongSL := rawSL > maxStopLoss ? pendingLongEntry - maxStopLoss : barB_low
+    pendingLongTP := pendingLongEntry + takeProfit
+    pendingLongOrder := true
+    longSetupBarIndex := bar_index
+
+// Quand un setup SHORT est détecté
+if shortSetup
+    pendingShortEntry := barB_low - tickSize
+    // Stop Loss : haut de Barre B, sauf si > maxStopLoss points
+    rawSL = barB_high - pendingShortEntry
+    pendingShortSL := rawSL > maxStopLoss ? pendingShortEntry + maxStopLoss : barB_high
+    pendingShortTP := pendingShortEntry - takeProfit
+    pendingShortOrder := true
+    shortSetupBarIndex := bar_index
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DÉTECTION DES ENTRÉES (TRIGGERS)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Calculer le nombre de bougies depuis le setup
+barsSinceLongSetup = bar_index - longSetupBarIndex
+barsSinceShortSetup = bar_index - shortSetupBarIndex
+
+// Vérifier si on est dans la fenêtre de déclenchement (entre 1 et triggerBars bougies après le setup)
+inLongTriggerWindow = pendingLongOrder and barsSinceLongSetup >= 1 and barsSinceLongSetup <= triggerBars
+inShortTriggerWindow = pendingShortOrder and barsSinceShortSetup >= 1 and barsSinceShortSetup <= triggerBars
+
+// Vérifier si l'ordre LONG est déclenché (le prix monte au-dessus du niveau d'entrée)
+longTriggered = inLongTriggerWindow and high >= pendingLongEntry and canShowNewSignals
+
+// Vérifier si l'ordre SHORT est déclenché (le prix descend en-dessous du niveau d'entrée)
+shortTriggered = inShortTriggerWindow and low <= pendingShortEntry and canShowNewSignals
+
+// Activer le trade en cours lors du déclenchement
+if longTriggered and not tradeInProgress
+    tradeInProgress := true
+    activeEntryPrice := pendingLongEntry
+    activeSL := pendingLongSL
+    activeTP := pendingLongTP
+    isLongTrade := true
+
+if shortTriggered and not tradeInProgress
+    tradeInProgress := true
+    activeEntryPrice := pendingShortEntry
+    activeSL := pendingShortSL
+    activeTP := pendingShortTP
+    isLongTrade := false
+
+// Reset des ordres pending après déclenchement ou expiration de la fenêtre
+if longTriggered or (pendingLongOrder and barsSinceLongSetup > triggerBars)
+    pendingLongOrder := false
+    pendingLongEntry := na
+    pendingLongSL := na
+    pendingLongTP := na
+
+if shortTriggered or (pendingShortOrder and barsSinceShortSetup > triggerBars)
+    pendingShortOrder := false
+    pendingShortEntry := na
+    pendingShortSL := na
+    pendingShortTP := na
+
+// ══════════════════════════════════════════════════════════════════════════════
+// AFFICHAGE VISUEL DES SETUPS ET TRADES
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Triangles pour les setups valides (sans texte)
+plotshape(showTradeSignals and longSetup, title="Setup LONG", 
+          style=shape.triangleup, location=location.belowbar, 
+          color=color.green, size=size.small)
+
+plotshape(showTradeSignals and shortSetup, title="Setup SHORT", 
+          style=shape.triangledown, location=location.abovebar, 
+          color=color.red, size=size.small)
+
+// Marqueur pour les entrées effectives (petits et discrets)
+plotshape(showTradeSignals and longTriggered, title="Entrée LONG", 
+          style=shape.labelup, location=location.belowbar, 
+          color=color.green, size=size.tiny, text="BUY", textcolor=color.white)
+
+plotshape(showTradeSignals and shortTriggered, title="Entrée SHORT", 
+          style=shape.labeldown, location=location.abovebar, 
+          color=color.red, size=size.tiny, text="SELL", textcolor=color.white)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LIGNES DE NIVEAUX DU TRADE ACTIF
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Afficher les niveaux du trade actif uniquement
+plot(showLevels and tradeInProgress ? activeEntryPrice : na, "Entry", color=levelColor, style=plot.style_linebr, linewidth=1)
+plot(showLevels and tradeInProgress ? activeSL : na, "Stop Loss", color=levelColor, style=plot.style_linebr, linewidth=1)
+plot(showLevels and tradeInProgress ? activeTP : na, "Take Profit", color=levelColor, style=plot.style_linebr, linewidth=1)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ALERTES DYNAMIQUES EN JSON
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Fonction pour formater un nombre avec précision
+formatPrice(price) =>
+    str.tostring(price, format.mintick)
+
+// Fonction pour formater le timeframe (M5, M15, H1, H4, D1, D3, W1, etc.)
+formatTimeframe() =>
+    tf = timeframe.period
+    result = ""
+    if str.contains(tf, "S")
+        // Secondes
+        result := "S" + str.replace(tf, "S", "")
+    else if str.contains(tf, "D")
+        // Jours
+        if tf == "D"
+            result := "D1"
+        else
+            result := "D" + str.replace(tf, "D", "")
+    else if str.contains(tf, "W")
+        // Semaines
+        if tf == "W"
+            result := "W1"
+        else
+            result := "W" + str.replace(tf, "W", "")
+    else if str.contains(tf, "M")
+        // Mois
+        if tf == "M"
+            result := "MO1"
+        else
+            result := "MO" + str.replace(tf, "M", "")
+    else
+        // Minutes ou heures (valeur numérique)
+        tfInt = str.tonumber(tf)
+        if tfInt >= 60
+            // Heures
+            result := "H" + str.tostring(math.round(tfInt / 60))
+        else
+            // Minutes
+            result := "M" + tf
+    result
+
+tfFormatted = formatTimeframe()
+
+// Alertes pour les SETUPS
+if longSetup
+    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SETUP","side":"BUY","entry":"' + formatPrice(pendingLongEntry) + '","stop":"' + formatPrice(pendingLongSL) + '","tp":"' + formatPrice(pendingLongTP) + '","strat":"RobReversal", "timeframe":"' + tfFormatted + '"}'
+    alert(alertMsg, alert.freq_once_per_bar_close)
+
+if shortSetup
+    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SETUP","side":"SELL","entry":"' + formatPrice(pendingShortEntry) + '","stop":"' + formatPrice(pendingShortSL) + '","tp":"' + formatPrice(pendingShortTP) + '","strat":"RobReversal", "timeframe":"' + tfFormatted + '"}'
+    alert(alertMsg, alert.freq_once_per_bar_close)
+
+// Alertes pour les SIGNAUX (entrées déclenchées)
+if longTriggered
+    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":"' + formatPrice(activeEntryPrice) + '","stop":"' + formatPrice(activeSL) + '","tp":"' + formatPrice(activeTP) + '","strat":"RobReversal", "timeframe":"' + tfFormatted + '"}'
+    alert(alertMsg, alert.freq_once_per_bar)
+
+if shortTriggered
+    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":"' + formatPrice(activeEntryPrice) + '","stop":"' + formatPrice(activeSL) + '","tp":"' + formatPrice(activeTP) + '","strat":"RobReversal", "timeframe":"' + tfFormatted + '"}'
+    alert(alertMsg, alert.freq_once_per_bar)

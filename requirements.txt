@@ -1,0 +1,33 @@
+# Core
+pandas>=2.0.0
+numpy<1.24.0  # Constrained by numba/vectorbt on Mac M1
+
+# Backtesting Engine
+vectorbt>=0.28.2
+numba<0.57.0  # Required by vectorbt
+llvmlite<0.40.0 # Required by numba
+
+# Data Sources
+yfinance<1.0.0
+requests>=2.31.0
+urllib3<2.0.0  # Required for Mac LibreSSL compatibility
+
+# Technical Indicators
+-e ./libs/pandas-ta
+
+# Visualization
+plotly>=5.18.0
+
+# API
+fastapi>=0.109.0
+uvicorn>=0.27.0
+
+
+
+# Configuration
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
+# Utilities
+tqdm>=4.66.0
