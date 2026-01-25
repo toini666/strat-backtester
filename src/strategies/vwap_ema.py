@@ -139,14 +139,20 @@ class VwapEmaStrategy(Strategy):
 
             # ============================================
             # PINE FLOW ORDER (must match exactly):
-            # 1. Increment setupBarCount if in setup
+            # In PineScript, var variables retain their value from the PREVIOUS bar.
+            # So when evaluating longSignal = inSetup and ..., inSetup has its
+            # value from BEFORE any modifications on this bar.
+            #
+            # Flow:
+            # 1. Increment setupBarCount if in setup (uses previous bar's state)
             # 2. Timeout setup if exceeded
-            # 3. Detect NEW setups (which resets counter)
-            # 4. Check entry signals (using potentially new setup)
-            # 5. Handle exits (only after entry bar)
+            # 3. Calculate entry signals FIRST (using PREVIOUS bar's setup state)
+            # 4. Create NEW setups (updates state for NEXT bar)
+            # 5. Process entries (using signals calculated at step 3)
+            # 6. Handle exits
             # ============================================
 
-            # --- 1. INCREMENT SETUP COUNTER (before new setup detection) ---
+            # --- 1. INCREMENT SETUP COUNTER (uses state from previous bar) ---
             if in_setup and not in_position:
                 setup_bars += 1
 
@@ -155,7 +161,17 @@ class VwapEmaStrategy(Strategy):
                 in_setup = False
                 setup_bars = 0
 
-            # --- 3. NEW SETUP DETECTION (can override/replace existing setup) ---
+            # --- 3. CALCULATE ENTRY SIGNALS FIRST (before new setup creation!) ---
+            # This is crucial: signals must use the setup state from PREVIOUS bar
+            # Retest conditions
+            retest_long_vwap = (curr_low <= (curr_vwap + tol)) and (curr_close > curr_vwap)
+            retest_short_vwap = (curr_high >= (curr_vwap - tol)) and (curr_close < curr_vwap)
+
+            # Signal: setup active (from previous bar) AND retest valid
+            long_signal = in_setup and setup_is_long and in_session and retest_long_vwap
+            short_signal = in_setup and (not setup_is_long) and in_session and retest_short_vwap
+
+            # --- 4. NEW SETUP DETECTION (updates state for next bar) ---
             # Setup: VWAP crossover detection
             setup_long_triggered = (not in_position and in_session and
                                     prev_close < prev_vwap and curr_close > curr_vwap)
@@ -172,15 +188,7 @@ class VwapEmaStrategy(Strategy):
                 setup_is_long = False
                 setup_bars = 0  # Reset counter on new setup
 
-            # --- 4. ENTRY SIGNAL CHECK (can trigger on same bar as setup!) ---
-            # Retest conditions
-            retest_long_vwap = (curr_low <= (curr_vwap + tol)) and (curr_close > curr_vwap)
-            retest_short_vwap = (curr_high >= (curr_vwap - tol)) and (curr_close < curr_vwap)
-
-            # Signal: setup active AND retest valid
-            long_signal = in_setup and setup_is_long and in_session and retest_long_vwap
-            short_signal = in_setup and (not setup_is_long) and in_session and retest_short_vwap
-
+            # --- 5. PROCESS ENTRIES (using signals calculated BEFORE setup update) ---
             if long_signal and not in_position:
                 long_entries.iloc[i] = True
                 in_position = True
