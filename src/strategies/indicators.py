@@ -1,4 +1,4 @@
-import pandas_ta_classic as ta
+# import pandas_ta as ta -> Removed due to missing dependency
 import pandas as pd
 
 class Indicators:

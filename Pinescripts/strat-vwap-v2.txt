@@ -1,0 +1,364 @@
+//@version=6
+indicator("VWAP Reversal & EMA Trend Following", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ============================================
+// PARAMÈTRES INPUT
+// ============================================
+
+// Timezone
+utcOffset = input.int(1, "UTC Offset (Brussels)", minval=-12, maxval=14, tooltip="UTC+1 (hiver) ou UTC+2 (été)")
+
+// Retest Tolerance
+retestTolerance = input.float(1.0, "Retest Tolerance (points)", minval=0.1, step=0.1, tooltip="Zone de tolérance pour valider un retest")
+
+// EMA
+emaLength = input.int(8, "EMA Length", minval=1)
+
+// Sessions (en heure de Brussels)
+tradingStartHour = input.int(3, "Trading Start Hour", minval=0, maxval=23)
+tradingEndHour = input.int(22, "Trading End Hour", minval=0, maxval=23)
+
+// Visualisation
+showVWAP = input.bool(true, "Show VWAP", group="Display")
+showEMA = input.bool(true, "Show EMA", group="Display")
+
+// ============================================
+// FONCTIONS UTILITAIRES
+// ============================================
+
+// Arrondir au min tick
+roundToTick(price) =>
+    math.round(price / syminfo.mintick) * syminfo.mintick
+
+// Conversion de l'heure locale (Brussels) en UTC pour comparaison
+getLocalTime() =>
+    timestamp = time
+    localHour = hour(timestamp, "UTC") + utcOffset
+    localMinute = minute(timestamp, "UTC")
+    
+    // Gérer le dépassement de 24h
+    if localHour >= 24
+        localHour := localHour - 24
+    else if localHour < 0
+        localHour := localHour + 24
+    
+    [localHour, localMinute]
+
+// Vérifier si on est dans une session
+isInSession(startH, startM, endH, endM) =>
+    [currentH, currentM] = getLocalTime()
+    currentTime = currentH * 60 + currentM
+    startTime = startH * 60 + startM
+    endTime = endH * 60 + endM
+    
+    currentTime >= startTime and currentTime < endTime
+
+// Obtenir la timeframe formatée (M5, H1, D1, etc.)
+getFormattedTimeframe() =>
+    tf = timeframe.period
+    result = ""
+    
+    if str.contains(tf, "D")
+        result := "D" + str.replace(tf, "D", "")
+    else if str.contains(tf, "W")
+        result := "W" + str.replace(tf, "W", "")
+    else if str.contains(tf, "M") and not str.contains(tf, "MO")
+        result := "MO" + str.replace(tf, "M", "")
+    else
+        // Minutes ou Heures
+        tfNum = str.tonumber(tf)
+        if not na(tfNum)
+            if tfNum < 60
+                result := "M" + str.tostring(tfNum)
+            else
+                hours = tfNum / 60
+                result := "H" + str.tostring(hours)
+        else
+            result := tf
+    
+    result
+
+// ============================================
+// INDICATEURS
+// ============================================
+
+// VWAP
+vwapValue = ta.vwap(close)
+plot(showVWAP ? vwapValue : na, "VWAP", color=color.blue, linewidth=2)
+
+// EMA 8
+emaValue = ta.ema(close, emaLength)
+plot(showEMA ? emaValue : na, "EMA 8", color=color.yellow, linewidth=1)
+
+// ============================================
+// VARIABLES D'ÉTAT
+// ============================================
+
+var bool inPosition = false
+var bool isLong = false
+var float entryPrice = na
+var float stopLoss = na
+var bool emaExitArmed = false
+var int entryBar = na  // Pour éviter SL sur bougie d'entrée
+
+// État de setup (en attente de retest)
+var bool inSetup = false
+var bool setupIsLong = false
+var int setupBarCount = 0  // Compteur de bougies depuis le setup
+int maxSetupBars = 10  // Timeout : 10 bougies max
+
+// Pour afficher la boule sur la bougie suivante
+var bool showEntryBall = false
+var bool entryWasLong = false
+
+// Lignes de position
+var line entryLine = na
+var line stopLine = na
+
+// ============================================
+// LOGIQUE DE LA STRATÉGIE
+// ============================================
+
+// Session de trading active
+inTradingSession = isInSession(tradingStartHour, 0, tradingEndHour, 0)
+
+// ============================================
+// CONDITIONS D'ENTRÉE (RETEST)
+// ============================================
+
+// SETUP : Détection de CROISEMENT de VWAP (pas juste clôture d'un côté)
+// Pour un LONG : bougie précédente close < VWAP ET bougie actuelle close > VWAP
+bool setupLongTriggered = not inPosition and inTradingSession and close[1] < vwapValue[1] and close > vwapValue
+
+// Pour un SHORT : bougie précédente close > VWAP ET bougie actuelle close < VWAP
+bool setupShortTriggered = not inPosition and inTradingSession and close[1] > vwapValue[1] and close < vwapValue
+
+// Fonction de validation du retest LONG (uniquement VWAP)
+retestLongVWAP = low <= (vwapValue + retestTolerance) and close > vwapValue
+
+// Fonction de validation du retest SHORT (uniquement VWAP)
+retestShortVWAP = high >= (vwapValue - retestTolerance) and close < vwapValue
+
+// SIGNAL : Retest validé depuis l'état de setup
+bool longSignal = inSetup and setupIsLong and inTradingSession and retestLongVWAP
+bool shortSignal = inSetup and not setupIsLong and inTradingSession and retestShortVWAP
+
+// Calcul des niveaux de stop loss (calculés à chaque barre pour cohérence Pine Script)
+float longStopLevel = roundToTick(ta.lowest(low, 4))
+float shortStopLevel = roundToTick(ta.highest(high, 4))
+
+// ============================================
+// GESTION DES SETUPS (TRIANGLES)
+// ============================================
+
+// Incrémenter le compteur si on est en setup
+if inSetup and not inPosition
+    setupBarCount += 1
+
+// Timeout : Annuler le setup après 10 bougies sans retest validé
+if inSetup and not inPosition and setupBarCount >= maxSetupBars
+    inSetup := false
+    setupBarCount := 0
+
+// Entrée en mode SETUP (un nouveau setup annule l'ancien)
+if setupLongTriggered
+    inSetup := true
+    setupIsLong := true
+    setupBarCount := 0  // Réinitialiser le compteur
+    
+    // Visualisation : Triangle vert (texte seul, pas de forme de label)
+    label.new(bar_index, low, "▲", color=color.new(color.white, 100), style=label.style_none, size=size.tiny, textcolor=color.green, yloc=yloc.belowbar, textalign=text.align_center)
+
+if setupShortTriggered
+    inSetup := true
+    setupIsLong := false
+    setupBarCount := 0  // Réinitialiser le compteur
+    
+    // Visualisation : Triangle rouge (texte seul, pas de forme de label)
+    label.new(bar_index, high, "▼", color=color.new(color.white, 100), style=label.style_none, size=size.tiny, textcolor=color.red, yloc=yloc.abovebar, textalign=text.align_center)
+
+// ============================================
+// GESTION DES POSITIONS
+// ============================================
+
+// Afficher la boule d'entrée sur la bougie SUIVANT le retest
+if showEntryBall
+    if entryWasLong
+        label.new(bar_index, low, "●", color=color.new(color.white, 100), style=label.style_none, size=size.tiny, textcolor=color.green, yloc=yloc.belowbar, textalign=text.align_center)
+    else
+        label.new(bar_index, high, "●", color=color.new(color.white, 100), style=label.style_none, size=size.tiny, textcolor=color.red, yloc=yloc.abovebar, textalign=text.align_center)
+    showEntryBall := false
+
+// Entrée en position
+if longSignal
+    inPosition := true
+    isLong := true
+    inSetup := false  // Sortir de l'état de setup
+    setupBarCount := 0  // Réinitialiser le compteur
+    entryPrice := roundToTick(close)
+    entryBar := bar_index  // Tracker la barre d'entrée
+    
+    // Calculer le SL sur les 4 dernières bougies pour ne pas inclure uniquement la bougie actuelle
+    stopLoss := longStopLevel
+    
+    // Armement de la sortie EMA
+    emaExitArmed := close > emaValue
+    
+    // Flag pour afficher la boule à la prochaine bougie
+    showEntryBall := true
+    entryWasLong := true
+    
+    // Alerte SIGNAL
+    alertMessage = '{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopLoss) + ',"strat":"vwapEma-' + syminfo.ticker + '-' + getFormattedTimeframe() + '","timeframe":"' + getFormattedTimeframe() + '"}'
+    alert(alertMessage, alert.freq_once_per_bar_close)
+
+if shortSignal
+    inPosition := true
+    isLong := false
+    inSetup := false  // Sortir de l'état de setup
+    setupBarCount := 0  // Réinitialiser le compteur
+    entryPrice := roundToTick(close)
+    entryBar := bar_index  // Tracker la barre d'entrée
+    
+    // Calculer le SL sur les 4 dernières bougies pour ne pas inclure uniquement la bougie actuelle
+    stopLoss := shortStopLevel
+    
+    // Armement de la sortie EMA
+    emaExitArmed := close < emaValue
+    
+    // Flag pour afficher la boule à la prochaine bougie
+    showEntryBall := true
+    entryWasLong := false
+    
+    // Alerte SIGNAL
+    alertMessage = '{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopLoss) + ',"strat":"vwapEma-' + syminfo.ticker + '-' + getFormattedTimeframe() + '","timeframe":"' + getFormattedTimeframe() + '"}'
+    alert(alertMessage, alert.freq_once_per_bar_close)
+
+// ============================================
+// GESTION DES SORTIES
+// ============================================
+
+bool exitTriggered = false
+float exitPrice = na
+string exitReason = ""
+
+if inPosition and bar_index > entryBar  // Ne vérifier les sorties qu'APRÈS la bougie d'entrée
+    // Vérifier Stop Loss (alerte immédiate si touché)
+    if isLong and low <= stopLoss
+        exitTriggered := true
+        exitPrice := stopLoss
+        exitReason := "SL"
+        
+        // Alerte CLOSE immédiate (Stop Loss touché en cours de bougie)
+        // Side inversé : fermeture d'un LONG = SELL
+        alertMessage = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"SELL","entry":' + str.tostring(exitPrice) + ',"strat":"vwapEma-' + syminfo.ticker + '-' + getFormattedTimeframe() + '","timeframe":"' + getFormattedTimeframe() + '"}'
+        alert(alertMessage, alert.freq_all)
+    
+    if not isLong and high >= stopLoss and not exitTriggered
+        exitTriggered := true
+        exitPrice := stopLoss
+        exitReason := "SL"
+        
+        // Alerte CLOSE immédiate (Stop Loss touché en cours de bougie)
+        // Side inversé : fermeture d'un SHORT = BUY
+        alertMessage = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"BUY","entry":' + str.tostring(exitPrice) + ',"strat":"vwapEma-' + syminfo.ticker + '-' + getFormattedTimeframe() + '","timeframe":"' + getFormattedTimeframe() + '"}'
+        alert(alertMessage, alert.freq_all)
+    
+    // Sortie EMA : Armement conditionnel (alerte à la clôture)
+    if not exitTriggered
+        // Pour un LONG
+        if isLong
+            // Si pas encore armé, vérifier si on peut armer
+            if not emaExitArmed and close > emaValue
+                emaExitArmed := true
+            
+            // Si armé, vérifier la sortie
+            if emaExitArmed and close < emaValue
+                exitTriggered := true
+                exitPrice := roundToTick(close)
+                exitReason := "EMA"
+                
+                // Alerte CLOSE à la clôture (sortie EMA)
+                // Side inversé : fermeture d'un LONG = SELL
+                alertMessage = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"SELL","entry":' + str.tostring(exitPrice) + ',"strat":"vwapEma-' + syminfo.ticker + '-' + getFormattedTimeframe() + '","timeframe":"' + getFormattedTimeframe() + '"}'
+                alert(alertMessage, alert.freq_once_per_bar_close)
+        
+        // Pour un SHORT
+        if not isLong
+            // Si pas encore armé, vérifier si on peut armer
+            if not emaExitArmed and close < emaValue
+                emaExitArmed := true
+            
+            // Si armé, vérifier la sortie
+            if emaExitArmed and close > emaValue
+                exitTriggered := true
+                exitPrice := roundToTick(close)
+                exitReason := "EMA"
+                
+                // Alerte CLOSE à la clôture (sortie EMA)
+                // Side inversé : fermeture d'un SHORT = BUY
+                alertMessage = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"BUY","entry":' + str.tostring(exitPrice) + ',"strat":"vwapEma-' + syminfo.ticker + '-' + getFormattedTimeframe() + '","timeframe":"' + getFormattedTimeframe() + '"}'
+                alert(alertMessage, alert.freq_once_per_bar_close)
+
+// Exécuter la sortie
+if exitTriggered
+    // Déterminer la couleur : vert si profit, rouge si perte
+    bool isProfit = (isLong and exitPrice > entryPrice) or (not isLong and exitPrice < entryPrice)
+    color exitColor = isProfit ? color.green : color.red
+    
+    // Visualisation : Croix (texte seul, pas de forme de label)
+    // LONG fermé → en bas, SHORT fermé → en haut
+    if isLong
+        label.new(bar_index, low, "✕", color=color.new(color.white, 100), style=label.style_none, size=size.tiny, textcolor=exitColor, yloc=yloc.belowbar, textalign=text.align_center)
+    else
+        label.new(bar_index, high, "✕", color=color.new(color.white, 100), style=label.style_none, size=size.tiny, textcolor=exitColor, yloc=yloc.abovebar, textalign=text.align_center)
+    
+    // Vérifier si la sortie correspond à un croisement VWAP → afficher un triangle
+    bool exitCrossLong = close[1] < vwapValue[1] and close > vwapValue  // Croisement haussier
+    bool exitCrossShort = close[1] > vwapValue[1] and close < vwapValue  // Croisement baissier
+    
+    if exitCrossLong and inTradingSession
+        // Triangle vert après sortie d'un short (nouveau setup long)
+        label.new(bar_index, low, "▲", color=color.new(color.white, 100), style=label.style_none, size=size.tiny, textcolor=color.green, yloc=yloc.belowbar, textalign=text.align_center)
+        inSetup := true
+        setupIsLong := true
+        setupBarCount := 0
+    else if exitCrossShort and inTradingSession
+        // Triangle rouge après sortie d'un long (nouveau setup short)
+        label.new(bar_index, high, "▼", color=color.new(color.white, 100), style=label.style_none, size=size.tiny, textcolor=color.red, yloc=yloc.abovebar, textalign=text.align_center)
+        inSetup := true
+        setupIsLong := false
+        setupBarCount := 0
+    else
+        // Pas de croisement, réinitialiser le setup
+        inSetup := false
+        setupBarCount := 0
+    
+    // Supprimer les lignes (pas juste les mettre à na)
+    if not na(entryLine)
+        line.delete(entryLine)
+    if not na(stopLine)
+        line.delete(stopLine)
+    
+    // Réinitialiser l'état de position
+    inPosition := false
+    entryPrice := na
+    stopLoss := na
+    emaExitArmed := false
+    entryBar := na
+    entryLine := na
+    stopLine := na
+
+// ============================================
+// VISUALISATION DES LIGNES DE POSITION
+// ============================================
+
+if inPosition
+    // Si les lignes n'existent pas encore, les créer
+    if na(entryLine)
+        entryLine := line.new(bar_index, entryPrice, bar_index, entryPrice, color=color.blue, width=1, style=line.style_dotted)
+        stopLine := line.new(bar_index, stopLoss, bar_index, stopLoss, color=color.red, width=1, style=line.style_dotted)
+    else
+        // Sinon, prolonger les lignes existantes
+        line.set_x2(entryLine, bar_index)
+        line.set_x2(stopLine, bar_index)

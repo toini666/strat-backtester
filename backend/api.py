@@ -185,6 +185,7 @@ def get_topstep_contracts():
 
 # --- Constants ---
 # Fee Map (Round Turn) based on user input
+# Fee Map (Round Turn) based on user input
 FEES_MAP = {
     "ES": 2.80, "MES": 0.74,
     "NQ": 2.80, "MNQ": 0.74,
@@ -200,6 +201,23 @@ FEES_MAP = {
     "6A": 3.24, "M6A": 0.52, # AUD
     "6E": 3.24, "M6E": 0.52, # EUR
     "6B": 3.24, "M6B": 0.52, # GBP
+}
+
+# Contract Specs from Architecture.md
+# Tick Size, Tick Value
+CONTRACT_SPECS = {
+    "ES":  {"tick_size": 0.25, "tick_value": 12.50},
+    "MES": {"tick_size": 0.25, "tick_value": 1.25},
+    "NQ":  {"tick_size": 0.25, "tick_value": 5.00},
+    "MNQ": {"tick_size": 0.25, "tick_value": 0.50},
+    "RTY": {"tick_size": 0.10, "tick_value": 5.00}, # Russell 2000
+    "M2K": {"tick_size": 0.10, "tick_value": 0.50},
+    "YM":  {"tick_size": 1.00, "tick_value": 5.00},
+    "MYM": {"tick_size": 1.00, "tick_value": 0.50},
+    "GC":  {"tick_size": 0.10, "tick_value": 10.00},
+    "MGC": {"tick_size": 0.10, "tick_value": 1.00},
+    "CL":  {"tick_size": 0.01, "tick_value": 10.00},
+    "MCL": {"tick_size": 0.01, "tick_value": 1.00},
 }
 
 @router.post("/backtest", response_model=BacktestResult)
@@ -292,6 +310,18 @@ def run_backtest(req: BacktestRequest):
                     if k in contract_name:
                         fee_per_trade = FEES_MAP[k]
                         break
+
+            # Override with Hardcoded Specs if available (More reliable)
+            # Check matches in CONTRACT_SPECS
+            sorted_spec_keys = sorted(CONTRACT_SPECS.keys(), key=len, reverse=True)
+            for k in sorted_spec_keys:
+                if contract and k in contract.get('name', '').upper():
+                    spec = CONTRACT_SPECS[k]
+                    tick_size = spec['tick_size']
+                    tick_value = spec['tick_value']
+                    if tick_size > 0:
+                         point_value = tick_value / tick_size
+                    break
         except Exception as e:
             logger.warning(f"Contract spec fetch failed: {e}")
             
@@ -327,13 +357,15 @@ def run_backtest(req: BacktestRequest):
     # If exec_price is available, use it (Topstep/Strategy specific), else use Close
     price_to_use = exec_price if exec_price is not None else data['Close']
 
+    # Use high cash to simulate Margin/Futures (avoid Spot cap)
+    sim_cash = 1_000_000_000.0 
     pf = vbt.Portfolio.from_signals(
         close=price_to_use, 
         entries=long_entries,
         exits=long_exits,
         short_entries=short_entries,
         short_exits=short_exits,
-        init_cash=req.initial_equity,
+        init_cash=sim_cash,
         freq=req.interval,
         size=size_series,
         size_type='Amount', # Fixed amount of contracts
@@ -399,7 +431,7 @@ def run_backtest(req: BacktestRequest):
     # Actually, let's subtract estimated fees cumulatively? Too hard for 15s calculation.
     # Let's start with Scaled VBT Equity (Gross). The Trade List has Net PnL.
     
-    adjusted_equity = req.initial_equity + (vbt_equity - req.initial_equity) * point_value
+    adjusted_equity = req.initial_equity + (vbt_equity - sim_cash) * point_value
     
     equity_curve = [{"time": str(idx), "value": float(val)} for idx, val in adjusted_equity.items()]
     

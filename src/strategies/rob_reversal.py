@@ -1,7 +1,7 @@
 from .base import Strategy
 import pandas as pd
 import numpy as np
-import pandas_ta_classic as ta
+import pandas_ta as ta
 from typing import Tuple, Dict, Any, Optional
 
 class RobReversal(Strategy):
@@ -219,29 +219,43 @@ class RobReversal(Strategy):
                     tp_hit = seg_max >= active_tp
                     
                     if sl_hit and tp_hit:
-                        # Both in segment? Which came first?
-                        # Linear interpolation: which is closer to current_p?
                         dist_sl = abs(active_sl - current_p)
                         dist_tp = abs(active_tp - current_p)
                         
                         if dist_sl < dist_tp:
                             # SL first
-                            long_exits.iloc[i] = True
-                            np_exec_price[i] = active_sl
+                            if long_entries.iloc[i] and i < len(data) - 1:
+                                long_exits.iloc[i+1] = True
+                                np_exec_price[i+1] = active_sl
+                            else:
+                                long_exits.iloc[i] = True
+                                np_exec_price[i] = active_sl
                             active_trade_side = 0
                         else:
                             # TP first
-                            long_exits.iloc[i] = True
-                            np_exec_price[i] = active_tp
+                            if long_entries.iloc[i] and i < len(data) - 1:
+                                long_exits.iloc[i+1] = True
+                                np_exec_price[i+1] = active_tp
+                            else:
+                                long_exits.iloc[i] = True
+                                np_exec_price[i] = active_tp
                             active_trade_side = 0
                             
                     elif sl_hit:
-                        long_exits.iloc[i] = True
-                        np_exec_price[i] = active_sl
+                        if long_entries.iloc[i] and i < len(data) - 1:
+                             long_exits.iloc[i+1] = True
+                             np_exec_price[i+1] = active_sl
+                        else:
+                             long_exits.iloc[i] = True
+                             np_exec_price[i] = active_sl
                         active_trade_side = 0
                     elif tp_hit:
-                        long_exits.iloc[i] = True
-                        np_exec_price[i] = active_tp
+                        if long_entries.iloc[i] and i < len(data) - 1:
+                             long_exits.iloc[i+1] = True
+                             np_exec_price[i+1] = active_tp
+                        else:
+                             long_exits.iloc[i] = True
+                             np_exec_price[i] = active_tp
                         active_trade_side = 0
                         
                 elif active_trade_side == -1:
@@ -255,20 +269,36 @@ class RobReversal(Strategy):
                         dist_sl = abs(active_sl - current_p)
                         dist_tp = abs(active_tp - current_p)
                         if dist_sl < dist_tp:
-                            short_exits.iloc[i] = True
-                            np_exec_price[i] = active_sl
+                            if short_entries.iloc[i] and i < len(data) - 1:
+                                short_exits.iloc[i+1] = True
+                                np_exec_price[i+1] = active_sl
+                            else:
+                                short_exits.iloc[i] = True
+                                np_exec_price[i] = active_sl
                             active_trade_side = 0
                         else:
-                            short_exits.iloc[i] = True
-                            np_exec_price[i] = active_tp
+                            if short_entries.iloc[i] and i < len(data) - 1:
+                                short_exits.iloc[i+1] = True
+                                np_exec_price[i+1] = active_tp
+                            else:
+                                short_exits.iloc[i] = True
+                                np_exec_price[i] = active_tp
                             active_trade_side = 0
                     elif sl_hit:
-                        short_exits.iloc[i] = True
-                        np_exec_price[i] = active_sl
+                        if short_entries.iloc[i] and i < len(data) - 1:
+                             short_exits.iloc[i+1] = True
+                             np_exec_price[i+1] = active_sl
+                        else:
+                             short_exits.iloc[i] = True
+                             np_exec_price[i] = active_sl
                         active_trade_side = 0
                     elif tp_hit:
-                        short_exits.iloc[i] = True
-                        np_exec_price[i] = active_tp
+                        if short_entries.iloc[i] and i < len(data) - 1:
+                             short_exits.iloc[i+1] = True
+                             np_exec_price[i+1] = active_tp
+                        else:
+                             short_exits.iloc[i] = True
+                             np_exec_price[i] = active_tp
                         active_trade_side = 0
                 
                 # B. CHECK PENDING ENTRIES
@@ -325,27 +355,14 @@ class RobReversal(Strategy):
                             rem_max = max(pending_long_entry, next_p)
                             
                             if rem_min <= active_sl:
-                                long_exits.iloc[i] = True # Same bar exit
-                                # VBT handles same bar entry/exit?
-                                # We might need to shift exit to i+1 or use specific VBT mode.
-                                # For now, keeping logic simplified: Mark exit.
-                                # VBT 'from_signals' might ignore exit on same bar if entries[i] is True?
-                                # Ideally we'd overwrite entry with "Trade Closed" but VBT needs signals.
-                                # Workaround: We can't easily express Intrabar PnL in VBT standard signals without expanding data.
-                                # But we can mark Exit at i (Close).
-                                # If we write Exit=True at i, VBT closes at Close Price? NO, we set exec_price.
-                                # If both Entry and Exit are True at i: VBT functionality varies.
-                                # Usually opens and closes same bar.
-                                np_exec_price[i] = active_sl # Overwrite exec price? VBT might assume Entry Price for Entry and Exit Price for Exit.
-                                # We have only one price array 'exec_price'.
-                                # This is a limitation. returning 'exec_price' works for ONE signal type per bar usually.
-                                # If we have both, we might want to return 'close' for exit? 
-                                # Actually, lets just mark exit. If VBT fails, we assume 15m granularity limitation.
-                                # But logic wise:
+                                if i < len(data) - 1:
+                                    long_exits.iloc[i+1] = True 
+                                    np_exec_price[i+1] = active_sl
                                 active_trade_side = 0
                             elif rem_max >= active_tp:
-                                long_exits.iloc[i] = True
-                                np_exec_price[i] = active_tp
+                                if i < len(data) - 1:
+                                    long_exits.iloc[i+1] = True
+                                    np_exec_price[i+1] = active_tp
                                 active_trade_side = 0
                             
                             # Setup consumed
@@ -369,12 +386,14 @@ class RobReversal(Strategy):
                             rem_max = max(pending_short_entry, next_p)
                             
                             if rem_max >= active_sl:
-                                short_exits.iloc[i] = True
-                                np_exec_price[i] = active_sl
+                                if i < len(data) - 1:
+                                    short_exits.iloc[i+1] = True
+                                    np_exec_price[i+1] = active_sl
                                 active_trade_side = 0
                             elif rem_min <= active_tp:
-                                short_exits.iloc[i] = True
-                                np_exec_price[i] = active_tp
+                                if i < len(data) - 1:
+                                    short_exits.iloc[i+1] = True
+                                    np_exec_price[i+1] = active_tp
                                 active_trade_side = 0
                                 
                             can_take_new = False
