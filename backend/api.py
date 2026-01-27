@@ -425,55 +425,83 @@ def run_backtest(req: BacktestRequest):
     # VectorBT expects 'size' at index to be the Order Amount.
     # Entries: Size provided. Exits: Size provided.
     # We must match Exits to Entries to know held quantity.
-    
-    current_qty = 0.0 # Long only support for MVP partial logic
-    
+
     # Pre-fill size series with entry sizes (only relevant at entry indices)
     size_series = entry_sizes.copy()
-    
-    # Re-construct indices
+
+    # ===== LONG POSITIONS =====
+    current_long_qty = 0.0
+
     idx_long_entry = np.where(long_entries)[0]
     idx_long_exit = np.where(long_exits)[0] if long_exits is not None else []
-    
-    combined_indices = sorted(np.unique(np.concatenate([idx_long_entry, idx_long_exit])))
-    
-    # Simple FIFO Simulation to set Exit Sizes
-    for i in combined_indices:
+
+    combined_long_indices = sorted(np.unique(np.concatenate([idx_long_entry, idx_long_exit])))
+
+    # FIFO Simulation for Long positions
+    for i in combined_long_indices:
         is_entry = long_entries.iloc[i]
         is_exit = long_exits.iloc[i] if long_exits is not None else False
-        
+
         if is_entry:
-            # We are entering (Assuming accumulated or new trade)
-            # If we allow accumulation, current_qty increases.
-            # Strategy UTBot only enters if not in pos.
             qty = entry_sizes.iloc[i]
-            current_qty += qty 
+            current_long_qty += qty
             size_series.iloc[i] = qty
-            
+
         if is_exit:
-            # We are exiting. Check ratio.
             ratio = 1.0
             if exit_ratios is not None:
                 ratio = exit_ratios.iloc[i]
-            
-            # If current_qty > 0
-            if current_qty > 0:
-                # Calculate exit amount
-                # If ratio is 1.0, close all
+
+            if current_long_qty > 0:
                 if ratio >= 0.99:
-                    exit_amt = current_qty
+                    exit_amt = current_long_qty
                 else:
-                    # Partial
-                    exit_amt = current_qty * ratio
-                    # Round? futures imply integer.
-                    exit_amt = max(1.0, round(exit_amt)) # Ensure at least 1 contract if integer
-                    if exit_amt > current_qty:
-                        exit_amt = current_qty
-                
+                    exit_amt = current_long_qty * ratio
+                    exit_amt = max(1.0, round(exit_amt))
+                    if exit_amt > current_long_qty:
+                        exit_amt = current_long_qty
+
                 size_series.iloc[i] = exit_amt
-                current_qty -= exit_amt
+                current_long_qty -= exit_amt
             else:
-                 size_series.iloc[i] = 0.0 # No position to close
+                size_series.iloc[i] = 0.0
+
+    # ===== SHORT POSITIONS =====
+    current_short_qty = 0.0
+
+    idx_short_entry = np.where(short_entries)[0] if short_entries is not None else []
+    idx_short_exit = np.where(short_exits)[0] if short_exits is not None else []
+
+    combined_short_indices = sorted(np.unique(np.concatenate([idx_short_entry, idx_short_exit])))
+
+    # FIFO Simulation for Short positions
+    for i in combined_short_indices:
+        is_entry = short_entries.iloc[i] if short_entries is not None else False
+        is_exit = short_exits.iloc[i] if short_exits is not None else False
+
+        if is_entry:
+            qty = entry_sizes.iloc[i]
+            current_short_qty += qty
+            size_series.iloc[i] = qty
+
+        if is_exit:
+            ratio = 1.0
+            if exit_ratios is not None:
+                ratio = exit_ratios.iloc[i]
+
+            if current_short_qty > 0:
+                if ratio >= 0.99:
+                    exit_amt = current_short_qty
+                else:
+                    exit_amt = current_short_qty * ratio
+                    exit_amt = max(1.0, round(exit_amt))
+                    if exit_amt > current_short_qty:
+                        exit_amt = current_short_qty
+
+                size_series.iloc[i] = exit_amt
+                current_short_qty -= exit_amt
+            else:
+                size_series.iloc[i] = 0.0
 
     # 5. Run Portfolio
     # If exec_price is available, use it (Topstep/Strategy specific), else use Close
@@ -494,7 +522,10 @@ def run_backtest(req: BacktestRequest):
         accumulate=True, 
         fees=0.0, 
         slippage=0.0,
-        sl_stop=list(map(abs, sl_dist_series)) if sl_dist_series is not None and not strategy_instance.manual_exit else None
+        # Note: sl_stop is disabled when exec_price is provided, as the strategy already manages
+        # exit prices. VectorBT interprets sl_stop as a percentage by default, not absolute values,
+        # which would cause incorrect calculations if we passed absolute distances.
+        sl_stop=None
     )
     
     # 6. Metrics & Trades (Manual PnL Scaling)
