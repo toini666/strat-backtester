@@ -15,7 +15,7 @@ export function Layout({ children }: LayoutProps) {
                         </div>
                         <div>
                             <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent">
-                                Nebular Apollo
+                                Toini666 Backtester
                             </h1>
                             <div className="text-xs text-blue-400/60 font-medium tracking-widest uppercase">
                                 Quantitative Engine

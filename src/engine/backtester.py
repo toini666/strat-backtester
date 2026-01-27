@@ -76,13 +76,34 @@ class Backtester:
         data: pd.DataFrame,
         strategy: Strategy,
         params: dict = None,
-        symbol: str = "UNKNOWN"
+        symbol: str = "UNKNOWN",
+        data_source: str = None
     ) -> BacktestResult:
         """
         Execute backtest.
         """
         # 1. Generate signals
         entries, exits = strategy.generate_signals(data, params)
+        
+        # 1.5 Apply Data Source Specific Filters
+        if data_source and data_source.lower() == "topstep":
+            # Topstep: No trading between 22:00 and 00:00 (Midnight)
+            # We filter out ENTRIES during this period.
+            # Assuming data.index is DatetimeIndex
+            
+            # Create a mask for hours >= 22
+            # Note: We assume local time or whatever time the data is in is consistent with the rule.
+            # Usually Topstep is CST/CDT, but here we apply to the index provided.
+            
+            time_mask = data.index.hour >= 22
+            
+            # Mask Entries (Prevent new trades)
+            if entries.any():
+                entries = entries & (~time_mask)
+            
+            # Optional: Mask Exits? 
+            # If we just prevent entries, existing trades might still exit naturally or via SL.
+            # This is "safer" than blocking exits which might lead to holding overnight inadvertently in backtest logic.
         
         # 2. Calculate Sizing
         # We need to iterate or vector-calculate size. 

@@ -310,6 +310,39 @@ def run_backtest(req: BacktestRequest):
             long_entries, short_entries = signals
             long_exits = None
             short_exits = None
+            
+        # --- Topstep Time Filter (22:00 - 00:00 Paris Time) ---
+        if req.source == "Topstep":
+            # Data from Topstep is UTC. User operates in CET (Paris).
+            # We must convert to ensure "22h" means 22h local.
+            try:
+                # Create a temporary index for filtering logic
+                temp_index = data.index
+                if temp_index.tz is None:
+                    # Assume UTC if naive
+                    temp_index = temp_index.tz_localize('UTC')
+                else:
+                    temp_index = temp_index.tz_convert('UTC')
+                
+                # Convert to Paris Time
+                temp_index_paris = temp_index.tz_convert('Europe/Paris')
+                
+                # Filter 22h to 24h (hours 22 and 23)
+                time_mask = (temp_index_paris.hour >= 22)
+                
+                if long_entries is not None:
+                    long_entries = long_entries & (~time_mask)
+                
+                if short_entries is not None:
+                    short_entries = short_entries & (~time_mask)
+            except Exception as e:
+                logger.warning(f"Timezone conversion failed for filter: {e}")
+                # Fallback to UTC filter >= 21 (Approx)
+                time_mask = data.index.hour >= 21
+                if long_entries is not None:
+                    long_entries = long_entries & (~time_mask)
+                if short_entries is not None:
+                    short_entries = short_entries & (~time_mask)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Strategy execution error: {str(e)}")
