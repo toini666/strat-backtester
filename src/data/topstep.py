@@ -307,11 +307,6 @@ class TopstepClient:
             all_bars.extend(bars)
             logger.debug(f"Page {page_count}: received {len(bars)} bars, total so far: {len(all_bars)}")
 
-            if len(bars) < 10000:
-                # Less than limit means we've got all available data
-                logger.debug(f"Received {len(bars)} bars (< 10000), pagination complete")
-                break
-
             # Get the MINIMUM time in the batch (oldest bar)
             # API returns most recent bars, so we need to paginate backwards
             batch_times = [pd.to_datetime(b['t']) for b in bars]
