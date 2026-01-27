@@ -13,6 +13,7 @@ class Strategy(ABC):
     name: str = "BaseStrategy"
     default_params: Dict[str, Any] = {}
     param_ranges: Dict[str, Any] = {}
+    manual_exit: bool = False # If True, API wont pass SL/TP to VBT engine for execution (still used for sizing)
     
     def __init__(self):
         # Ensure indicators are loaded

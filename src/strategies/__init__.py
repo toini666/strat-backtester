@@ -1,2 +1,2 @@
-from .base import Strategy
 from .indicators import Indicators
+from .utbot_heikin import UTBotHeikin

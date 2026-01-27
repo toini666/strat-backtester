@@ -1,0 +1,405 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Antoine - Stratégie Bulles de Bollinger Classiques
+
+//@version=6
+indicator("Bulles de Bollinger - Classiques", overlay=true, max_labels_count=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Bollinger Bands
+bbLength    = input.int(20, "BB Longueur", minval=1, group="Bandes de Bollinger")
+bbMult      = input.float(2.0, "BB Multiplicateur", minval=0.1, step=0.1, group="Bandes de Bollinger")
+
+// Filtres
+filterBulldozer = input.bool(true, "Filtrer mode Bulldozer (évite signaux consécutifs)", group="Filtres")
+
+// Couleurs
+colorBuy   = input.color(color.new(color.green, 0), "Achat", group="Couleurs")
+colorSell  = input.color(color.new(color.red, 0), "Vente", group="Couleurs")
+colorClassiqueCandle = input.color(color.white, "Bougie Classique (Barre A)", group="Couleurs")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CALCULS DES INDICATEURS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Bollinger Bands
+basis   = ta.sma(close, bbLength)
+dev     = bbMult * ta.stdev(close, bbLength)
+upper   = basis + dev
+lower   = basis - dev
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FONCTIONS UTILITAIRES
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Fonction pour formater le timeframe en M5, H1, D3, W1, etc.
+formatTimeframe() =>
+    string result = ""
+    if timeframe.isintraday
+        int mins = timeframe.multiplier
+        if mins < 60
+            result := "M" + str.tostring(mins)
+        else
+            result := "H" + str.tostring(mins / 60)
+    else if timeframe.isdaily
+        result := "D" + str.tostring(timeframe.multiplier)
+    else if timeframe.isweekly
+        result := "W" + str.tostring(timeframe.multiplier)
+    else if timeframe.ismonthly
+        result := "MO" + str.tostring(timeframe.multiplier)
+    else
+        result := timeframe.period
+    result
+
+tfString = formatTimeframe()
+
+// Fonction pour arrondir un prix au mintick et le formater en string
+roundToTick(float price) =>
+    math.round(price / syminfo.mintick) * syminfo.mintick
+
+priceToString(float price) =>
+    str.tostring(roundToTick(price), format.mintick)
+
+// Fonction pour construire le champ strat complet (stratType-ticker-timeframe)
+buildStrat(string stratType) =>
+    stratType + "-" + syminfo.ticker + "-" + tfString
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DÉTECTION DES BULLES CLASSIQUES
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Fonctions helper pour clarifier le code
+isGreenCandle(idx) => close[idx] > open[idx]
+isRedCandle(idx) => close[idx] < open[idx]
+
+// ----- BULLE CLASSIQUE - Détection de la Barre A (bougie actuelle pour coloration) -----
+// Open ET Close hors BB, mais High ou Low touche la bande
+isBulleClassiqueBuy_current = open < lower and close < lower and high >= lower
+isBulleClassiqueSell_current = open > upper and close > upper and low <= upper
+
+// ----- BULLE CLASSIQUE - Pour le trigger (on regarde la bougie précédente [1]) -----
+barreA_classique_buy = open[1] < lower[1] and close[1] < lower[1] and high[1] >= lower[1]
+barreA_classique_sell = open[1] > upper[1] and close[1] > upper[1] and low[1] <= upper[1]
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FILTRE BULLDOZER - Éviter signaux consécutifs
+// ══════════════════════════════════════════════════════════════════════════════
+
+prevWasBubbleBuy_classique  = (open[2] < lower[2] and close[2] < lower[2]) or (high[2] < lower[2])
+prevWasBubbleSell_classique = (open[2] > upper[2] and close[2] > upper[2]) or (low[2] > upper[2])
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONDITIONS D'ENTRÉE (TRIGGERS)
+// ══════════════════════════════════════════════════════════════════════════════
+
+triggerBuy_classique = barreA_classique_buy and close >= lower and close <= upper and isGreenCandle(0)
+triggerSell_classique = barreA_classique_sell and close >= lower and close <= upper and isRedCandle(0)
+
+signalBuy  = triggerBuy_classique and (not filterBulldozer or not prevWasBubbleBuy_classique)
+signalSell = triggerSell_classique and (not filterBulldozer or not prevWasBubbleSell_classique)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GESTION DU TRADE ACTIF
+// ══════════════════════════════════════════════════════════════════════════════
+
+// État du trade actif
+var int activeDirection = 0      // 1 = BUY, -1 = SELL, 0 = pas de trade
+var float activeSL = na          // SL (devient BE après TP1)
+var float activeEntry = na       // Prix d'entrée (aussi utilisé comme BE)
+
+// Flag pour savoir si on vient juste d'entrer (ne pas vérifier SL/TP sur la bougie de signal)
+var bool justEntered = false
+
+// Flags pour éviter alertes multiples sur même TP
+var bool tp1Hit = false
+var bool tp2Hit = false
+
+// Variables pour les labels et lignes (valeurs à l'entrée)
+var float entry_display = na
+var float sl_display = na
+var float tp1_display = na
+var float tp2_display = na
+
+// Reset du flag justEntered au début de chaque nouvelle bougie (si on n'entre pas en position)
+if not (signalBuy or signalSell)
+    justEntered := false
+
+// ----- Nouveau signal BUY Classique -----
+if signalBuy
+    activeDirection := 1
+    activeSL := low[1]
+    activeEntry := close
+    tp1Hit := false
+    tp2Hit := false
+    justEntered := true
+    entry_display := close
+    sl_display := low[1]
+    tp1_display := basis
+    tp2_display := upper
+
+// ----- Nouveau signal SELL Classique -----
+if signalSell
+    activeDirection := -1
+    activeSL := high[1]
+    activeEntry := close
+    tp1Hit := false
+    tp2Hit := false
+    justEntered := true
+    entry_display := close
+    sl_display := high[1]
+    tp1_display := basis
+    tp2_display := lower
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DÉTECTION DYNAMIQUE DES TP, SL ET BE
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Signaux séparés pour LONG et SHORT (pour positionner les croix correctement)
+tp1Reached_long = false
+tp1Reached_short = false
+tp2Reached_long = false
+tp2Reached_short = false
+slReached_long = false
+slReached_short = false
+beReached_long = false
+beReached_short = false
+
+// Prix actuel du TP quand atteint (pour l'alerte)
+var float tp1PriceForAlert = na
+var float tp2PriceForAlert = na
+
+// On ne vérifie les SL/TP que si on N'EST PAS sur la bougie de signal (justEntered = false)
+if not justEntered
+
+    // ----- BUY CLASSIQUE : TP1 = basis, TP2 = upper -----
+    if activeDirection == 1
+        if not tp1Hit
+            // Avant TP1 : vérifier SL original
+            if not na(activeSL) and low <= activeSL
+                slReached_long := true
+                activeDirection := 0
+                tp1Hit := false
+                tp2Hit := false
+            // TP1 : prix touche la SMA20 actuelle (basis)
+            else if high >= basis
+                tp1Reached_long := true
+                tp1Hit := true
+                tp1PriceForAlert := basis
+                // SL devient BE (prix d'entrée)
+                activeSL := activeEntry
+        else
+            // Après TP1 : vérifier BE ou TP2
+            // BE touché (prix revient au prix d'entrée)
+            if low <= activeEntry
+                beReached_long := true
+                activeDirection := 0
+                tp1Hit := false
+                tp2Hit := false
+            // TP2 : prix touche la bande supérieure actuelle
+            else if high >= upper
+                tp2Reached_long := true
+                tp2Hit := true
+                tp2PriceForAlert := upper
+                activeDirection := 0
+
+    // ----- SELL CLASSIQUE : TP1 = basis, TP2 = lower -----
+    if activeDirection == -1
+        if not tp1Hit
+            // Avant TP1 : vérifier SL original
+            if not na(activeSL) and high >= activeSL
+                slReached_short := true
+                activeDirection := 0
+                tp1Hit := false
+                tp2Hit := false
+            // TP1 : prix touche la SMA20 actuelle (basis)
+            else if low <= basis
+                tp1Reached_short := true
+                tp1Hit := true
+                tp1PriceForAlert := basis
+                // SL devient BE (prix d'entrée)
+                activeSL := activeEntry
+        else
+            // Après TP1 : vérifier BE ou TP2
+            // BE touché (prix revient au prix d'entrée)
+            if high >= activeEntry
+                beReached_short := true
+                activeDirection := 0
+                tp1Hit := false
+                tp2Hit := false
+            // TP2 : prix touche la bande inférieure actuelle
+            else if low <= lower
+                tp2Reached_short := true
+                tp2Hit := true
+                tp2PriceForAlert := lower
+                activeDirection := 0
+
+// Combinaisons pour les alertes
+tp1Reached = tp1Reached_long or tp1Reached_short
+tp2Reached = tp2Reached_long or tp2Reached_short
+slReached = slReached_long or slReached_short
+beReached = beReached_long or beReached_short
+
+// ══════════════════════════════════════════════════════════════════════════════
+// AFFICHAGE GRAPHIQUE
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Bandes de Bollinger - toutes en bleu, même épaisseur
+bbColor = color.new(color.blue, 20)
+plot(basis, "BB Basis (SMA 20)", color=bbColor, linewidth=1)
+plot(upper, "BB Upper", color=bbColor, linewidth=1)
+plot(lower, "BB Lower", color=bbColor, linewidth=1)
+fill(plot(upper, display=display.none), plot(lower, display=display.none), color=color.new(color.blue, 90), title="BB Fill")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COLORATION DES BOUGIES
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Bougies Classique (la Barre A) en blanc
+isClassiqueCandle = isBulleClassiqueBuy_current or isBulleClassiqueSell_current
+
+barcolor(isClassiqueCandle ? colorClassiqueCandle : na)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SIGNAUX VISUELS (affichés sur la bougie SUIVANTE = bougie d'entrée réelle)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ----- BULLE CLASSIQUE - Triangles (sur la bougie d'entrée) -----
+plotshape(signalBuy[1], title="Achat Classique", location=location.belowbar, style=shape.triangleup, size=size.tiny, color=colorBuy)
+plotshape(signalSell[1], title="Vente Classique", location=location.abovebar, style=shape.triangledown, size=size.tiny, color=colorSell)
+
+// ----- Marqueurs TP pour LONG -----
+plotshape(tp1Reached_long, title="TP1 Long", location=location.abovebar, style=shape.xcross, size=size.tiny, color=color.green)
+plotshape(tp2Reached_long, title="TP2 Long", location=location.abovebar, style=shape.xcross, size=size.tiny, color=color.green)
+
+// ----- Marqueurs TP pour SHORT -----
+plotshape(tp1Reached_short, title="TP1 Short", location=location.belowbar, style=shape.xcross, size=size.tiny, color=color.green)
+plotshape(tp2Reached_short, title="TP2 Short", location=location.belowbar, style=shape.xcross, size=size.tiny, color=color.green)
+
+// ----- Marqueurs SL pour LONG -----
+plotshape(slReached_long, title="SL Long", location=location.belowbar, style=shape.xcross, size=size.tiny, color=color.red)
+
+// ----- Marqueurs SL pour SHORT -----
+plotshape(slReached_short, title="SL Short", location=location.abovebar, style=shape.xcross, size=size.tiny, color=color.red)
+
+// ----- Marqueurs BE (Break-Even) - Orange -----
+plotshape(beReached_long, title="BE Long", location=location.belowbar, style=shape.xcross, size=size.tiny, color=color.orange)
+plotshape(beReached_short, title="BE Short", location=location.abovebar, style=shape.xcross, size=size.tiny, color=color.orange)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LABELS AVEC NIVEAUX ENTRY / SL / TP (caché par défaut)
+// ══════════════════════════════════════════════════════════════════════════════
+
+showLevels = input.bool(false, "Afficher les niveaux SL/TP", group="Affichage")
+
+if showLevels
+    if signalBuy[1]
+        txtBuy = "BUY CLASSIQUE\nEntry: " + str.tostring(entry_display, format.mintick) + "\nSL: " + str.tostring(sl_display, format.mintick) + "\nTP1: " + str.tostring(tp1_display, format.mintick) + "\nTP2: " + str.tostring(tp2_display, format.mintick)
+        label.new(bar_index, low, txtBuy, style=label.style_label_up, color=colorBuy, textcolor=color.white, size=size.small)
+    
+    if signalSell[1]
+        txtSell = "SELL CLASSIQUE\nEntry: " + str.tostring(entry_display, format.mintick) + "\nSL: " + str.tostring(sl_display, format.mintick) + "\nTP1: " + str.tostring(tp1_display, format.mintick) + "\nTP2: " + str.tostring(tp2_display, format.mintick)
+        label.new(bar_index, high, txtSell, style=label.style_label_down, color=colorSell, textcolor=color.white, size=size.small)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LIGNES DE NIVEAUX ENTRY/SL/TP1/TP2 (dernier trade) - TP DYNAMIQUES
+// ══════════════════════════════════════════════════════════════════════════════
+
+showLines = input.bool(false, "Tracer lignes SL/TP (dernier signal)", group="Affichage")
+lineLookback = input.int(20, "Longueur des lignes (bougies)", minval=5, maxval=100, group="Affichage")
+
+colorEntryLine = input.color(color.new(color.gray, 30), "Entry", group="Couleurs Lignes")
+colorSLLine  = input.color(color.new(color.red, 30), "Stop Loss", group="Couleurs Lignes")
+colorTP1Line = input.color(color.new(color.green, 30), "TP1", group="Couleurs Lignes")
+colorTP2Line = input.color(color.new(color.green, 50), "TP2", group="Couleurs Lignes")
+
+var line entryLine = na
+var line slLine = na
+var line tp1Line = na
+var line tp2Line = na
+var int signalBarIdx = na
+
+if showLines
+    // Nouveau signal : créer les lignes
+    if signalBuy or signalSell
+        line.delete(entryLine)
+        line.delete(slLine)
+        line.delete(tp1Line)
+        line.delete(tp2Line)
+        
+        signalBarIdx := bar_index
+        
+        entryLine := line.new(bar_index, entry_display, bar_index + lineLookback, entry_display, color=colorEntryLine, style=line.style_dotted, width=1)
+        slLine := line.new(bar_index, sl_display, bar_index + lineLookback, sl_display, color=colorSLLine, style=line.style_dotted, width=1)
+        tp1Line := line.new(bar_index, tp1_display, bar_index + lineLookback, tp1_display, color=colorTP1Line, style=line.style_dotted, width=1)
+        tp2Line := line.new(bar_index, tp2_display, bar_index + lineLookback, tp2_display, color=colorTP2Line, style=line.style_dotted, width=1)
+    
+    // Mise à jour dynamique des lignes TP1, TP2 et SL à chaque bougie si trade actif
+    if activeDirection != 0 and not na(tp1Line) and not na(tp2Line) and not na(slLine)
+        // Calcul des valeurs TP dynamiques
+        float currentTP1 = basis
+        float currentTP2 = activeDirection == 1 ? upper : lower
+        
+        // Mettre à jour les coordonnées Y des lignes TP (si pas encore touchés)
+        if not tp1Hit
+            line.set_y1(tp1Line, currentTP1)
+            line.set_y2(tp1Line, currentTP1)
+        
+        if not tp2Hit
+            line.set_y1(tp2Line, currentTP2)
+            line.set_y2(tp2Line, currentTP2)
+        
+        // Mettre à jour SL : si TP1 touché, SL devient BE (entry)
+        if tp1Hit
+            line.set_y1(slLine, activeEntry)
+            line.set_y2(slLine, activeEntry)
+            line.set_color(slLine, color.orange)  // Changer couleur en orange pour BE
+        
+        // Étendre les lignes jusqu'à la bougie actuelle + lookback
+        line.set_x2(entryLine, bar_index + lineLookback)
+        line.set_x2(slLine, bar_index + lineLookback)
+        line.set_x2(tp1Line, bar_index + lineLookback)
+        line.set_x2(tp2Line, bar_index + lineLookback)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ALERTES JSON DYNAMIQUES
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Variable pour stocker la direction du dernier trade pour les alertes
+var string lastTradeDirection = ""
+
+// ----- ALERTE ENTRÉE BULLE CLASSIQUE -----
+if signalBuy
+    lastTradeDirection := "BUY"
+    alertMsg = '{"ticker": "' + syminfo.ticker + '", "type": "SIGNAL", "side": "BUY", "entry": ' + priceToString(close) + ', "stop": ' + priceToString(low[1]) + ', "tp": ' + priceToString(upper) + ', "strat": "' + buildStrat("bulleClassique") + '", "timeframe": "' + tfString + '"}'
+    alert(alertMsg, alert.freq_once_per_bar_close)
+
+if signalSell
+    lastTradeDirection := "SELL"
+    alertMsg = '{"ticker": "' + syminfo.ticker + '", "type": "SIGNAL", "side": "SELL", "entry": ' + priceToString(close) + ', "stop": ' + priceToString(high[1]) + ', "tp": ' + priceToString(lower) + ', "strat": "' + buildStrat("bulleClassique") + '", "timeframe": "' + tfString + '"}'
+    alert(alertMsg, alert.freq_once_per_bar_close)
+
+// ----- ALERTE TP1 / PARTIAL (dès que touché) -----
+if tp1Reached
+    tpSide = lastTradeDirection == "BUY" ? "SELL" : "BUY"
+    alertMsg = '{"ticker": "' + syminfo.ticker + '", "type": "PARTIAL", "side": "' + tpSide + '", "entry": ' + priceToString(tp1PriceForAlert) + ', "stop": null, "tp": null, "strat": "' + buildStrat("bulleClassique") + '", "timeframe": "' + tfString + '"}'
+    alert(alertMsg, alert.freq_once_per_bar)
+
+// ----- ALERTE TP2 / CLOSE (dès que touché) -----
+if tp2Reached
+    tpSide = lastTradeDirection == "BUY" ? "SELL" : "BUY"
+    alertMsg = '{"ticker": "' + syminfo.ticker + '", "type": "CLOSE", "side": "' + tpSide + '", "entry": ' + priceToString(tp2PriceForAlert) + ', "stop": null, "tp": null, "strat": "' + buildStrat("bulleClassique") + '", "timeframe": "' + tfString + '"}'
+    alert(alertMsg, alert.freq_once_per_bar)
+
+// ----- ALERTE STOP LOSS / CLOSE (dès que touché) -----
+if slReached
+    slSide = lastTradeDirection == "BUY" ? "SELL" : "BUY"
+    alertMsg = '{"ticker": "' + syminfo.ticker + '", "type": "CLOSE", "side": "' + slSide + '", "entry": ' + priceToString(activeSL) + ', "stop": null, "tp": null, "strat": "' + buildStrat("bulleClassique") + '", "timeframe": "' + tfString + '"}'
+    alert(alertMsg, alert.freq_once_per_bar)
+
+// ----- ALERTE BREAK-EVEN / CLOSE (dès que touché après TP1) -----
+if beReached
+    beSide = lastTradeDirection == "BUY" ? "SELL" : "BUY"
+    alertMsg = '{"ticker": "' + syminfo.ticker + '", "type": "CLOSE", "side": "' + beSide + '", "entry": ' + priceToString(activeEntry) + ', "stop": null, "tp": null, "strat": "' + buildStrat("bulleClassique") + '", "timeframe": "' + tfString + '"}'
+    alert(alertMsg, alert.freq_once_per_bar)

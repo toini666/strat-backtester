@@ -32,7 +32,7 @@ class BacktestRequest(BaseModel):
     ticker: str = Field(..., min_length=1, description="Ticker symbol")
     source: str = Field(default="Yahoo", pattern="^(Yahoo|Topstep)$", description="Data source: Yahoo or Topstep")
     contract_id: Optional[str] = Field(default=None, description="Contract ID (required for Topstep)")
-    interval: str = Field(default="15m", pattern="^(1m|5m|15m|30m|1h|4h|1d)$", description="Data interval")
+    interval: str = Field(default="15m", pattern="^(1m|2m|5m|15m|30m|1h|4h|1d)$", description="Data interval")
     days: int = Field(default=14, ge=1, le=365, description="Number of days of historical data")
     params: Dict[str, Any] = Field(default_factory=dict, description="Strategy parameters")
 
@@ -222,6 +222,9 @@ CONTRACT_SPECS = {
 
 @router.post("/backtest", response_model=BacktestResult)
 def run_backtest(req: BacktestRequest):
+    # Reload strategies to ensure code changes (like rounding/logic fixes) are picked up dynamically
+    load_strategies()
+    
     if req.strategy_name not in STRATEGIES:
         raise HTTPException(status_code=404, detail="Strategy not found")
     
@@ -258,13 +261,46 @@ def run_backtest(req: BacktestRequest):
     params = strategy_instance.default_params.copy()
     params.update(req.params)
     
+    # Auto-inject tick_size if available from Topstep or Contract Specs
+    # We essentially duplicate the logic from "4. Position Sizing" to get tick_size early
+    current_tick_size = 0.25 # Default
+    
+    if req.source == "Topstep" and req.contract_id:
+        try:
+            contracts = topstep.fetch_available_contracts()
+            contract = next((c for c in contracts if str(c['id']) == str(req.contract_id)), None)
+            if contract:
+                current_tick_size = float(contract.get('tickSize', 0.25))
+            else:
+                # Fallback to specs
+                 sorted_spec_keys = sorted(CONTRACT_SPECS.keys(), key=len, reverse=True)
+                 for k in sorted_spec_keys:
+                    if req.ticker and k in req.ticker.upper(): # req.ticker might be contract name in Topstep mode?
+                         # Usually req.ticker is symbol. For Topstep, ticker in request might be empty or Name?
+                         # We rely on contract_id for lookup mainly.
+                         pass
+        except:
+            pass
+    else:
+        # Yahoo mode - check ticker vs Specs
+        sorted_spec_keys = sorted(CONTRACT_SPECS.keys(), key=len, reverse=True)
+        for k in sorted_spec_keys:
+            if k in req.ticker.upper():
+                current_tick_size = CONTRACT_SPECS[k]['tick_size']
+                break
+    
+    params['tick_size'] = current_tick_size
+    
     # 3. Simulate (VectorBT)
     try:
         signals = strategy_instance.generate_signals(data, params)
         exec_price = None
         sl_dist_series = None
+        exit_ratios = None
         
-        if len(signals) == 6:
+        if len(signals) == 7:
+             long_entries, long_exits, short_entries, short_exits, exec_price, sl_dist_series, exit_ratios = signals
+        elif len(signals) == 6:
              long_entries, long_exits, short_entries, short_exits, exec_price, sl_dist_series = signals
         elif len(signals) == 5:
              long_entries, long_exits, short_entries, short_exits, exec_price = signals
@@ -325,34 +361,120 @@ def run_backtest(req: BacktestRequest):
         except Exception as e:
             logger.warning(f"Contract spec fetch failed: {e}")
             
-    # Calculate Sizes
+    # Calculate Base Sizing (Entries)
     risk_amount = req.initial_equity * req.risk_per_trade
     
     # If strategy provided specific SL distances, use them
     if sl_dist_series is not None:
-        # Avoid div by zero
         safe_sl = sl_dist_series.replace(0, tick_size)
         
-        # User Formula Update: Size = Risk / (SL_Ticks * Tick_Value)
-        # SL_Ticks = SL_Dist / Tick_Size
-        # So: Size = Risk / ((SL_Dist / Tick_Size) * Tick_Value)
+        # Ensure positive distance (Reciprocity: Short dist should be positive)
+        safe_sl = safe_sl.abs() 
         
         sl_ticks = safe_sl / tick_size
         raw_sizes = risk_amount / (sl_ticks * tick_value)
         
         # Round down to nearest int, min 1
-        size_series = np.maximum(1.0, np.floor(raw_sizes))
-        size_series = size_series.fillna(1.0) # Fallback
+        entry_sizes = np.maximum(1.0, np.floor(raw_sizes)).fillna(1.0)
     else:
-        # Global Sizing based on Max SL
-        max_sl = float(params.get('max_stop_loss', 35.0))
-        if max_sl > 0 and tick_size > 0 and tick_value > 0:
-             # Same formula
-            sl_ticks = max_sl / tick_size
-            raw_size = risk_amount / (sl_ticks * tick_value)
-            fixed_size = max(1.0, float(int(raw_size)))
-            size_series = fixed_size
+        # Fallback to strategy.get_stop_loss if available
+        # We need to iterate entries to get dynamic SL
+        entry_sizes = pd.Series(1.0, index=data.index)
+        
+        # Check if strategy overrides get_stop_loss (heuristic: if it's not base method? 
+        # Or just try calling it. Base returns None.)
+        
+        # We process Long Entries
+        long_indices = np.where(long_entries)[0]
+        for idx in long_indices:
+             try:
+                 sl_price = strategy_instance.get_stop_loss(data, idx, params)
+                 if sl_price is not None:
+                     entry_price = data['Close'].iloc[idx]
+                     risk_per_share = abs(entry_price - sl_price)
+                     if risk_per_share > 0:
+                         # Size = RiskAmount / (RiskPerShare * PointValue * ? No, RiskAmount / (RiskPerContract))
+                         # RiskPerContract = (RiskTicks) * TickValue
+                         # RiskTicks = RiskPrice / TickSize
+                         # Same as: RiskAmount / ( (RiskPrice/TickSize) * TickValue )
+                         
+                         risk_ticks = risk_per_share / tick_size
+                         calc_size = risk_amount / (risk_ticks * tick_value)
+                         entry_sizes.iloc[idx] = max(1.0, float(int(calc_size)))
+             except Exception as e:
+                 # logger.warning(f"Error getting SL: {e}")
+                 pass
+                 
+        # For Shorts, technically similar, but let's stick to Long logic for MVP or Duplicate
+        short_indices = np.where(short_entries)[0]
+        for idx in short_indices:
+             try:
+                 sl_price = strategy_instance.get_stop_loss(data, idx, params)
+                 if sl_price is not None:
+                     entry_price = data['Close'].iloc[idx]
+                     risk_per_share = abs(entry_price - sl_price)
+                     if risk_per_share > 0:
+                         risk_ticks = risk_per_share / tick_size
+                         calc_size = risk_amount / (risk_ticks * tick_value)
+                         entry_sizes.iloc[idx] = max(1.0, float(int(calc_size)))
+             except:
+                 pass
+
+    # --- Sizing Adjustment Loop for Partial Exits ---
+    # We iterate chronologically to determine Held Quantity and construct Size Series for Exits
+    # VectorBT expects 'size' at index to be the Order Amount.
+    # Entries: Size provided. Exits: Size provided.
+    # We must match Exits to Entries to know held quantity.
+    
+    current_qty = 0.0 # Long only support for MVP partial logic
+    
+    # Pre-fill size series with entry sizes (only relevant at entry indices)
+    size_series = entry_sizes.copy()
+    
+    # Re-construct indices
+    idx_long_entry = np.where(long_entries)[0]
+    idx_long_exit = np.where(long_exits)[0] if long_exits is not None else []
+    
+    combined_indices = sorted(np.unique(np.concatenate([idx_long_entry, idx_long_exit])))
+    
+    # Simple FIFO Simulation to set Exit Sizes
+    for i in combined_indices:
+        is_entry = long_entries.iloc[i]
+        is_exit = long_exits.iloc[i] if long_exits is not None else False
+        
+        if is_entry:
+            # We are entering (Assuming accumulated or new trade)
+            # If we allow accumulation, current_qty increases.
+            # Strategy UTBot only enters if not in pos.
+            qty = entry_sizes.iloc[i]
+            current_qty += qty 
+            size_series.iloc[i] = qty
             
+        if is_exit:
+            # We are exiting. Check ratio.
+            ratio = 1.0
+            if exit_ratios is not None:
+                ratio = exit_ratios.iloc[i]
+            
+            # If current_qty > 0
+            if current_qty > 0:
+                # Calculate exit amount
+                # If ratio is 1.0, close all
+                if ratio >= 0.99:
+                    exit_amt = current_qty
+                else:
+                    # Partial
+                    exit_amt = current_qty * ratio
+                    # Round? futures imply integer.
+                    exit_amt = max(1.0, round(exit_amt)) # Ensure at least 1 contract if integer
+                    if exit_amt > current_qty:
+                        exit_amt = current_qty
+                
+                size_series.iloc[i] = exit_amt
+                current_qty -= exit_amt
+            else:
+                 size_series.iloc[i] = 0.0 # No position to close
+
     # 5. Run Portfolio
     # If exec_price is available, use it (Topstep/Strategy specific), else use Close
     price_to_use = exec_price if exec_price is not None else data['Close']
@@ -363,51 +485,112 @@ def run_backtest(req: BacktestRequest):
         close=price_to_use, 
         entries=long_entries,
         exits=long_exits,
-        short_entries=short_entries,
+        short_entries=short_entries, 
         short_exits=short_exits,
         init_cash=sim_cash,
         freq=req.interval,
         size=size_series,
-        size_type='Amount', # Fixed amount of contracts
-        fees=0.0, # We handle PnL scaling manually
-        slippage=0.0
+        size_type='Amount', 
+        accumulate=True, 
+        fees=0.0, 
+        slippage=0.0,
+        sl_stop=list(map(abs, sl_dist_series)) if sl_dist_series is not None and not strategy_instance.manual_exit else None
     )
     
     # 6. Metrics & Trades (Manual PnL Scaling)
     
+    # 6. Metrics & Trades (Manual PnL Scaling)
+    
     trades_df = pf.trades.records_readable
-    trades_list = []
+    
+    # AGGREGATE TRADES by Entry Timestamp to handle Partials as Single Trade
+    # We use a helper dict to accumulate
+    aggregated_trades = {}
     
     cumulative_pnl = 0.0
     equity_series = [req.initial_equity]
     
+    # Process VBT records
     for _, row in trades_df.iterrows():
+        entry_time_str = str(row['Entry Timestamp'])
+        
         raw_pnl = float(row['PnL'])
         size = float(row['Size'])
         
         # Gross PnL
         gross_pnl = raw_pnl * point_value
         
-        # Fee Deduction (Round Turn fee * number of contracts)
+        # Fee Deduction
         total_fee = fee_per_trade * size
-        
         real_pnl = gross_pnl - total_fee
-        cumulative_pnl += real_pnl
+        
+        if entry_time_str not in aggregated_trades:
+            # New Trade Group
+            aggregated_trades[entry_time_str] = {
+                "entry_time": entry_time_str,
+                "exit_time": str(row['Exit Timestamp']), # Update with latest
+                "side": row['Direction'],
+                "entry_price": float(row['Avg Entry Price']),
+                "net_pnl": 0.0,
+                "gross_pnl": 0.0,
+                "fees": 0.0,
+                "total_size": 0.0,
+                "exit_p_accum": 0.0, # for weighted avg
+                "exit_size_accum": 0.0,
+                "status": row['Status']
+            }
+            
+        # Accumulate
+        group = aggregated_trades[entry_time_str]
+        group["net_pnl"] += real_pnl
+        group["gross_pnl"] += gross_pnl
+        group["fees"] += total_fee
+        group["total_size"] += size
+        
+        # We want Weighted Avg Exit Price
+        exit_p = float(row['Avg Exit Price'])
+        group["exit_p_accum"] += (exit_p * size)
+        group["exit_size_accum"] += size
+        
+        # Update Exit Time to the latest one
+        if row['Exit Timestamp'] > pd.to_datetime(group["exit_time"]):
+             group["exit_time"] = str(row['Exit Timestamp']) # Keep string or Obj? VBT is TS.
+             group["status"] = row['Status'] # Update status from latest part
+             
+    # Convert Aggregated Dict to List
+    trades_list = []
+    
+    # We must sort by entry time to keep cumulative pnl correct
+    # Keys are strings, but ISO format sorts correctly
+    sorted_keys = sorted(aggregated_trades.keys())
+    
+    for k in sorted_keys:
+        t = aggregated_trades[k]
+        
+        # Calculate Final Weighted Avg Exit
+        avg_exit = 0.0
+        if t["exit_size_accum"] > 0:
+            avg_exit = t["exit_p_accum"] / t["exit_size_accum"]
+            
+        # Update Cumulative
+        cumulative_pnl += t["net_pnl"]
         
         trades_list.append({
-            "entry_time": str(row['Entry Timestamp']),
-            "exit_time": str(row['Exit Timestamp']),
-            "side": row['Direction'],
-            "entry_price": float(row['Avg Entry Price']),
-            "exit_price": float(row['Avg Exit Price']),
-            "pnl": real_pnl, # Net PnL
-            "gross_pnl": gross_pnl,
-            "fees": total_fee,
-            "size": size,
-            "pnl_pct": (real_pnl / req.initial_equity) * 100, # RoI on Account
-            "status": row['Status'],
-            "session": get_session(str(row['Entry Timestamp']))
+            "entry_time": t["entry_time"],
+            "exit_time": t["exit_time"],
+            "side": t["side"],
+            "entry_price": t["entry_price"],
+            "exit_price": avg_exit,
+            "pnl": t["net_pnl"],
+            "gross_pnl": t["gross_pnl"],
+            "fees": t["fees"],
+            "size": t["total_size"], # This is the TOTAL size closed (sum of parts) = Initial Size essentially
+            "pnl_pct": (t["net_pnl"] / req.initial_equity) * 100,
+            "status": t["status"],
+            "session": get_session(t["entry_time"])
         })
+        
+        # Add point to equity curve at trade close
         equity_series.append(req.initial_equity + cumulative_pnl)
         
     # Re-calculate aggregates based on Real PnL
@@ -417,21 +600,16 @@ def run_backtest(req: BacktestRequest):
     total_return = (cumulative_pnl / req.initial_equity) * 100
     
     # Equity Curve Formatting
-    vbt_equity = pf.value()
-    # We must construct equity curve carefully. VBT one is unscaled.
-    # But wait, VBT equity curve has many points (every bar).
-    # Our manual cumulative_pnl is only at trade close.
-    # To get accurate equity curve (Open Equity), we'd need to scale the entire VBT series.
-    # NewEquity(t) = Init + (VBT_Equity(t) - Init) * PointValue 
-    # BUT! Fees happen at trade points. This makes continuous curve weird.
-    # Approximation: Scale VBT equity by PointValue. This ignores Fees intra-trade but shows correct price moves.
-    # Then we might have a slight drift due to fees, but visual curve is OK.
-    # Better: just return the trade-based curve? No, charts need time series.
-    # We'll return Scaled VBT Equity. Fees are "hidden" costs on the trade list PnL? 
-    # Actually, let's subtract estimated fees cumulatively? Too hard for 15s calculation.
-    # Let's start with Scaled VBT Equity (Gross). The Trade List has Net PnL.
+    # Use VBT equity for visual shape, but we might want to scale it to match final PnL?
+    # Because VBT Equity doesn't include our custom Fees or Aggregation.
+    # But Trade-based equity series (above) is coarse (only at exit).
+    # Let's stick to Scaled VBT Equity as it's time-series based.
     
+    vbt_equity = pf.value()
     adjusted_equity = req.initial_equity + (vbt_equity - sim_cash) * point_value
+    
+    # Correction: Deduct accumulated fees from equity curve?
+    # Complex without loop. We accept Gross Equity Curve for visual, Net PnL for stats.
     
     equity_curve = [{"time": str(idx), "value": float(val)} for idx, val in adjusted_equity.items()]
     
@@ -445,7 +623,7 @@ def run_backtest(req: BacktestRequest):
         "win_rate": float(win_rate),
         "total_trades": int(total_trades),
         "max_drawdown": float(max_drawdown),
-        "sharpe_ratio": float(pf.sharpe_ratio()) # Approx
+        "sharpe_ratio": float(pf.sharpe_ratio()) 
     }
     
     return {

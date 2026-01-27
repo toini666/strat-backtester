@@ -235,6 +235,7 @@ class TopstepClient:
 
         timeframe_map = {
             '1m': (2, 1),
+            '2m': (2, 2),
             '5m': (2, 5),
             '15m': (2, 15),
             '30m': (2, 30),
