@@ -7,7 +7,7 @@ to fetch historical market data and contract information.
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
 import pandas as pd
@@ -249,34 +249,110 @@ class TopstepClient:
         else:
             logger.warning(f"Unknown timeframe '{timeframe}', defaulting to 15m")
 
-        payload = {
-            "contractId": contract_id,
-            "live": False,
-            "startTime": start.isoformat(),
-            "endTime": end.isoformat(),
-            "unit": unit,
-            "unitNumber": unit_number,
-            "limit": 10000,
-            "includePartialBar": False
-        }
+        from datetime import timedelta
+        
+        all_bars = []
+        current_start = start
+        page_count = 0
+        MAX_PAGES = 50 
+        previous_last_bar_time = None
+        
+        while True:
+            page_count += 1
+            if page_count > MAX_PAGES:
+                logger.warning(f"Hit maximum page limit ({MAX_PAGES}) for contract {contract_id}. Stopping fetch to prevent infinite loop.")
+                break
+                
+            payload = {
+                "contractId": contract_id,
+                "live": False,
+                "startTime": current_start.isoformat(),
+                "endTime": end.isoformat(),
+                "unit": unit,
+                "unitNumber": unit_number,
+                "limit": 10000,
+                "includePartialBar": False
+            }
 
-        logger.debug(f"Fetching historical data for contract {contract_id}, {timeframe} from {start} to {end}")
+            logger.debug(f"Fetching page {page_count} for {contract_id}, start={current_start}")
 
-        data = self._make_request("POST", url, payload)
+            try:
+                data = self._make_request("POST", url, payload)
+            except ConnectionError as e:
+                logger.error(f"Error fetching data batch: {e}")
+                if all_bars:
+                    logger.warning("Returning partial data due to error")
+                    break
+                raise
 
-        if not data.get("success"):
-            raise ConnectionError(f"History fetch error: {data.get('errorMessage')}")
+            if not data.get("success"):
+                if all_bars:
+                    logger.warning(f"History fetch error on pagination: {data.get('errorMessage')}")
+                    break
+                raise ConnectionError(f"History fetch error: {data.get('errorMessage')}")
 
-        bars = data.get("bars", [])
+            bars = data.get("bars", [])
+            
+            if not bars:
+                break
+                
+            all_bars.extend(bars)
+            
+            if len(bars) < 10000:
+                break
+            
+            # Use the maximum time in the batch to ensure we advance
+            # (defensive against unsorted data)
+            batch_times = [pd.to_datetime(b['t']) for b in bars]
+            last_bar_time = max(batch_times)
+            
+            # check if we are stuck (API returning same data range repeatedly)
+            if previous_last_bar_time is not None and last_bar_time <= previous_last_bar_time:
+                 logger.warning(f"Pagination stuck at {last_bar_time}. Forcing advance.")
+                 # Force advance by a larger step (contract dependent, but 1m is safe for backfilling)
+                 # If we are stuck, it means 'last_bar_time + 1s' resulted in same 'last_bar_time'.
+                 # So we likely need to jump over the current bar.
+                 current_start = last_bar_time + timedelta(minutes=1)
+            else:
+                 # Standard advance
+                 current_start = last_bar_time + timedelta(seconds=1)
 
-        if not bars:
+            previous_last_bar_time = last_bar_time
+
+            # specific check if we reached the end time (or very close to it)
+            # Handle timezone mismatch
+            # Ensure we are working with pandas Timestamps for consistent comparison
+            normalized_end = pd.Timestamp(end)
+            if last_bar_time.tzinfo is not None and normalized_end.tzinfo is None:
+                if last_bar_time.tzinfo == timezone.utc:
+                     normalized_end = normalized_end.tz_localize('UTC')
+                else:
+                     last_bar_time = last_bar_time.tz_localize(None)
+            elif last_bar_time.tzinfo is None and normalized_end.tzinfo is not None:
+                last_bar_time = last_bar_time.tz_localize(normalized_end.tzinfo)
+                
+            if last_bar_time >= normalized_end:
+                break
+
+            # Update start time for next batch
+            # current_start is already updated above
+
+            # Respect rate limit (50 req / 30s = ~0.6s per req)
+            # using 0.7s to be safe
+            time.sleep(0.7)
+
+        if not all_bars:
             logger.warning(f"No bars returned for contract {contract_id}")
             return pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume'])
 
-        df = pd.DataFrame(bars)
+        df = pd.DataFrame(all_bars)
 
         # Parse 't' as datetime and set index
         df['Date'] = pd.to_datetime(df['t'])
+        
+        # Remove duplicates that might occur from page boundaries
+        df.drop_duplicates(subset=['Date'], keep='first', inplace=True)
+        
         df.set_index('Date', inplace=True)
 
         # Rename columns to standard OHLCV
@@ -290,7 +366,31 @@ class TopstepClient:
 
         # Ensure chronological order (Oldest first)
         df.sort_index(ascending=True, inplace=True)
+        
+        # Filter to ensure we stay within requested range (handling any boundary overlaps)
+        # Normalize start/end timezone to match dataframe index
+        df_start = pd.Timestamp(start)
+        df_end = pd.Timestamp(end)
+        
+        if df.index.tz is not None:
+             if df_start.tzinfo is None:
+                 df_start = df_start.tz_localize('UTC')
+             else:
+                 df_start = df_start.tz_convert(df.index.tz)
+                 
+             if df_end.tzinfo is None:
+                 df_end = df_end.tz_localize('UTC')
+             else:
+                 df_end = df_end.tz_convert(df.index.tz)
+        else:
+             # If index is naive, ensure start/end are naive
+             if df_start.tzinfo is not None:
+                 df_start = df_start.tz_localize(None)
+             if df_end.tzinfo is not None:
+                 df_end = df_end.tz_localize(None)
+                 
+        df = df[(df.index >= df_start) & (df.index <= df_end)]
 
-        logger.info(f"Fetched {len(df)} bars for contract {contract_id}")
+        logger.info(f"Fetched {len(df)} bars for contract {contract_id} in total")
 
         return df[['Open', 'High', 'Low', 'Close', 'Volume']]
