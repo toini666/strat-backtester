@@ -250,31 +250,38 @@ class TopstepClient:
             logger.warning(f"Unknown timeframe '{timeframe}', defaulting to 15m")
 
         from datetime import timedelta
-        
+
         all_bars = []
-        current_start = start
+        # Paginate BACKWARDS: TopStep API returns the most recent bars first
+        # So we start from 'end' and move backwards to 'start'
+        current_end = end
         page_count = 0
-        MAX_PAGES = 50 
-        previous_last_bar_time = None
-        
+        MAX_PAGES = 50
+        previous_min_bar_time = None
+
         while True:
             page_count += 1
             if page_count > MAX_PAGES:
                 logger.warning(f"Hit maximum page limit ({MAX_PAGES}) for contract {contract_id}. Stopping fetch to prevent infinite loop.")
                 break
-                
+
+            # Format timestamps without timezone suffix for API compatibility
+            # The API expects naive datetime strings in ISO format
+            start_str = start.strftime('%Y-%m-%dT%H:%M:%S')
+            end_str = current_end.strftime('%Y-%m-%dT%H:%M:%S') if isinstance(current_end, datetime) else pd.Timestamp(current_end).strftime('%Y-%m-%dT%H:%M:%S')
+
             payload = {
                 "contractId": contract_id,
                 "live": False,
-                "startTime": current_start.isoformat(),
-                "endTime": end.isoformat(),
+                "startTime": start_str,
+                "endTime": end_str,
                 "unit": unit,
                 "unitNumber": unit_number,
                 "limit": 10000,
                 "includePartialBar": False
             }
 
-            logger.debug(f"Fetching page {page_count} for {contract_id}, start={current_start}")
+            logger.debug(f"Fetching page {page_count} for {contract_id}, start={start_str}, end={end_str}")
 
             try:
                 data = self._make_request("POST", url, payload)
@@ -292,50 +299,62 @@ class TopstepClient:
                 raise ConnectionError(f"History fetch error: {data.get('errorMessage')}")
 
             bars = data.get("bars", [])
-            
+
             if not bars:
+                logger.debug(f"No bars returned on page {page_count}, stopping pagination")
                 break
-                
+
             all_bars.extend(bars)
-            
+            logger.debug(f"Page {page_count}: received {len(bars)} bars, total so far: {len(all_bars)}")
+
             if len(bars) < 10000:
+                # Less than limit means we've got all available data
+                logger.debug(f"Received {len(bars)} bars (< 10000), pagination complete")
                 break
-            
-            # Use the maximum time in the batch to ensure we advance
-            # (defensive against unsorted data)
+
+            # Get the MINIMUM time in the batch (oldest bar)
+            # API returns most recent bars, so we need to paginate backwards
             batch_times = [pd.to_datetime(b['t']) for b in bars]
-            last_bar_time = max(batch_times)
-            
-            # check if we are stuck (API returning same data range repeatedly)
-            if previous_last_bar_time is not None and last_bar_time <= previous_last_bar_time:
-                 logger.warning(f"Pagination stuck at {last_bar_time}. Forcing advance.")
-                 # Force advance by a larger step (contract dependent, but 1m is safe for backfilling)
-                 # If we are stuck, it means 'last_bar_time + 1s' resulted in same 'last_bar_time'.
-                 # So we likely need to jump over the current bar.
-                 current_start = last_bar_time + timedelta(minutes=1)
-            else:
-                 # Standard advance
-                 current_start = last_bar_time + timedelta(seconds=1)
+            min_bar_time = min(batch_times)
+            max_bar_time = max(batch_times)
 
-            previous_last_bar_time = last_bar_time
+            logger.debug(f"Batch time range: {min_bar_time} to {max_bar_time}")
 
-            # specific check if we reached the end time (or very close to it)
-            # Handle timezone mismatch
-            # Ensure we are working with pandas Timestamps for consistent comparison
-            normalized_end = pd.Timestamp(end)
-            if last_bar_time.tzinfo is not None and normalized_end.tzinfo is None:
-                if last_bar_time.tzinfo == timezone.utc:
-                     normalized_end = normalized_end.tz_localize('UTC')
+            # Check if we are stuck (API returning same data range repeatedly)
+            if previous_min_bar_time is not None:
+                # Make both timezone-naive for comparison
+                prev_naive = previous_min_bar_time.tz_localize(None) if previous_min_bar_time.tzinfo else previous_min_bar_time
+                min_naive = min_bar_time.tz_localize(None) if min_bar_time.tzinfo else min_bar_time
+
+                if min_naive >= prev_naive:
+                    logger.warning(f"Pagination stuck at {min_bar_time}. Forcing backwards advance.")
+                    # Force backwards by a larger step
+                    current_end = min_bar_time - timedelta(minutes=1)
                 else:
-                     last_bar_time = last_bar_time.tz_localize(None)
-            elif last_bar_time.tzinfo is None and normalized_end.tzinfo is not None:
-                last_bar_time = last_bar_time.tz_localize(normalized_end.tzinfo)
-                
-            if last_bar_time >= normalized_end:
+                    # Standard backwards advance: set end to just before the oldest bar we received
+                    current_end = min_bar_time - timedelta(seconds=1)
+            else:
+                # First iteration after initial batch
+                current_end = min_bar_time - timedelta(seconds=1)
+
+            previous_min_bar_time = min_bar_time
+
+            # Check if we've reached the start time
+            # Make timezone-naive for comparison
+            start_ts = pd.Timestamp(start)
+            min_naive = min_bar_time.tz_localize(None) if hasattr(min_bar_time, 'tz_localize') and min_bar_time.tzinfo else min_bar_time
+            start_naive = start_ts.tz_localize(None) if start_ts.tzinfo else start_ts
+
+            if min_naive <= start_naive:
+                logger.debug(f"Reached start time {start}, pagination complete")
                 break
 
-            # Update start time for next batch
-            # current_start is already updated above
+            # Also check if current_end would be before start
+            current_end_ts = pd.Timestamp(current_end)
+            current_end_naive = current_end_ts.tz_localize(None) if current_end_ts.tzinfo else current_end_ts
+            if current_end_naive <= start_naive:
+                logger.debug(f"Next end time {current_end} would be before start {start}, stopping")
+                break
 
             # Respect rate limit (50 req / 30s = ~0.6s per req)
             # using 0.7s to be safe

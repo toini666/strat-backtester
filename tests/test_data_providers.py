@@ -214,7 +214,11 @@ class TestTopstepClient:
             
     @patch('time.sleep')
     def test_fetch_historical_data_pagination(self, mock_sleep):
-        """Test that fetch_historical_data handles pagination correctly."""
+        """Test that fetch_historical_data handles backwards pagination correctly.
+
+        The TopStep API returns the most recent bars first, so pagination
+        works backwards from end to start.
+        """
         with patch.dict(os.environ, {
             'TOPSTEP_USERNAME': 'test_user',
             'TOPSTEPX_TOKEN': 'test_key'
@@ -228,53 +232,63 @@ class TestTopstepClient:
             auth_response.json.return_value = {"success": True, "token": "test_token"}
             client._session.post.return_value = auth_response
 
-            # Mock data responses for 3 pages
-            # Page 1: 10000 items (simulated)
-            # Create dummy bars with increasing timestamps
+            # Mock data responses for 3 pages (backwards pagination)
+            # API returns most recent bars first, so:
+            # Page 1: bars 15000-24997 (most recent 10000)
+            # Page 2: bars 5001-15000 (next 10000 going backwards)
+            # Page 3: bars 0-5000 (remaining 5001 oldest bars)
             base_time = datetime(2024, 1, 1, 0, 0, 0)
-            
-            def create_bars(start_idx, count):
-                return [{
-                    "t": (base_time + timedelta(minutes=i)).isoformat(), 
-                    "o": 100+i, "h": 105+i, "l": 98+i, "c": 103+i, "v": 1000+i
-                } for i in range(start_idx, start_idx + count)]
 
-            page1_data = create_bars(0, 10000)
-            page2_data = create_bars(9999, 10000) # Starts at 9999, goes to 19998
-            page3_data = create_bars(19998, 5000) # Starts at 19998, goes to 24997
+            def create_bars(start_idx, end_idx):
+                """Create bars for index range [start_idx, end_idx]"""
+                return [{
+                    "t": (base_time + timedelta(minutes=i)).isoformat(),
+                    "o": 100+i, "h": 105+i, "l": 98+i, "c": 103+i, "v": 1000+i
+                } for i in range(start_idx, end_idx + 1)]
+
+            # Page 1: most recent 10000 bars (indices 14998-24997)
+            page1_data = create_bars(14998, 24997)
+            # Page 2: next 10000 bars going backwards (indices 4999-14998)
+            # Note: 14998 overlaps with page 1
+            page2_data = create_bars(4999, 14998)
+            # Page 3: remaining bars (indices 0-4999)
+            # Note: 4999 overlaps with page 2
+            page3_data = create_bars(0, 4999)
 
             resp1 = MagicMock()
             resp1.status_code = 200
             resp1.json.return_value = {"success": True, "bars": page1_data}
-            
+
             resp2 = MagicMock()
             resp2.status_code = 200
             resp2.json.return_value = {"success": True, "bars": page2_data}
-            
+
             resp3 = MagicMock()
             resp3.status_code = 200
             resp3.json.return_value = {"success": True, "bars": page3_data}
-            
+
             # _make_request uses session.request
             client._session.request.side_effect = [resp1, resp2, resp3]
-            
+
             # Need to mock time.sleep to avoid waiting
             mock_sleep.return_value = None
 
             result = client.fetch_historical_data(
                 contract_id="123",
                 start=base_time,
-                end=base_time + timedelta(minutes=30000), # ample end time
+                end=base_time + timedelta(minutes=30000),  # ample end time
                 timeframe="1m"
             )
 
             # Total unique bars should be:
-            # 0-9999 (10000)
-            # 9999-19998 (10000) -> 9999 is duplicate
-            # 19998-24997 (5000) -> 19998 is duplicate
+            # Page 1: 14998-24997 (10000 bars)
+            # Page 2: 4999-14998 (10000 bars) -> 14998 is duplicate
+            # Page 3: 0-4999 (5000 bars) -> 4999 is duplicate
             # Unique: 0 to 24997 => 24998 bars
-            
+
             assert len(result) == 24998
-            # Verify sleep was called (for rate limiting)
+            # Verify data is sorted chronologically (oldest first)
+            assert result.index[0] < result.index[-1]
+            # Verify sleep was called (for rate limiting between pages)
             assert mock_sleep.call_count == 2
 
