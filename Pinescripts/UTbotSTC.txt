@@ -1,0 +1,293 @@
+//@version=6
+indicator("UTBot-STC Strategy", overlay=true)
+
+// ============================================
+// PARAMÈTRES INPUT
+// ============================================
+
+// --- UTBot Parameters ---
+keyValue = input.float(1, title="UTBot Key Value (Sensitivity)", group="UTBot Settings")
+atrPeriod = input.int(10, title="ATR Period", group="UTBot Settings")
+useHeikinAshi = input.bool(false, title="Use Heikin Ashi Candles", group="UTBot Settings")
+
+// --- STC Parameters ---
+stcLength = input.int(12, title="STC Length", group="STC Settings")
+stcFastLength = input.int(26, title="STC Fast Length", group="STC Settings")
+stcSlowLength = input.int(50, title="STC Slow Length", group="STC Settings")
+
+// STC Range filters
+stcMinLong = input.float(1, title="STC Min Level for LONG", group="STC Filter")
+stcMaxLong = input.float(75, title="STC Max Level for LONG", group="STC Filter")
+stcMinShort = input.float(25, title="STC Min Level for SHORT", group="STC Filter")
+stcMaxShort = input.float(99, title="STC Max Level for SHORT", group="STC Filter")
+
+// --- Position Management ---
+stopTicks = input.int(3, title="Stop Loss (in ticks from signal candle low/high)", group="Position Management")
+riskReward = input.float(2.0, title="Risk/Reward Ratio", group="Position Management")
+
+// --- Strategy Name ---
+strategyName = input.string("UTBot-STC", title="Strategy Name (for alerts)", group="Alert Settings")
+
+// ============================================
+// VARIABLES D'ÉTAT
+// ============================================
+
+var bool inPosition = false
+var float entryPrice = na
+var float stopPrice = na
+var float tpPrice = na
+var string positionSide = na
+var int signalBar = na
+
+// ============================================
+// FONCTIONS UTILITAIRES
+// ============================================
+
+// Fonction d'arrondissement au min tick
+roundToTick(float price) =>
+    math.round(price / syminfo.mintick) * syminfo.mintick
+
+// Format timeframe pour alerts
+getTimeframeString() =>
+    string tf = timeframe.period
+    string result = ""
+    
+    if str.contains(tf, "D")
+        result := "D" + str.tostring(timeframe.multiplier)
+    else if str.contains(tf, "W")
+        result := "W" + str.tostring(timeframe.multiplier)
+    else if str.contains(tf, "M") and not str.contains(tf, "S")
+        result := "MO" + str.tostring(timeframe.multiplier)
+    else if timeframe.multiplier >= 60
+        result := "H" + str.tostring(timeframe.multiplier / 60)
+    else
+        result := "M" + str.tostring(timeframe.multiplier)
+    
+    result
+
+// ============================================
+// CALCUL UTBOT
+// ============================================
+
+xATR = ta.atr(atrPeriod)
+nLoss = keyValue * xATR
+
+src = useHeikinAshi ? request.security(ticker.heikinashi(syminfo.tickerid), timeframe.period, close, lookahead=barmerge.lookahead_off) : close
+
+var float xATRTrailingStop = na
+xATRTrailingStop := src > nz(xATRTrailingStop[1], 0) and src[1] > nz(xATRTrailingStop[1], 0) ? 
+   math.max(nz(xATRTrailingStop[1]), src - nLoss) :
+   src < nz(xATRTrailingStop[1], 0) and src[1] < nz(xATRTrailingStop[1], 0) ? 
+   math.min(nz(xATRTrailingStop[1]), src + nLoss) : 
+   src > nz(xATRTrailingStop[1], 0) ? src - nLoss : src + nLoss
+
+var int pos = 0
+pos := src[1] < nz(xATRTrailingStop[1], 0) and src > nz(xATRTrailingStop[1], 0) ? 1 :
+   src[1] > nz(xATRTrailingStop[1], 0) and src < nz(xATRTrailingStop[1], 0) ? -1 : 
+   nz(pos[1], 0)
+
+ema = ta.ema(src, 1)
+above = ta.crossover(ema, xATRTrailingStop)
+below = ta.crossover(xATRTrailingStop, ema)
+
+utBotLong = src > xATRTrailingStop and above
+utBotShort = src < xATRTrailingStop and below
+
+// ============================================
+// CALCUL STC
+// ============================================
+
+calcMACD(float source, int fastLen, int slowLen) =>
+    fastMA = ta.ema(source, fastLen)
+    slowMA = ta.ema(source, slowLen)
+    fastMA - slowMA
+
+calcSTC(int length, int fastLen, int slowLen) =>
+    factor = 0.5
+    var float pff = 0.0
+    var float pf = 0.0
+    var float pfff = 0.0
+    var float pff2 = 0.0
+    
+    macdVal = calcMACD(close, fastLen, slowLen)
+    
+    lowest = ta.lowest(macdVal, length)
+    highest = ta.highest(macdVal, length)
+    range1 = highest - lowest
+    
+    pff := range1 > 0 ? (macdVal - lowest) / range1 * 100 : nz(pff[1])
+    pf := na(pf[1]) ? pff : pf[1] + factor * (pff - pf[1])
+    
+    lowest2 = ta.lowest(pf, length)
+    highest2 = ta.highest(pf, length)
+    range2 = highest2 - lowest2
+    
+    pfff := range2 > 0 ? (pf - lowest2) / range2 * 100 : nz(pfff[1])
+    pff2 := na(pff2[1]) ? pfff : pff2[1] + factor * (pfff - pff2[1])
+    
+    pff2
+
+stcValue = calcSTC(stcLength, stcFastLength, stcSlowLength)
+
+// STC conditions
+stcRising = stcValue > stcValue[1]
+stcFalling = stcValue < stcValue[1]
+
+stcValidForLong = stcValue >= stcMinLong and stcValue <= stcMaxLong and stcRising
+stcValidForShort = stcValue >= stcMinShort and stcValue <= stcMaxShort and stcFalling
+
+// ============================================
+// LOGIQUE DE LA STRATÉGIE
+// ============================================
+
+// Signal conditions
+longSignal = utBotLong and stcValidForLong and not inPosition
+shortSignal = utBotShort and stcValidForShort and not inPosition
+
+// Entry immediately at close of signal bar
+if longSignal
+    inPosition := true
+    positionSide := "LONG"
+    signalBar := bar_index
+    entryPrice := roundToTick(close)
+    
+    // Calculate stop and TP based on current signal bar
+    float signalLow = low
+    stopPrice := roundToTick(signalLow - stopTicks * syminfo.mintick)
+    float riskAmount = entryPrice - stopPrice
+    tpPrice := roundToTick(entryPrice + riskAmount * riskReward)
+    
+if shortSignal
+    inPosition := true
+    positionSide := "SHORT"
+    signalBar := bar_index
+    entryPrice := roundToTick(close)
+    
+    // Calculate stop and TP based on current signal bar
+    float signalHigh = high
+    stopPrice := roundToTick(signalHigh + stopTicks * syminfo.mintick)
+    float riskAmount = stopPrice - entryPrice
+    tpPrice := roundToTick(entryPrice - riskAmount * riskReward)
+
+// Show entry circle on the bar after signal (to confirm we're in position)
+bool showEntryCircleLong = inPosition and positionSide == "LONG" and bar_index == signalBar + 1
+bool showEntryCircleShort = inPosition and positionSide == "SHORT" and bar_index == signalBar + 1
+
+// ============================================
+// GESTION DES SORTIES
+// ============================================
+
+bool exitByStopLong = false
+bool exitByTPLong = false
+bool exitByStopShort = false
+bool exitByTPShort = false
+
+// Only check for exits AFTER the signal bar (not on the signal bar itself)
+if inPosition and bar_index > signalBar
+    if positionSide == "LONG"
+        exitByStopLong := low <= stopPrice
+        exitByTPLong := high >= tpPrice
+        
+        if exitByStopLong or exitByTPLong
+            inPosition := false
+            signalBar := na
+            
+    else if positionSide == "SHORT"
+        exitByStopShort := high >= stopPrice
+        exitByTPShort := low <= tpPrice
+        
+        if exitByStopShort or exitByTPShort
+            inPosition := false
+            signalBar := na
+
+// ============================================
+// VISUALISATION
+// ============================================
+
+// Triangle on signal bar
+plotshape(longSignal, title="Long Signal", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small)
+plotshape(shortSignal, title="Short Signal", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small)
+
+// Circle on entry bar (shown on bar after signal to confirm position)
+plotshape(showEntryCircleLong, title="Long Entry", style=shape.circle, location=location.belowbar, color=color.green, size=size.tiny)
+plotshape(showEntryCircleShort, title="Short Entry", style=shape.circle, location=location.abovebar, color=color.red, size=size.tiny)
+
+// Exit markers - differentiated by position type
+// LONG exits
+plotshape(exitByTPLong, title="Long TP Hit", style=shape.xcross, location=location.abovebar, color=color.green, size=size.tiny)
+plotshape(exitByStopLong, title="Long SL Hit", style=shape.xcross, location=location.belowbar, color=color.red, size=size.tiny)
+
+// SHORT exits
+plotshape(exitByTPShort, title="Short TP Hit", style=shape.xcross, location=location.belowbar, color=color.green, size=size.tiny)
+plotshape(exitByStopShort, title="Short SL Hit", style=shape.xcross, location=location.abovebar, color=color.red, size=size.tiny)
+
+// Position lines (dotted)
+var line entryLine = na
+var line stopLine = na
+var line tpLine = na
+
+if inPosition
+    if na(entryLine)
+        entryLine := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue, style=line.style_dotted, width=1)
+    else
+        line.set_xy1(entryLine, bar_index, entryPrice)
+        line.set_xy2(entryLine, bar_index + 1, entryPrice)
+    
+    if na(stopLine)
+        stopLine := line.new(bar_index, stopPrice, bar_index + 1, stopPrice, color=color.red, style=line.style_dotted, width=1)
+    else
+        line.set_xy1(stopLine, bar_index, stopPrice)
+        line.set_xy2(stopLine, bar_index + 1, stopPrice)
+    
+    if na(tpLine)
+        tpLine := line.new(bar_index, tpPrice, bar_index + 1, tpPrice, color=color.green, style=line.style_dotted, width=1)
+    else
+        line.set_xy1(tpLine, bar_index, tpPrice)
+        line.set_xy2(tpLine, bar_index + 1, tpPrice)
+else
+    if not na(entryLine)
+        line.delete(entryLine)
+        entryLine := na
+    if not na(stopLine)
+        line.delete(stopLine)
+        stopLine := na
+    if not na(tpLine)
+        line.delete(tpLine)
+        tpLine := na
+
+// ============================================
+// ALERTES
+// ============================================
+
+string tfString = getTimeframeString()
+string stratFullName = strategyName + "-" + syminfo.ticker + "-" + tfString
+
+// Alert SIGNAL on entry (once per bar close to avoid false signals)
+if longSignal
+    string alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":' + 
+       str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + ',"tp":' + 
+       str.tostring(tpPrice) + ',"strat":"' + stratFullName + '","timeframe":"' + tfString + '"}'
+    alert(alertMsg, alert.freq_once_per_bar_close)
+
+if shortSignal
+    string alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":' + 
+       str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + ',"tp":' + 
+       str.tostring(tpPrice) + ',"strat":"' + stratFullName + '","timeframe":"' + tfString + '"}'
+    alert(alertMsg, alert.freq_once_per_bar_close)
+
+// Alert CLOSE on exit (once per bar to trigger immediately when level is hit)
+if exitByStopLong or exitByStopShort
+    string side = positionSide == "LONG" ? "SELL" : "BUY"
+    string alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + side + 
+       '","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + 
+       ',"tp":' + str.tostring(stopPrice) + ',"strat":"' + stratFullName + '","timeframe":"' + 
+       tfString + '"}'
+    alert(alertMsg, alert.freq_once_per_bar)
+
+if exitByTPLong or exitByTPShort
+    string side = positionSide == "LONG" ? "SELL" : "BUY"
+    string alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + side + 
+       '","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + 
+       ',"tp":' + str.tostring(tpPrice) + ',"strat":"' + stratFullName + '","timeframe":"' + 
+       tfString + '"}'
+    alert(alertMsg, alert.freq_once_per_bar)
