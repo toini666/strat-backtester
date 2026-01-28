@@ -307,6 +307,8 @@ class UTBotSTC(Strategy):
         # So we use REAL High/Low for structure too.
 
         for i in range(1, len(data)):
+            # Track if we exited on this bar to prevent re-entry on same bar
+            exited_this_bar = False
 
             # ===========================================
             # Check Exits FIRST (but NOT on entry bar)
@@ -321,36 +323,40 @@ class UTBotSTC(Strategy):
                     # Check SL first (priority over TP in same bar)
                     if curr_low <= stop_price:
                         long_exits.iloc[i] = True
-                        exec_prices.iloc[i] = stop_price
+                        exec_prices.iloc[i] = round_to_tick(stop_price)
                         in_pos = False
                         pos_side = 0
                         entry_idx = -1
+                        exited_this_bar = True
                     elif curr_high >= tp_price:
                         long_exits.iloc[i] = True
-                        exec_prices.iloc[i] = tp_price
+                        exec_prices.iloc[i] = round_to_tick(tp_price)
                         in_pos = False
                         pos_side = 0
                         entry_idx = -1
+                        exited_this_bar = True
 
                 elif pos_side == -1:  # Short position
                     # Check SL first
                     if curr_high >= stop_price:
                         short_exits.iloc[i] = True
-                        exec_prices.iloc[i] = stop_price
+                        exec_prices.iloc[i] = round_to_tick(stop_price)
                         in_pos = False
                         pos_side = 0
                         entry_idx = -1
+                        exited_this_bar = True
                     elif curr_low <= tp_price:
                         short_exits.iloc[i] = True
-                        exec_prices.iloc[i] = tp_price
+                        exec_prices.iloc[i] = round_to_tick(tp_price)
                         in_pos = False
                         pos_side = 0
                         entry_idx = -1
+                        exited_this_bar = True
 
             # ===========================================
-            # Check Entries (only if not in position)
+            # Check Entries (only if not in position AND didn't exit this bar)
             # ===========================================
-            if not in_pos:
+            if not in_pos and not exited_this_bar:
                 if np_long_sig[i]:
                     # Entry at REAL Close
                     entry_p = round_to_tick(np_real_close[i])
