@@ -633,6 +633,16 @@ def run_backtest(req: BacktestRequest):
         if exit_price_trade is None:
             # Fallback to VBT's exit price if exec_price not available
             exit_price_trade = float(row['Avg Exit Price'])
+            logger.warning(f"exec_price lookup failed for exit at {exit_time_str}, using VBT price {exit_price_trade}")
+
+        # Ensure prices are rounded to tick_size (safety net)
+        def round_to_tick(price, ts):
+            if ts > 0:
+                return round(price / ts) * ts
+            return price
+
+        entry_price_trade = round_to_tick(entry_price_trade, tick_size)
+        exit_price_trade = round_to_tick(exit_price_trade, tick_size)
 
         # Calculate PnL manually using correct prices
         if direction == 'Long':
