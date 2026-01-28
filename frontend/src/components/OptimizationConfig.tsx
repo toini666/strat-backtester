@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Settings, AlertTriangle, Play, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
-import { api, type Strategy, type Contract, type ParamRangeInfo, type ParameterRangeInput } from '../api';
+import { api, type Strategy, type Contract, type ParameterRangeInput } from '../api';
 
 interface ParamConfig {
     name: string;
@@ -10,6 +10,7 @@ interface ParamConfig {
     step: number;
     paramType: 'float' | 'int' | 'bool';
     defaultValue: number | boolean;
+    customValue: number | boolean;
     count: number;
 }
 
@@ -32,6 +33,20 @@ interface OptimizationConfigProps {
     }) => void;
     loading: boolean;
     onContractsNeeded?: () => void;
+    initialConfig?: {
+        strategyName: string;
+        ticker: string;
+        source: 'Yahoo' | 'Topstep';
+        contractId: string | null;
+        interval: string;
+        days: number;
+        parameters: ParameterRangeInput[];
+        sessions: string[];
+        initialEquity: number;
+        riskPerTrade: number;
+        maxContracts: number;
+        blockMarketOpen: boolean;
+    } | null;
 }
 
 export function OptimizationConfig({
@@ -39,7 +54,8 @@ export function OptimizationConfig({
     contracts,
     onRunOptimization,
     loading,
-    onContractsNeeded
+    onContractsNeeded,
+    initialConfig
 }: OptimizationConfigProps) {
     // Strategy selection
     const [selectedStrategy, setSelectedStrategy] = useState<Strategy | null>(null);
@@ -77,36 +93,40 @@ export function OptimizationConfig({
         setLoadingParams(true);
         api.getStrategyParamRanges(selectedStrategy.name)
             .then(data => {
-                const configs: ParamConfig[] = data.param_ranges.map(p => {
-                    if (p.param_type === 'bool') {
+                const configs: ParamConfig[] = data.param_ranges
+                    .filter(p => p.name !== 'tick_size') // Hide tick_size
+                    .map(p => {
+                        if (p.param_type === 'bool') {
+                            return {
+                                name: p.name,
+                                enabled: false,
+                                min: 0,
+                                max: 1,
+                                step: 1,
+                                paramType: 'bool',
+                                defaultValue: p.default,
+                                customValue: p.default,
+                                count: 2
+                            };
+                        }
+
+                        const values = p.values as number[];
+                        const minVal = Math.min(...values);
+                        const maxVal = Math.max(...values);
+                        const step = values.length > 1 ? values[1] - values[0] : 1;
+
                         return {
                             name: p.name,
                             enabled: false,
-                            min: 0,
-                            max: 1,
-                            step: 1,
-                            paramType: 'bool',
+                            min: minVal,
+                            max: maxVal,
+                            step: Math.abs(step),
+                            paramType: p.param_type,
                             defaultValue: p.default,
-                            count: 2
+                            customValue: p.default,
+                            count: p.count
                         };
-                    }
-
-                    const values = p.values as number[];
-                    const minVal = Math.min(...values);
-                    const maxVal = Math.max(...values);
-                    const step = values.length > 1 ? values[1] - values[0] : 1;
-
-                    return {
-                        name: p.name,
-                        enabled: false,
-                        min: minVal,
-                        max: maxVal,
-                        step: Math.abs(step),
-                        paramType: p.param_type,
-                        defaultValue: p.default,
-                        count: p.count
-                    };
-                });
+                    });
                 setParamConfigs(configs);
             })
             .catch(err => {
@@ -130,12 +150,84 @@ export function OptimizationConfig({
         }
     }, [contracts, selectedContract]);
 
-    // Set default strategy when strategies load
+    // Set default strategy when strategies load OR from initialConfig
     useEffect(() => {
-        if (strategies.length > 0 && !selectedStrategy) {
-            setSelectedStrategy(strategies[0]);
+        if (strategies.length > 0) {
+            if (initialConfig) {
+                const strat = strategies.find(s => s.name === initialConfig.strategyName);
+                if (strat) setSelectedStrategy(strat);
+            } else if (!selectedStrategy) {
+                setSelectedStrategy(strategies[0]);
+            }
         }
-    }, [strategies, selectedStrategy]);
+    }, [strategies, initialConfig]);
+
+    // Apply initial config when available
+    useEffect(() => {
+        if (initialConfig && selectedStrategy && selectedStrategy.name === initialConfig.strategyName && paramConfigs.length > 0) {
+            // Check if paramConfigs match the current strategy (basic check)
+            const hasMatchingParams = paramConfigs.some(p => initialConfig.parameters.some(ip => ip.name === p.name));
+            if (!hasMatchingParams) return;
+
+            setTicker(initialConfig.ticker);
+            setDataSource(initialConfig.source);
+            if (initialConfig.contractId) {
+                const contract = contracts.find(c => c.id === initialConfig.contractId);
+                if (contract) setSelectedContract(contract);
+            }
+            setInterval(initialConfig.interval);
+            setDays(initialConfig.days);
+            setInitialEquity(initialConfig.initialEquity);
+
+            // Fix Risk Per Trade: If < 1, assumes it was saved as decimal (e.g. 0.01). Convert to %.
+            // If >= 1, assumes legacy or already %. Use as is.
+            // However, backend saves exactly what was sent.
+            // App.tsx sends 0.01 default.
+            // If saved as 0.01, we want 1.0 displayed. => * 100.
+            // If saved as 1.0 (legacy), we want 1.0 displayed. => * 1?
+            // Safer logic: users input 0.1 to 10.
+            const savedRisk = initialConfig.riskPerTrade;
+            if (savedRisk < 0.1) {
+                setRiskPerTrade(savedRisk * 100);
+            } else {
+                setRiskPerTrade(savedRisk);
+            }
+
+            setMaxContracts(initialConfig.maxContracts);
+            setBlockMarketOpen(initialConfig.blockMarketOpen);
+            setSelectedSessions(initialConfig.sessions);
+
+            // Map parameters
+            setParamConfigs(prev => prev.map(p => {
+                const storedParam = initialConfig.parameters.find(sp => sp.name === p.name);
+                if (storedParam) {
+                    if (storedParam.min_value !== storedParam.max_value) {
+                        // Only update if different to avoid infinite loops if it triggers re-render
+                        if (p.enabled && p.min === storedParam.min_value && p.max === storedParam.max_value && p.step === storedParam.step) return p;
+
+                        return {
+                            ...p,
+                            enabled: true,
+                            min: storedParam.min_value,
+                            max: storedParam.max_value,
+                            step: storedParam.step
+                        };
+                    } else {
+                        // Fixed value
+                        const val = storedParam.param_type === 'bool' ? Boolean(storedParam.min_value) : storedParam.min_value;
+                        if (!p.enabled && p.customValue === val) return p;
+
+                        return {
+                            ...p,
+                            enabled: false,
+                            customValue: val
+                        };
+                    }
+                }
+                return p;
+            }));
+        }
+    }, [initialConfig, selectedStrategy, contracts, paramConfigs]);
 
     // Calculate counts
     const calculateParamCount = useCallback((config: ParamConfig): number => {
@@ -157,7 +249,7 @@ export function OptimizationConfig({
         ));
     }, []);
 
-    const updateParamConfig = useCallback((name: string, field: 'min' | 'max' | 'step', value: number) => {
+    const updateParamConfig = useCallback((name: string, field: 'min' | 'max' | 'step' | 'customValue', value: number | boolean) => {
         setParamConfigs(prev => prev.map(p =>
             p.name === name ? { ...p, [field]: value } : p
         ));
@@ -174,15 +266,27 @@ export function OptimizationConfig({
     const handleRun = useCallback(() => {
         if (!selectedStrategy) return;
 
-        const enabledParams: ParameterRangeInput[] = paramConfigs
-            .filter(p => p.enabled)
-            .map(p => ({
-                name: p.name,
-                min_value: p.min,
-                max_value: p.max,
-                step: p.step,
-                param_type: p.paramType
-            }));
+        const parameters: ParameterRangeInput[] = paramConfigs.map(p => {
+            if (p.enabled) {
+                // Optimization Enabled: Send Range
+                return {
+                    name: p.name,
+                    min_value: p.min,
+                    max_value: p.max,
+                    step: p.step,
+                    param_type: p.paramType
+                };
+            } else {
+                // Optimization Disabled: Send Fixed Value as Range [Val, Val]
+                return {
+                    name: p.name,
+                    min_value: Number(p.customValue),
+                    max_value: Number(p.customValue),
+                    step: 1, // Dummy step to ensure loop runs once
+                    param_type: p.paramType
+                };
+            }
+        });
 
         onRunOptimization({
             strategyName: selectedStrategy.name,
@@ -191,7 +295,7 @@ export function OptimizationConfig({
             contractId: selectedContract?.id || null,
             interval,
             days,
-            parameters: enabledParams,
+            parameters,
             sessions: selectedSessions,
             initialEquity,
             riskPerTrade: riskPerTrade / 100,
@@ -202,7 +306,6 @@ export function OptimizationConfig({
 
     const canRun = selectedStrategy &&
         selectedSessions.length > 0 &&
-        paramConfigs.some(p => p.enabled) &&
         totalCombinations <= 5000;
 
     return (
@@ -399,12 +502,12 @@ export function OptimizationConfig({
                     onClick={() => setExpandedParams(!expandedParams)}
                     className="w-full flex items-center justify-between text-sm text-gray-400 font-medium hover:text-gray-300 transition-colors"
                 >
-                    <span>Parameters to Optimize</span>
+                    <span>Parameters</span>
                     {expandedParams ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                 </button>
 
                 {expandedParams && (
-                    <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
+                    <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
                         {loadingParams ? (
                             <div className="flex items-center justify-center py-8 text-gray-500">
                                 <Loader2 className="w-5 h-5 animate-spin mr-2" />
@@ -412,83 +515,134 @@ export function OptimizationConfig({
                             </div>
                         ) : paramConfigs.length === 0 ? (
                             <p className="text-sm text-gray-500 py-4 text-center">
-                                No parameters available for optimization
+                                No parameters available
                             </p>
                         ) : (
-                            paramConfigs.map(param => (
-                                <div
-                                    key={param.name}
-                                    className={`p-3 rounded-lg border transition-all ${
-                                        param.enabled
-                                            ? 'bg-purple-900/20 border-purple-700/50'
-                                            : 'bg-gray-800/50 border-gray-700/30'
-                                    }`}
-                                >
-                                    <label className="flex items-center justify-between cursor-pointer mb-2">
-                                        <div className="flex items-center space-x-2">
-                                            <input
-                                                type="checkbox"
-                                                checked={param.enabled}
-                                                onChange={() => toggleParam(param.name)}
-                                                className="sr-only peer"
-                                            />
-                                            <div className="w-4 h-4 border-2 border-gray-600 rounded bg-gray-900 peer-checked:bg-purple-600 peer-checked:border-purple-600 transition-all flex items-center justify-center">
-                                                {param.enabled && (
-                                                    <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                                                    </svg>
-                                                )}
-                                            </div>
-                                            <span className="text-gray-300 text-sm font-mono">{param.name}</span>
-                                        </div>
-                                        <span className="text-xs text-gray-500 font-mono">
-                                            {calculateParamCount(param)} values
-                                        </span>
-                                    </label>
-
-                                    {param.enabled && param.paramType !== 'bool' && (
-                                        <div className="grid grid-cols-3 gap-2 mt-2">
-                                            <div>
-                                                <label className="text-xs text-gray-500">Min</label>
-                                                <input
-                                                    type="number"
-                                                    value={param.min}
-                                                    onChange={(e) => updateParamConfig(param.name, 'min', parseFloat(e.target.value))}
-                                                    step={param.paramType === 'int' ? 1 : 0.1}
-                                                    className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-gray-200 text-sm font-mono"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="text-xs text-gray-500">Max</label>
-                                                <input
-                                                    type="number"
-                                                    value={param.max}
-                                                    onChange={(e) => updateParamConfig(param.name, 'max', parseFloat(e.target.value))}
-                                                    step={param.paramType === 'int' ? 1 : 0.1}
-                                                    className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-gray-200 text-sm font-mono"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="text-xs text-gray-500">Step</label>
-                                                <input
-                                                    type="number"
-                                                    value={param.step}
-                                                    onChange={(e) => updateParamConfig(param.name, 'step', parseFloat(e.target.value))}
-                                                    step={param.paramType === 'int' ? 1 : 0.1}
-                                                    min={0.001}
-                                                    className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-gray-200 text-sm font-mono"
-                                                />
+                            <>
+                                <>
+                                    {/* Unified Parameter List */}
+                                    <div className="space-y-4">
+                                        <div className="flex items-center justify-between text-xs text-gray-500 uppercase font-semibold border-b border-gray-800 pb-2">
+                                            <span>Parameter</span>
+                                            <div className="flex gap-8 mr-4">
+                                                <span>Mode</span>
+                                                <span>Values</span>
                                             </div>
                                         </div>
-                                    )}
 
-                                    {param.enabled && param.paramType === 'bool' && (
-                                        <p className="text-xs text-gray-500 mt-1">
-                                            Will test: True, False
-                                        </p>
-                                    )}
-                                </div>
-                            ))
+                                        {paramConfigs.map(param => (
+                                            <div
+                                                key={param.name}
+                                                className={`p-3 rounded-lg border transition-all ${param.enabled
+                                                    ? 'bg-purple-900/20 border-purple-700/50'
+                                                    : 'bg-gray-800/30 border-gray-700/30'
+                                                    }`}
+                                            >
+                                                <div className="flex flex-col gap-3">
+                                                    {/* Header Row: Name + Toggle + Count */}
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-3">
+                                                            <label className="flex items-center space-x-2 cursor-pointer group">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={param.enabled}
+                                                                    onChange={() => toggleParam(param.name)}
+                                                                    className="sr-only peer"
+                                                                />
+                                                                <div className={`w-10 h-5 rounded-full p-1 transition-all ${param.enabled ? 'bg-purple-600' : 'bg-gray-700'}`}>
+                                                                    <div className={`w-3 h-3 bg-white rounded-full shadow-sm transform transition-transform ${param.enabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                                                                </div>
+                                                            </label>
+                                                            <span className={`text-sm font-mono font-medium ${param.enabled ? 'text-purple-300' : 'text-gray-400'}`}>
+                                                                {param.name}
+                                                            </span>
+                                                        </div>
+
+                                                        <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded ${param.enabled ? 'bg-purple-900/50 text-purple-300' : 'bg-gray-800 text-gray-500'}`}>
+                                                            {calculateParamCount(param)} {calculateParamCount(param) === 1 ? 'value' : 'values'}
+                                                        </span>
+                                                    </div>
+
+                                                    {/* Content Row: Range Inputs OR Fixed Input */}
+                                                    <div className="pl-14">
+                                                        {param.enabled ? (
+                                                            /* Optimization Mode (Range) */
+                                                            param.paramType === 'bool' ? (
+                                                                <div className="text-xs text-purple-400 italic">
+                                                                    Will test both True and False
+                                                                </div>
+                                                            ) : (
+                                                                <div className="grid grid-cols-3 gap-3">
+                                                                    <div>
+                                                                        <label className="block text-[10px] text-gray-500 mb-1 uppercase">Min</label>
+                                                                        <input
+                                                                            type="number"
+                                                                            value={param.min}
+                                                                            onChange={(e) => updateParamConfig(param.name, 'min', parseFloat(e.target.value))}
+                                                                            step={param.paramType === 'int' ? 1 : 0.01}
+                                                                            className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-gray-200 text-sm font-mono focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+                                                                        />
+                                                                    </div>
+                                                                    <div>
+                                                                        <label className="block text-[10px] text-gray-500 mb-1 uppercase">Max</label>
+                                                                        <input
+                                                                            type="number"
+                                                                            value={param.max}
+                                                                            onChange={(e) => updateParamConfig(param.name, 'max', parseFloat(e.target.value))}
+                                                                            step={param.paramType === 'int' ? 1 : 0.01}
+                                                                            className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-gray-200 text-sm font-mono focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+                                                                        />
+                                                                    </div>
+                                                                    <div>
+                                                                        <label className="block text-[10px] text-gray-500 mb-1 uppercase">Step</label>
+                                                                        <input
+                                                                            type="number"
+                                                                            value={param.step}
+                                                                            onChange={(e) => updateParamConfig(param.name, 'step', parseFloat(e.target.value))}
+                                                                            step={param.paramType === 'int' ? 1 : 0.001}
+                                                                            min={0.001}
+                                                                            className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-gray-200 text-sm font-mono focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+                                                                        />
+                                                                    </div>
+                                                                </div>
+                                                            )
+                                                        ) : (
+                                                            /* Fixed Value Mode */
+                                                            <div className="flex items-center gap-4">
+                                                                <label className="text-[10px] text-gray-500 uppercase whitespace-nowrap">Fixed Value:</label>
+                                                                {param.paramType === 'bool' ? (
+                                                                    <div className="flex items-center bg-gray-900 rounded-lg border border-gray-700 p-1">
+                                                                        <button
+                                                                            onClick={() => updateParamConfig(param.name, 'customValue', true)}
+                                                                            className={`px-3 py-1 text-xs rounded-md transition-all ${param.customValue === true ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+                                                                        >
+                                                                            True
+                                                                        </button>
+                                                                        <button
+                                                                            onClick={() => updateParamConfig(param.name, 'customValue', false)}
+                                                                            className={`px-3 py-1 text-xs rounded-md transition-all ${param.customValue === false ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+                                                                        >
+                                                                            False
+                                                                        </button>
+                                                                    </div>
+                                                                ) : (
+                                                                    <input
+                                                                        type="number"
+                                                                        value={Number(param.customValue)}
+                                                                        onChange={(e) => updateParamConfig(param.name, 'customValue', parseFloat(e.target.value))}
+                                                                        step={param.paramType === 'int' ? 1 : 0.01}
+                                                                        className="w-32 bg-gray-900 border border-gray-700 rounded px-3 py-1.5 text-gray-200 text-sm font-mono focus:border-gray-500 focus:ring-1 focus:ring-gray-500"
+                                                                    />
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            </>
                         )}
                     </div>
                 )}
@@ -499,19 +653,17 @@ export function OptimizationConfig({
             </div>
 
             {/* Summary */}
-            <div className={`p-4 rounded-lg border ${
-                totalCombinations > 1000
-                    ? totalCombinations > 5000
-                        ? 'bg-red-900/20 border-red-700/50'
-                        : 'bg-yellow-900/20 border-yellow-700/50'
-                    : 'bg-gray-800/50 border-gray-700/30'
-            }`}>
+            <div className={`p-4 rounded-lg border ${totalCombinations > 1000
+                ? totalCombinations > 5000
+                    ? 'bg-red-900/20 border-red-700/50'
+                    : 'bg-yellow-900/20 border-yellow-700/50'
+                : 'bg-gray-800/50 border-gray-700/30'
+                }`}>
                 <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-400">Total Backtests</span>
-                    <span className={`text-2xl font-bold font-mono ${
-                        totalCombinations > 5000 ? 'text-red-400' :
+                    <span className={`text-2xl font-bold font-mono ${totalCombinations > 5000 ? 'text-red-400' :
                         totalCombinations > 1000 ? 'text-yellow-400' : 'text-purple-400'
-                    }`}>
+                        }`}>
                         {totalCombinations.toLocaleString()}
                     </span>
                 </div>
@@ -532,11 +684,10 @@ export function OptimizationConfig({
             <button
                 onClick={handleRun}
                 disabled={!canRun || loading}
-                className={`w-full py-3 px-4 rounded-lg font-semibold flex items-center justify-center gap-2 transition-all ${
-                    canRun && !loading
-                        ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-lg shadow-purple-900/30'
-                        : 'bg-gray-800 text-gray-500 cursor-not-allowed'
-                }`}
+                className={`w-full py-3 px-4 rounded-lg font-semibold flex items-center justify-center gap-2 transition-all ${canRun && !loading
+                    ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-lg shadow-purple-900/30'
+                    : 'bg-gray-800 text-gray-500 cursor-not-allowed'
+                    }`}
             >
                 {loading ? (
                     <>
@@ -569,7 +720,7 @@ export function OptimizationConfig({
 
             {!canRun && !loading && (
                 <p className="text-xs text-center text-gray-500">
-                    {!paramConfigs.some(p => p.enabled) && 'Select at least one parameter to optimize'}
+                    {/* {!paramConfigs.some(p => p.enabled) && 'Select at least one parameter to optimize'} -- Removed check to allow running with ALL fixed params */}
                     {selectedSessions.length === 0 && 'Select at least one session'}
                     {totalCombinations > 5000 && 'Reduce combinations to 5000 or less'}
                 </p>

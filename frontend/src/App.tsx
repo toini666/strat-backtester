@@ -68,6 +68,22 @@ function App() {
     blockMarketOpen: boolean;
   } | null>(null);
 
+  // Config to reuse for optimization
+  const [configToReuse, setConfigToReuse] = useState<{
+    strategyName: string;
+    ticker: string;
+    source: 'Yahoo' | 'Topstep';
+    contractId: string | null;
+    interval: string;
+    days: number;
+    parameters: ParameterRangeInput[];
+    sessions: string[];
+    initialEquity: number;
+    riskPerTrade: number;
+    maxContracts: number;
+    blockMarketOpen: boolean;
+  } | null>(null);
+
   useEffect(() => {
     api.getStrategies().then(data => {
       setStrategies(data);
@@ -333,6 +349,30 @@ function App() {
     });
   }, []);
 
+  const handleReuseHistoryConfig = useCallback((run: OptimizationRunDetail) => {
+    // Create config object from run details
+    // Note: Some fields like initialEquity/risk might be missing if not saved in older runs
+    // We will use defaults for those if missing
+
+    setConfigToReuse({
+      strategyName: run.strategy_name,
+      ticker: run.ticker || 'BTC-USD',
+      source: run.source as 'Yahoo' | 'Topstep',
+      contractId: run.contract_id,
+      interval: run.interval,
+      days: run.days,
+      parameters: run.parameters || [], // If empty/undefined, it will just load default params
+      sessions: run.sessions_tested,
+      initialEquity: run.initial_equity || 50000,
+      riskPerTrade: run.risk_per_trade !== undefined ? run.risk_per_trade : 0.01,
+      maxContracts: 50,
+      blockMarketOpen: true
+    });
+
+    setOptimizationResult(null);
+    setOptimizationView('config');
+  }, []);
+
   return (
     <Layout>
       {/* Mode Toggle */}
@@ -340,11 +380,10 @@ function App() {
         <div className="inline-flex rounded-lg bg-gray-800/50 p-1 border border-gray-700">
           <button
             onClick={() => setMode('backtest')}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              mode === 'backtest'
-                ? 'bg-blue-600 text-white shadow-lg'
-                : 'text-gray-400 hover:text-gray-300'
-            }`}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'backtest'
+              ? 'bg-blue-600 text-white shadow-lg'
+              : 'text-gray-400 hover:text-gray-300'
+              }`}
           >
             Backtest
           </button>
@@ -357,11 +396,10 @@ function App() {
                 setOptimizationView('config');
               }
             }}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              mode === 'optimization'
-                ? 'bg-purple-600 text-white shadow-lg'
-                : 'text-gray-400 hover:text-gray-300'
-            }`}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'optimization'
+              ? 'bg-purple-600 text-white shadow-lg'
+              : 'text-gray-400 hover:text-gray-300'
+              }`}
           >
             Optimization
           </button>
@@ -466,6 +504,7 @@ function App() {
                 onRunOptimization={handleRunOptimization}
                 loading={optimizationLoading}
                 onContractsNeeded={fetchContractsIfNeeded}
+                initialConfig={configToReuse}
               />
 
               <div className="lg:col-span-2 space-y-6">
@@ -483,7 +522,10 @@ function App() {
                   </div>
                 </div>
 
-                <OptimizationHistory onLoadRun={handleLoadHistoryRun} />
+                <OptimizationHistory
+                  onLoadRun={handleLoadHistoryRun}
+                  onReuseRun={handleReuseHistoryConfig}
+                />
               </div>
             </div>
           )}
@@ -495,6 +537,7 @@ function App() {
               totalCombinations={optimizationResult.total_combinations}
               completed={optimizationResult.completed}
               errors={optimizationResult.errors}
+              config={lastOptimizationConfig || undefined}
               onSelectResult={handleSelectOptimizationResult}
               onBack={handleBackFromResults}
             />

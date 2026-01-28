@@ -1495,7 +1495,10 @@ def run_optimization(req: OptimizationRequest):
         "source": req.source,
         "interval": req.interval,
         "days": req.days,
+        "initial_equity": req.initial_equity,
+        "risk_per_trade": req.risk_per_trade,
         "sessions_tested": req.sessions,
+        "parameters": [p.dict() for p in req.parameters],
         "total_combinations": total_combinations,
         "top_results": [r.model_dump() for r in top_results]
     }
@@ -1521,6 +1524,7 @@ def get_optimization_history():
         "timestamp": h["timestamp"],
         "strategy_name": h["strategy_name"],
         "contract_id": h.get("contract_id"),
+        "ticker": h.get("ticker", ""),
         "source": h.get("source", "Topstep"),
         "interval": h.get("interval", "15m"),
         "days": h.get("days", 14),
@@ -1537,6 +1541,39 @@ def get_optimization_run(run_id: str):
         if h["id"] == run_id:
             return h
     raise HTTPException(status_code=404, detail="Optimization run not found")
+
+
+def delete_optimization_run(run_id: str) -> bool:
+    """Delete an optimization run from history."""
+    if not OPTIMIZATION_HISTORY_FILE.exists():
+        return False
+
+    try:
+        with open(OPTIMIZATION_HISTORY_FILE, 'r') as f:
+            history = json.load(f)
+        
+        original_len = len(history)
+        history = [h for h in history if h["id"] != run_id]
+        
+        if len(history) == original_len:
+            return False
+            
+        with open(OPTIMIZATION_HISTORY_FILE, 'w') as f:
+            json.dump(history, f, indent=2)
+            
+        return True
+    except Exception as e:
+        logger.error(f"Failed to delete run {run_id}: {e}")
+        return False
+
+
+@router.delete("/optimization-history/{run_id}")
+def delete_optimization_history_item(run_id: str):
+    """Delete a specific optimization run."""
+    success = delete_optimization_run(run_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Optimization run not found or could not be deleted")
+    return {"status": "success", "message": f"Run {run_id} deleted"}
 
 
 @router.get("/strategy-param-ranges/{strategy_name}")

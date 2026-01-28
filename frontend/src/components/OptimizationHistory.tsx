@@ -1,16 +1,24 @@
 import { useState, useEffect } from 'react';
-import { History, TrendingUp, Calendar, Clock, ChevronRight, Loader2, RefreshCw } from 'lucide-react';
+import { History, TrendingUp, Calendar, Clock, ChevronRight, Loader2, RefreshCw, RotateCcw } from 'lucide-react';
 import { api, type OptimizationHistoryItem, type OptimizationRunDetail } from '../api';
+import { ConfirmModal } from './ui/Modal';
+import { useToast, ToastContainer } from './ui/Toast';
 
 interface OptimizationHistoryProps {
     onLoadRun: (run: OptimizationRunDetail) => void;
+    onReuseRun?: (run: OptimizationRunDetail) => void;
 }
 
-export function OptimizationHistory({ onLoadRun }: OptimizationHistoryProps) {
+export function OptimizationHistory({ onLoadRun, onReuseRun }: OptimizationHistoryProps) {
     const [history, setHistory] = useState<OptimizationHistoryItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
+    const [reuseRunId, setReuseRunId] = useState<string | null>(null);
     const [error, setError] = useState('');
+
+    // UI State
+    const [deleteId, setDeleteId] = useState<string | null>(null);
+    const { toasts, addToast, removeToast } = useToast();
 
     const fetchHistory = async () => {
         setLoading(true);
@@ -31,6 +39,22 @@ export function OptimizationHistory({ onLoadRun }: OptimizationHistoryProps) {
     useEffect(() => {
         fetchHistory();
     }, []);
+
+    const handleReuseRun = async (e: React.MouseEvent, runId: string) => {
+        e.stopPropagation();
+        if (!onReuseRun) return;
+
+        setReuseRunId(runId);
+        try {
+            const run = await api.getOptimizationRun(runId);
+            onReuseRun(run);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            addToast("Failed to load run configuration: " + message, 'error');
+        } finally {
+            setReuseRunId(null);
+        }
+    };
 
     const handleLoadRun = async (runId: string) => {
         setLoadingRunId(runId);
@@ -55,6 +79,26 @@ export function OptimizationHistory({ onLoadRun }: OptimizationHistoryProps) {
         });
     };
 
+    const handleDeleteClick = (e: React.MouseEvent, runId: string) => {
+        e.stopPropagation();
+        setDeleteId(runId);
+    };
+
+    const confirmDelete = async () => {
+        if (!deleteId) return;
+
+        try {
+            await api.deleteOptimizationRun(deleteId);
+            setHistory(prev => prev.filter(item => item.id !== deleteId));
+            addToast("Optimization run deleted successfully", 'success');
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            addToast("Failed to delete run: " + message, 'error');
+        } finally {
+            setDeleteId(null);
+        }
+    };
+
     if (loading) {
         return (
             <div className="glass-panel rounded-xl p-6">
@@ -68,6 +112,18 @@ export function OptimizationHistory({ onLoadRun }: OptimizationHistoryProps) {
 
     return (
         <div className="glass-panel rounded-xl p-6">
+            <ConfirmModal
+                isOpen={!!deleteId}
+                onClose={() => setDeleteId(null)}
+                onConfirm={confirmDelete}
+                title="Delete Optimization Run"
+                message="Are you sure you want to delete this optimization run? This action cannot be undone."
+                confirmText="Delete"
+                variant="danger"
+            />
+
+            <ToastContainer toasts={toasts} onDismiss={removeToast} />
+
             <div className="flex items-center justify-between mb-4 border-b border-gray-700/50 pb-4">
                 <div className="flex items-center gap-3">
                     <div className="p-2 bg-amber-600/20 rounded-lg">
@@ -99,11 +155,10 @@ export function OptimizationHistory({ onLoadRun }: OptimizationHistoryProps) {
             ) : (
                 <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
                     {history.map((item) => (
-                        <button
+                        <div
                             key={item.id}
                             onClick={() => handleLoadRun(item.id)}
-                            disabled={loadingRunId === item.id}
-                            className="w-full p-4 rounded-lg bg-gray-800/50 hover:bg-gray-800 border border-gray-700/30 hover:border-gray-600 transition-all text-left group"
+                            className={`w-full p-4 rounded-lg bg-gray-800/50 hover:bg-gray-800 border border-gray-700/30 hover:border-gray-600 transition-all text-left group relative cursor-pointer ${loadingRunId === item.id ? 'opacity-70 pointer-events-none' : ''}`}
                         >
                             <div className="flex items-center justify-between">
                                 <div className="flex-1">
@@ -111,6 +166,9 @@ export function OptimizationHistory({ onLoadRun }: OptimizationHistoryProps) {
                                         <span className="text-gray-200 font-medium">{item.strategy_name}</span>
                                         <span className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-400">
                                             {item.source}
+                                        </span>
+                                        <span className="text-xs text-gray-400 px-1">
+                                            {item.source === 'Topstep' ? `#${item.contract_id}` : item.ticker}
                                         </span>
                                     </div>
                                     <div className="flex items-center gap-4 text-xs text-gray-500">
@@ -134,14 +192,42 @@ export function OptimizationHistory({ onLoadRun }: OptimizationHistoryProps) {
                                         </div>
                                         <div className="text-xs text-gray-500">best return</div>
                                     </div>
-                                    {loadingRunId === item.id ? (
-                                        <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
-                                    ) : (
-                                        <ChevronRight className="w-5 h-5 text-gray-600 group-hover:text-gray-400 transition-colors" />
-                                    )}
+
+                                    <div className="flex items-center gap-2">
+                                        {onReuseRun && (
+                                            <button
+                                                onClick={(e) => handleReuseRun(e, item.id)}
+                                                disabled={!!reuseRunId}
+                                                className="p-1.5 rounded-md hover:bg-blue-900/30 text-gray-600 hover:text-blue-400 transition-colors z-10"
+                                                title="Reuse Configuration"
+                                            >
+                                                {reuseRunId === item.id ? (
+                                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                                ) : (
+                                                    <RotateCcw className="w-4 h-4" />
+                                                )}
+                                            </button>
+                                        )}
+
+                                        {loadingRunId === item.id ? (
+                                            <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+                                        ) : null}
+
+                                        <button
+                                            onClick={(e) => handleDeleteClick(e, item.id)}
+                                            className="p-1.5 rounded-md hover:bg-red-900/30 text-gray-600 hover:text-red-400 transition-colors z-10"
+                                            title="Delete run"
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <path d="M3 6h18"></path>
+                                                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+                                                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+                                            </svg>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
-                        </button>
+                        </div>
                     ))}
                 </div>
             )}

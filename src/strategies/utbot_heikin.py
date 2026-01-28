@@ -55,15 +55,19 @@ class UTBotHeikin(Strategy):
         "ribbon_enabled": [True, False],
         "ribbon_length": [15, 20, 25, 30],
         "ribbon_step": [3, 5, 7],
+        "ribbon_count": [6, 8, 10],
 
         # RSI Settings
         "rsi_enabled": [True, False],
         "rsi_length": [10, 14, 20],
+        "rsi_lookback": [3, 5, 7, 10],
         "rsi_long_level": [30, 35, 40, 45],
         "rsi_short_level": [55, 60, 65, 70],
 
         # EMA200 Settings
         "ema200_filter_enabled": [True, False],
+        "ema200_length": [150, 200, 250],
+        "ema200_lookback_check": [True, False],
 
         # Position Management
         "stop_loss_lookback": [3, 5, 7, 10],

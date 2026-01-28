@@ -195,6 +195,12 @@ export const api = {
         const res = await apiClient.get<OptimizationRunDetail>(`/optimization-history/${runId}`);
         return res.data;
     },
+    /**
+     * Delete an optimization run
+     */
+    deleteOptimizationRun: async (runId: string): Promise<void> => {
+        await apiClient.delete(`/optimization-history/${runId}`);
+    },
 };
 
 // Optimization types
@@ -260,6 +266,7 @@ export interface OptimizationHistoryItem {
     timestamp: string;
     strategy_name: string;
     contract_id: string | null;
+    ticker: string;
     source: string;
     interval: string;
     days: number;
@@ -276,7 +283,10 @@ export interface OptimizationRunDetail {
     source: string;
     interval: string;
     days: number;
+    initial_equity?: number;
+    risk_per_trade?: number;
     sessions_tested: string[];
+    parameters?: ParameterRangeInput[]; // Optional for backward compatibility
     total_combinations: number;
     top_results: OptimizationResultItem[];
 }
