@@ -295,9 +295,9 @@ class UTBotSTC(Strategy):
         # FIX: Forward fill NaNs to prevent "Zombie Positions" where SL/TP logic always returns False
         # If Low is NaN, use previous valid Low. If Entry Bar Low is NaN, use Close?
         # Robust approach: ffill then bfill to ensure no NaNs exist to break logic.
-        np_real_close = real_close.fillna(method='ffill').fillna(method='bfill').values
-        np_real_high = real_high.fillna(method='ffill').fillna(method='bfill').values
-        np_real_low = real_low.fillna(method='ffill').fillna(method='bfill').values
+        np_real_close = real_close.ffill().bfill().values
+        np_real_high = real_high.ffill().bfill().values
+        np_real_low = real_low.ffill().bfill().values
         
         # Use REAL prices to determine SL location for entry (Structure)
         # Since TradingView chart is Normal, we use High/Low of Normal candles for SL placement logic?
