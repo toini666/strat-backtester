@@ -47,6 +47,10 @@ class BacktestRequest(BaseModel):
     initial_equity: float = Field(default=50000.0, ge=1000, le=10000000, description="Initial equity")
     risk_per_trade: float = Field(default=0.01, ge=0.001, le=0.1, description="Risk per trade (0.01 = 1%)")
 
+    # Trade filters
+    max_contracts: int = Field(default=50, ge=1, le=1000, description="Maximum contracts per position")
+    block_market_open: bool = Field(default=True, description="Block trades in first 5 min of each session")
+
     @field_validator('params')
     @classmethod
     def validate_params(cls, v: Dict[str, Any]) -> Dict[str, Any]:
@@ -409,13 +413,13 @@ def run_backtest(req: BacktestRequest):
                     temp_index = temp_index.tz_localize('UTC')
                 else:
                     temp_index = temp_index.tz_convert('UTC')
-                
+
                 temp_index_paris = temp_index.tz_convert('Europe/Paris')
                 time_mask = (temp_index_paris.hour >= 22)
-                
+
                 if long_entries is not None:
                     long_entries = long_entries & (~time_mask)
-                
+
                 if short_entries is not None:
                     short_entries = short_entries & (~time_mask)
             except Exception as e:
@@ -425,6 +429,37 @@ def run_backtest(req: BacktestRequest):
                     long_entries = long_entries & (~time_mask)
                 if short_entries is not None:
                     short_entries = short_entries & (~time_mask)
+
+        # --- Market Open Filter (block first 5 min of each session) ---
+        # Sessions: Asia (0h00-0h05), UK (9h00-9h05), US (15h30-15h35)
+        if req.block_market_open:
+            try:
+                temp_index = data.index
+                if temp_index.tz is None:
+                    temp_index = temp_index.tz_localize('UTC')
+                else:
+                    temp_index = temp_index.tz_convert('UTC')
+
+                temp_index_paris = temp_index.tz_convert('Europe/Paris')
+                hours = temp_index_paris.hour
+                minutes = temp_index_paris.minute
+                time_minutes = hours * 60 + minutes
+
+                # Block: 0h00-0h05, 9h00-9h05, 15h30-15h35 (in minutes: 0-5, 540-545, 930-935)
+                market_open_mask = (
+                    ((time_minutes >= 0) & (time_minutes < 5)) |       # Asia: 0h00-0h05
+                    ((time_minutes >= 540) & (time_minutes < 545)) |   # UK: 9h00-9h05
+                    ((time_minutes >= 930) & (time_minutes < 935))     # US: 15h30-15h35
+                )
+
+                if long_entries is not None:
+                    long_entries = long_entries & (~market_open_mask)
+                if short_entries is not None:
+                    short_entries = short_entries & (~market_open_mask)
+
+                logger.info(f"Market open filter applied: blocked {market_open_mask.sum()} bars")
+            except Exception as e:
+                logger.warning(f"Market open filter failed: {e}")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Strategy execution error: {str(e)}")
@@ -482,15 +517,16 @@ def run_backtest(req: BacktestRequest):
     # If strategy provided specific SL distances, use them
     if sl_dist_series is not None:
         safe_sl = sl_dist_series.replace(0, tick_size)
-        
+
         # Ensure positive distance (Reciprocity: Short dist should be positive)
-        safe_sl = safe_sl.abs() 
-        
+        safe_sl = safe_sl.abs()
+
         sl_ticks = safe_sl / tick_size
         raw_sizes = risk_amount / (sl_ticks * tick_value)
-        
-        # Round down to nearest int, min 1
+
+        # Round down to nearest int, min 1, max max_contracts
         entry_sizes = np.maximum(1.0, np.floor(raw_sizes)).fillna(1.0)
+        entry_sizes = np.minimum(entry_sizes, req.max_contracts)
     else:
         # Fallback to strategy.get_stop_loss if available
         # We need to iterate entries to get dynamic SL
@@ -515,11 +551,11 @@ def run_backtest(req: BacktestRequest):
                          
                          risk_ticks = risk_per_share / tick_size
                          calc_size = risk_amount / (risk_ticks * tick_value)
-                         entry_sizes.iloc[idx] = max(1.0, float(int(calc_size)))
+                         entry_sizes.iloc[idx] = min(req.max_contracts, max(1.0, float(int(calc_size))))
              except Exception as e:
                  # logger.warning(f"Error getting SL: {e}")
                  pass
-                 
+
         # For Shorts, technically similar, but let's stick to Long logic for MVP or Duplicate
         short_indices = np.where(short_entries)[0]
         for idx in short_indices:
@@ -531,7 +567,7 @@ def run_backtest(req: BacktestRequest):
                      if risk_per_share > 0:
                          risk_ticks = risk_per_share / tick_size
                          calc_size = risk_amount / (risk_ticks * tick_value)
-                         entry_sizes.iloc[idx] = max(1.0, float(int(calc_size)))
+                         entry_sizes.iloc[idx] = min(req.max_contracts, max(1.0, float(int(calc_size))))
              except:
                  pass
 
@@ -885,6 +921,10 @@ class OptimizationRequest(BaseModel):
     initial_equity: float = Field(default=50000.0, ge=1000, le=10000000)
     risk_per_trade: float = Field(default=0.01, ge=0.001, le=0.1)
 
+    # Trade filters
+    max_contracts: int = Field(default=50, ge=1, le=1000)
+    block_market_open: bool = Field(default=True)
+
     # Optimization settings
     max_workers: int = Field(default=4, ge=1, le=8)
 
@@ -1205,6 +1245,30 @@ def run_optimization(req: OptimizationRequest):
                     long_entries = long_entries & (~time_mask)
                     short_entries = short_entries & (~time_mask)
 
+            # Apply market open filter (block first 5 min of each session)
+            if req.block_market_open:
+                try:
+                    temp_index = sliced_data.index
+                    if temp_index.tz is None:
+                        temp_index = temp_index.tz_localize('UTC')
+                    else:
+                        temp_index = temp_index.tz_convert('UTC')
+                    temp_index_paris = temp_index.tz_convert('Europe/Paris')
+                    hours = temp_index_paris.hour
+                    minutes = temp_index_paris.minute
+                    time_minutes = hours * 60 + minutes
+
+                    # Block: 0h00-0h05, 9h00-9h05, 15h30-15h35
+                    market_open_mask = (
+                        ((time_minutes >= 0) & (time_minutes < 5)) |
+                        ((time_minutes >= 540) & (time_minutes < 545)) |
+                        ((time_minutes >= 930) & (time_minutes < 935))
+                    )
+                    long_entries = long_entries & (~market_open_mask)
+                    short_entries = short_entries & (~market_open_mask)
+                except:
+                    pass
+
             # Position sizing
             risk_amount = req.initial_equity * req.risk_per_trade
             if sl_dist_series is not None:
@@ -1212,6 +1276,7 @@ def run_optimization(req: OptimizationRequest):
                 sl_ticks = safe_sl / tick_size
                 raw_sizes = risk_amount / (sl_ticks * tick_value)
                 entry_sizes = np.maximum(1.0, np.floor(raw_sizes)).fillna(1.0)
+                entry_sizes = np.minimum(entry_sizes, req.max_contracts)
             else:
                 entry_sizes = pd.Series(1.0, index=sliced_data.index)
 

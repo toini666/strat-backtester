@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { api, type Strategy, type BacktestResult, type Contract, type Trade, type BacktestMetrics, type OptimizationResponse, type OptimizationResultItem, type ParameterRangeInput } from './api';
+import { api, type Strategy, type BacktestResult, type Contract, type Trade, type BacktestMetrics, type OptimizationResponse, type OptimizationResultItem, type ParameterRangeInput, type OptimizationRunDetail } from './api';
 import './App.css';
 
 // Components
@@ -8,6 +8,7 @@ import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
 import { OptimizationConfig } from './components/OptimizationConfig';
 import { OptimizationResults } from './components/OptimizationResults';
+import { OptimizationHistory } from './components/OptimizationHistory';
 
 // Type for strategy parameters
 type StrategyParams = Record<string, number | string | boolean>;
@@ -37,6 +38,10 @@ function App() {
   const [initialEquity, setInitialEquity] = useState(50000);
   const [riskPerTrade, setRiskPerTrade] = useState(1.0); // %
 
+  // Trade Filters
+  const [maxContracts, setMaxContracts] = useState(50);
+  const [blockMarketOpen, setBlockMarketOpen] = useState(true);
+
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [error, setError] = useState('');
@@ -50,6 +55,18 @@ function App() {
   // Optimization state
   const [optimizationResult, setOptimizationResult] = useState<OptimizationResponse | null>(null);
   const [optimizationLoading, setOptimizationLoading] = useState(false);
+  // Store optimization config to transfer to backtest
+  const [lastOptimizationConfig, setLastOptimizationConfig] = useState<{
+    ticker: string;
+    source: 'Yahoo' | 'Topstep';
+    contractId: string | null;
+    interval: string;
+    days: number;
+    initialEquity: number;
+    riskPerTrade: number;
+    maxContracts: number;
+    blockMarketOpen: boolean;
+  } | null>(null);
 
   useEffect(() => {
     api.getStrategies().then(data => {
@@ -99,7 +116,9 @@ function App() {
         days,
         initialEquity,
         riskPerTrade / 100, // Send as decimal
-        params
+        params,
+        maxContracts,
+        blockMarketOpen
       );
       setResult(res);
     } catch (err: unknown) {
@@ -177,6 +196,23 @@ function App() {
     return { session: sess, ...metrics };
   }).filter((s): s is NonNullable<typeof s> => Boolean(s));
 
+  // Fetch contracts callback for optimization mode
+  const fetchContractsIfNeeded = useCallback(() => {
+    if (contracts.length === 0) {
+      setLoading(true);
+      api.getTopstepContracts()
+        .then(data => {
+          setContracts(data);
+          if (data.length > 0) setSelectedContract(data[0]);
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          setError("Topstep Error: " + message);
+        })
+        .finally(() => setLoading(false));
+    }
+  }, [contracts.length]);
+
   // Optimization handlers
   const handleRunOptimization = useCallback(async (config: {
     strategyName: string;
@@ -189,6 +225,8 @@ function App() {
     sessions: string[];
     initialEquity: number;
     riskPerTrade: number;
+    maxContracts: number;
+    blockMarketOpen: boolean;
   }) => {
     setOptimizationLoading(true);
     setError('');
@@ -200,6 +238,18 @@ function App() {
       });
       setOptimizationResult(res);
       setOptimizationView('results');
+      // Store config for transferring to backtest later
+      setLastOptimizationConfig({
+        ticker: config.ticker,
+        source: config.source,
+        contractId: config.contractId,
+        interval: config.interval,
+        days: config.days,
+        initialEquity: config.initialEquity,
+        riskPerTrade: config.riskPerTrade,
+        maxContracts: config.maxContracts,
+        blockMarketOpen: config.blockMarketOpen
+      });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -224,15 +274,63 @@ function App() {
       // Set sessions
       setSelectedSessions(result.sessions);
 
+      // Transfer ALL config from the optimization run
+      if (lastOptimizationConfig) {
+        setTicker(lastOptimizationConfig.ticker);
+        setDataSource(lastOptimizationConfig.source);
+        setInterval(lastOptimizationConfig.interval);
+        setDays(lastOptimizationConfig.days);
+        setInitialEquity(lastOptimizationConfig.initialEquity);
+        setRiskPerTrade(lastOptimizationConfig.riskPerTrade * 100); // Convert back to percentage
+        setMaxContracts(lastOptimizationConfig.maxContracts);
+        setBlockMarketOpen(lastOptimizationConfig.blockMarketOpen);
+
+        // Set the contract if Topstep
+        if (lastOptimizationConfig.source === 'Topstep' && lastOptimizationConfig.contractId) {
+          const contract = contracts.find(c => c.id === lastOptimizationConfig.contractId);
+          if (contract) {
+            setSelectedContract(contract);
+          }
+        }
+      }
+
       // Switch to backtest mode
       setMode('backtest');
       setResult(null);
       setFilteredResult(null);
     }
-  }, [strategies, optimizationResult]);
+  }, [strategies, optimizationResult, lastOptimizationConfig, contracts]);
 
   const handleBackFromResults = useCallback(() => {
     setOptimizationView('config');
+  }, []);
+
+  // Handler to load a historical optimization run
+  const handleLoadHistoryRun = useCallback((run: OptimizationRunDetail) => {
+    // Convert the run detail to an OptimizationResponse format
+    const response: OptimizationResponse = {
+      id: run.id,
+      strategy_name: run.strategy_name,
+      total_combinations: run.total_combinations,
+      completed: run.total_combinations,
+      top_results: run.top_results,
+      errors: 0
+    };
+    setOptimizationResult(response);
+    setOptimizationView('results');
+
+    // Store config for transferring to backtest later
+    setLastOptimizationConfig({
+      ticker: run.ticker,
+      source: run.source as 'Yahoo' | 'Topstep',
+      contractId: run.contract_id,
+      interval: run.interval,
+      days: run.days,
+      initialEquity: 50000, // Default values since history doesn't store these
+      riskPerTrade: 0.01,
+      maxContracts: 50,
+      blockMarketOpen: true
+    });
   }, []);
 
   return (
@@ -253,7 +351,11 @@ function App() {
           <button
             onClick={() => {
               setMode('optimization');
-              setOptimizationView('config');
+              // Keep the current view (config or results) when switching back
+              // Only reset to config if there's no result yet
+              if (!optimizationResult) {
+                setOptimizationView('config');
+              }
             }}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
               mode === 'optimization'
@@ -265,10 +367,32 @@ function App() {
           </button>
         </div>
 
-        {mode === 'optimization' && optimizationView === 'results' && (
-          <span className="text-sm text-gray-500">
-            Viewing optimization results for {optimizationResult?.strategy_name}
-          </span>
+        {mode === 'optimization' && optimizationResult && (
+          <div className="flex items-center gap-4">
+            <span className="text-sm text-gray-500">
+              {optimizationView === 'results'
+                ? `Viewing optimization results for ${optimizationResult?.strategy_name}`
+                : `Results available for ${optimizationResult?.strategy_name}`}
+            </span>
+            <button
+              onClick={() => {
+                setOptimizationResult(null);
+                setLastOptimizationConfig(null);
+                setOptimizationView('config');
+              }}
+              className="text-xs px-3 py-1 rounded bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-300 transition-colors"
+            >
+              Reset
+            </button>
+            {optimizationView === 'config' && (
+              <button
+                onClick={() => setOptimizationView('results')}
+                className="text-xs px-3 py-1 rounded bg-purple-800 text-purple-300 hover:bg-purple-700 hover:text-purple-200 transition-colors"
+              >
+                View Results
+              </button>
+            )}
+          </div>
         )}
       </div>
 
@@ -304,6 +428,10 @@ function App() {
             setInitialEquity={setInitialEquity}
             riskPerTrade={riskPerTrade}
             setRiskPerTrade={setRiskPerTrade}
+            maxContracts={maxContracts}
+            setMaxContracts={setMaxContracts}
+            blockMarketOpen={blockMarketOpen}
+            setBlockMarketOpen={setBlockMarketOpen}
             strategies={strategies}
             selectedStrategy={selectedStrategy}
             selectStrategy={selectStrategy}
@@ -337,26 +465,25 @@ function App() {
                 contracts={contracts}
                 onRunOptimization={handleRunOptimization}
                 loading={optimizationLoading}
+                onContractsNeeded={fetchContractsIfNeeded}
               />
 
-              <div className="lg:col-span-2">
-                <div className="glass-panel rounded-xl p-8 h-full flex flex-col items-center justify-center text-center">
-                  <div className="w-20 h-20 rounded-full bg-purple-600/20 flex items-center justify-center mb-6">
-                    <svg className="w-10 h-10 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                    </svg>
-                  </div>
-                  <h3 className="text-xl font-semibold text-gray-300 mb-3">Parameter Optimization</h3>
-                  <p className="text-gray-500 max-w-md mb-6">
-                    Test multiple parameter combinations and session configurations to find the optimal strategy settings.
-                  </p>
-                  <div className="space-y-2 text-sm text-gray-600">
-                    <p>1. Select a strategy and configure parameter ranges</p>
-                    <p>2. Choose which sessions to test (all combinations)</p>
-                    <p>3. Run optimization to find the best configurations</p>
-                    <p>4. Click on results to run full backtests</p>
+              <div className="lg:col-span-2 space-y-6">
+                <div className="glass-panel rounded-xl p-6">
+                  <div className="flex flex-col items-center justify-center text-center py-4">
+                    <div className="w-16 h-16 rounded-full bg-purple-600/20 flex items-center justify-center mb-4">
+                      <svg className="w-8 h-8 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                      </svg>
+                    </div>
+                    <h3 className="text-lg font-semibold text-gray-300 mb-2">Parameter Optimization</h3>
+                    <p className="text-gray-500 text-sm max-w-md">
+                      Test multiple parameter combinations and session configurations to find the optimal strategy settings.
+                    </p>
                   </div>
                 </div>
+
+                <OptimizationHistory onLoadRun={handleLoadHistoryRun} />
               </div>
             </div>
           )}

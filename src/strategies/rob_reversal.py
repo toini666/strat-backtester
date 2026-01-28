@@ -29,6 +29,15 @@ class RobReversal(Strategy):
         "block_new_signals": True
     }
 
+    # Parameter ranges for optimization
+    param_ranges = {
+        "ema_length": [5, 8, 10, 13, 20],
+        "take_profit": [20.0, 25.0, 30.0, 35.0, 40.0, 50.0],
+        "max_stop_loss": [20.0, 25.0, 30.0, 35.0, 40.0, 50.0],
+        "trigger_bars": [1, 2, 3],
+        "block_new_signals": [True, False],
+    }
+
     def generate_signals(
         self, 
         data: pd.DataFrame, 

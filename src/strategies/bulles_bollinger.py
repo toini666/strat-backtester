@@ -22,16 +22,24 @@ class BullesBollinger(Strategy):
         # Bollinger Bands Settings
         "bb_length": 20,
         "bb_mult": 2.0,
-        
+
         # Filters
         "filter_bulldozer": True,
-        
+
         # Position Management
         # "stop_loss_lookback": Unused in this strategy (SL is based on specific candle High/Low)
         # "tp_partial_ratio": Unused (TP is dynamic based on Basis)
-        
+
         "tp_partial_pct": 0.5,   # Close 50% at TP1
         "tick_size": 0.25
+    }
+
+    # Parameter ranges for optimization
+    param_ranges = {
+        "bb_length": [14, 18, 20, 22, 26],
+        "bb_mult": [1.5, 1.8, 2.0, 2.2, 2.5],
+        "filter_bulldozer": [True, False],
+        "tp_partial_pct": [0.3, 0.5, 0.7],
     }
 
     def generate_signals(

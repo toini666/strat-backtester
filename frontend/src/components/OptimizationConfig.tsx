@@ -27,15 +27,19 @@ interface OptimizationConfigProps {
         sessions: string[];
         initialEquity: number;
         riskPerTrade: number;
+        maxContracts: number;
+        blockMarketOpen: boolean;
     }) => void;
     loading: boolean;
+    onContractsNeeded?: () => void;
 }
 
 export function OptimizationConfig({
     strategies,
     contracts,
     onRunOptimization,
-    loading
+    loading,
+    onContractsNeeded
 }: OptimizationConfigProps) {
     // Strategy selection
     const [selectedStrategy, setSelectedStrategy] = useState<Strategy | null>(null);
@@ -52,6 +56,10 @@ export function OptimizationConfig({
     // Risk config
     const [initialEquity, setInitialEquity] = useState(50000);
     const [riskPerTrade, setRiskPerTrade] = useState(1.0);
+
+    // Trade filters
+    const [maxContracts, setMaxContracts] = useState(50);
+    const [blockMarketOpen, setBlockMarketOpen] = useState(true);
 
     // Sessions
     const [selectedSessions, setSelectedSessions] = useState<string[]>(['Asia', 'UK', 'US']);
@@ -107,6 +115,13 @@ export function OptimizationConfig({
             })
             .finally(() => setLoadingParams(false));
     }, [selectedStrategy]);
+
+    // Fetch contracts when Topstep is selected and contracts are empty
+    useEffect(() => {
+        if (dataSource === 'Topstep' && contracts.length === 0 && onContractsNeeded) {
+            onContractsNeeded();
+        }
+    }, [dataSource, contracts.length, onContractsNeeded]);
 
     // Set default contract when contracts load
     useEffect(() => {
@@ -179,9 +194,11 @@ export function OptimizationConfig({
             parameters: enabledParams,
             sessions: selectedSessions,
             initialEquity,
-            riskPerTrade: riskPerTrade / 100
+            riskPerTrade: riskPerTrade / 100,
+            maxContracts,
+            blockMarketOpen
         });
-    }, [selectedStrategy, paramConfigs, ticker, dataSource, selectedContract, interval, days, selectedSessions, initialEquity, riskPerTrade, onRunOptimization]);
+    }, [selectedStrategy, paramConfigs, ticker, dataSource, selectedContract, interval, days, selectedSessions, initialEquity, riskPerTrade, maxContracts, blockMarketOpen, onRunOptimization]);
 
     const canRun = selectedStrategy &&
         selectedSessions.length > 0 &&
@@ -306,6 +323,46 @@ export function OptimizationConfig({
                         className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm"
                     />
                 </div>
+            </div>
+
+            {/* Trade Filters */}
+            <div className="space-y-3">
+                <label className="text-sm text-gray-400 font-medium">Trade Filters</label>
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                        <label className="text-xs text-gray-500">Max Contracts/Position</label>
+                        <input
+                            type="number"
+                            value={maxContracts}
+                            onChange={(e) => setMaxContracts(parseInt(e.target.value) || 50)}
+                            min={1}
+                            max={1000}
+                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm"
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-xs text-gray-500">Block Market Open</label>
+                        <label className="flex items-center space-x-2 cursor-pointer group h-[38px]">
+                            <input
+                                type="checkbox"
+                                checked={blockMarketOpen}
+                                onChange={() => setBlockMarketOpen(!blockMarketOpen)}
+                                className="sr-only peer"
+                            />
+                            <div className="w-5 h-5 border-2 border-gray-600 rounded bg-gray-900 group-hover:border-gray-500 peer-checked:bg-purple-600 peer-checked:border-purple-600 transition-all flex items-center justify-center">
+                                {blockMarketOpen && (
+                                    <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                    </svg>
+                                )}
+                            </div>
+                            <span className="text-gray-300 text-sm">First 5 min of sessions</span>
+                        </label>
+                    </div>
+                </div>
+                <p className="text-xs text-gray-500">
+                    {blockMarketOpen && 'Blocks: 0h00-0h05, 9h00-9h05, 15h30-15h35 (Paris time)'}
+                </p>
             </div>
 
             {/* Sessions Selection */}
@@ -493,6 +550,22 @@ export function OptimizationConfig({
                     </>
                 )}
             </button>
+
+            {/* Loading Progress Indicator */}
+            {loading && (
+                <div className="p-4 rounded-lg bg-purple-900/20 border border-purple-700/30 space-y-3">
+                    <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-400">Testing combinations...</span>
+                        <span className="text-purple-400 font-mono">{totalCombinations.toLocaleString()}</span>
+                    </div>
+                    <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+                        <div className="h-full bg-gradient-to-r from-purple-600 to-indigo-600 rounded-full animate-pulse" style={{ width: '100%' }} />
+                    </div>
+                    <p className="text-xs text-gray-500 text-center">
+                        This may take a few minutes depending on the number of combinations
+                    </p>
+                </div>
+            )}
 
             {!canRun && !loading && (
                 <p className="text-xs text-center text-gray-500">

@@ -120,7 +120,9 @@ export const api = {
         days: number,
         initialEquity: number,
         riskPerTrade: number,
-        params: Record<string, number | string | boolean>
+        params: Record<string, number | string | boolean>,
+        maxContracts: number = 50,
+        blockMarketOpen: boolean = true
     ): Promise<BacktestResult> => {
         const res = await apiClient.post<BacktestResult>('/backtest', {
             strategy_name: strategyName,
@@ -132,6 +134,8 @@ export const api = {
             initial_equity: initialEquity,
             risk_per_trade: riskPerTrade,
             params,
+            max_contracts: maxContracts,
+            block_market_open: blockMarketOpen,
         });
         return res.data;
     },
@@ -168,6 +172,8 @@ export const api = {
             initial_equity: request.initialEquity,
             risk_per_trade: request.riskPerTrade,
             max_workers: request.maxWorkers,
+            max_contracts: request.maxContracts,
+            block_market_open: request.blockMarketOpen,
         }, {
             timeout: 600000, // 10 minutes for optimization
         });
@@ -226,6 +232,8 @@ export interface OptimizationRequest {
     initialEquity: number;
     riskPerTrade: number;
     maxWorkers: number;
+    maxContracts: number;
+    blockMarketOpen: boolean;
 }
 
 export interface OptimizationResultItem {

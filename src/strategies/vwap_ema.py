@@ -30,6 +30,14 @@ class VwapEmaStrategy(Strategy):
         "sl_lookback": 4  # Bars for SL calc
     }
 
+    # Parameter ranges for optimization
+    param_ranges = {
+        "ema_length": [5, 8, 10, 13, 20],
+        "retest_tolerance": [0.5, 0.75, 1.0, 1.5, 2.0],
+        "max_setup_bars": [5, 8, 10, 15],
+        "sl_lookback": [3, 4, 5, 6],
+    }
+
     def generate_signals(
         self,
         data: pd.DataFrame,
