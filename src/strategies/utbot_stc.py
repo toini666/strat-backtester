@@ -69,10 +69,12 @@ class UTBotSTC(Strategy):
         real_low = data['Low']
 
         # ===========================================
-        # 1. Heikin Ashi Calculation (only for src)
+        # 1. Heikin Ashi Calculation
         # ===========================================
-        # In Pine Script, only 'src' uses HA via request.security()
-        # ATR and STC always use real prices
+        # When useHeikinAshi=True AND chart is displayed as HA on TradingView:
+        # - ALL indicators (ATR, STC) use HA prices from the chart
+        # - src also uses HA close
+        # This matches TradingView behavior when viewing HA chart
 
         if p['use_heikin_ashi']:
             ha_close = (real_open + real_high + real_low + real_close) / 4
@@ -87,16 +89,26 @@ class UTBotSTC(Strategy):
 
             ha_open = pd.Series(np_ha_open, index=data.index)
 
-            # src = HA close (only this is used for trailing stop logic)
+            # HA High/Low (max/min of real H/L and HA O/C)
+            ha_high = pd.DataFrame({'a': real_high, 'b': ha_open, 'c': ha_close}).max(axis=1)
+            ha_low = pd.DataFrame({'a': real_low, 'b': ha_open, 'c': ha_close}).min(axis=1)
+
+            # Use HA prices for everything when in HA mode
+            calc_close = ha_close
+            calc_high = ha_high
+            calc_low = ha_low
             src = ha_close
         else:
+            calc_close = real_close
+            calc_high = real_high
+            calc_low = real_low
             src = real_close
 
         # ===========================================
         # 2. UTBot Trailing Stop Calculation
         # ===========================================
-        # ATR is ALWAYS calculated on REAL prices (Pine: ta.atr(atrPeriod))
-        xATR = ta.atr(real_high, real_low, real_close, length=p['atr_period'])
+        # ATR uses calc prices (HA when enabled, real otherwise)
+        xATR = ta.atr(calc_high, calc_low, calc_close, length=p['atr_period'])
         nLoss = p['key_value'] * xATR
 
         np_src = src.values
@@ -152,18 +164,18 @@ class UTBotSTC(Strategy):
         utbot_short = (src < xATRTrailingStop) & below
 
         # ===========================================
-        # 4. STC Calculation (ALWAYS on REAL close)
+        # 4. STC Calculation (uses chart prices - HA when enabled)
         # ===========================================
         # Pine: macdVal = calcMACD(close, fastLen, slowLen)
-        # Note: 'close' here is the chart's real close, NOT src
+        # When TradingView displays HA chart, 'close' is the HA close
 
         stc_len = p['stc_length']
         fast_len = p['stc_fast_length']
         slow_len = p['stc_slow_length']
 
-        # MACD on REAL close
-        fast_ma = ta.ema(real_close, length=fast_len)
-        slow_ma = ta.ema(real_close, length=slow_len)
+        # MACD on calc_close (HA when enabled, real otherwise)
+        fast_ma = ta.ema(calc_close, length=fast_len)
+        slow_ma = ta.ema(calc_close, length=slow_len)
         macd_val = fast_ma - slow_ma
 
         # Convert to numpy for loop
@@ -279,9 +291,10 @@ class UTBotSTC(Strategy):
         np_short_sig = short_signal.values
 
         # Pre-convert to numpy for speed
-        np_real_close = real_close.values
-        np_real_high = real_high.values
-        np_real_low = real_low.values
+        # Use calc prices (HA when enabled) to match TradingView chart behavior
+        np_calc_close = calc_close.values
+        np_calc_high = calc_high.values
+        np_calc_low = calc_low.values
 
         for i in range(1, len(data)):
 
@@ -289,9 +302,10 @@ class UTBotSTC(Strategy):
             # Check Exits FIRST (but NOT on entry bar)
             # ===========================================
             # Pine: if inPosition and bar_index > signalBar
+            # Use calc (chart) prices to detect SL/TP hits
             if in_pos and i > entry_idx:
-                curr_low = np_real_low[i]
-                curr_high = np_real_high[i]
+                curr_low = np_calc_low[i]
+                curr_high = np_calc_high[i]
 
                 if pos_side == 1:  # Long position
                     # Check SL first (priority over TP in same bar)
@@ -328,11 +342,11 @@ class UTBotSTC(Strategy):
             # ===========================================
             if not in_pos:
                 if np_long_sig[i]:
-                    # Entry at close of signal bar (REAL close, not HA)
-                    entry_p = round_to_tick(np_real_close[i])
+                    # Entry at close of signal bar (chart close - HA when enabled)
+                    entry_p = round_to_tick(np_calc_close[i])
 
-                    # SL/TP based on SIGNAL CANDLE's REAL low
-                    sig_low = np_real_low[i]
+                    # SL/TP based on SIGNAL CANDLE's chart low (HA when enabled)
+                    sig_low = np_calc_low[i]
                     stop_p = round_to_tick(sig_low - stop_ticks * tick_sz)
                     risk_amt = entry_p - stop_p
                     tp_p = round_to_tick(entry_p + risk_amt * rr)
@@ -349,11 +363,11 @@ class UTBotSTC(Strategy):
                         sl_dists.iloc[i] = risk_amt
 
                 elif np_short_sig[i]:
-                    # Entry at close of signal bar (REAL close, not HA)
-                    entry_p = round_to_tick(np_real_close[i])
+                    # Entry at close of signal bar (chart close - HA when enabled)
+                    entry_p = round_to_tick(np_calc_close[i])
 
-                    # SL/TP based on SIGNAL CANDLE's REAL high
-                    sig_high = np_real_high[i]
+                    # SL/TP based on SIGNAL CANDLE's chart high (HA when enabled)
+                    sig_high = np_calc_high[i]
                     stop_p = round_to_tick(sig_high + stop_ticks * tick_sz)
                     risk_amt = stop_p - entry_p
                     tp_p = round_to_tick(entry_p - risk_amt * rr)
