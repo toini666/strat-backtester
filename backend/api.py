@@ -24,6 +24,13 @@ from src.data.topstep import TopstepClient
 router = APIRouter()
 topstep = TopstepClient()
 
+# --- Cache ---
+TOPSTEP_CACHE = {
+    "params": None, # (contract_id, interval, days)
+    "data": None,
+    "original_start_date": None
+}
+
 # --- Models ---
 
 class BacktestRequest(BaseModel):
@@ -276,7 +283,21 @@ def run_backtest(req: BacktestRequest):
         if req.source == "Topstep":
             if not req.contract_id:
                 raise HTTPException(status_code=400, detail="Contract ID required for Topstep")
-            data = topstep.fetch_historical_data(req.contract_id, start_date, end_date, req.interval)
+                
+            # Check Cache
+            current_params = (req.contract_id, req.interval, req.days)
+            if TOPSTEP_CACHE["params"] == current_params and TOPSTEP_CACHE["data"] is not None:
+                logger.info(f"Using cached Topstep data for {current_params}")
+                data = TOPSTEP_CACHE["data"].copy()
+                # Restore original_start_date to ensure consistent slicing (same window as first run)
+                if TOPSTEP_CACHE["original_start_date"]:
+                     original_start_date = TOPSTEP_CACHE["original_start_date"]
+            else:
+                data = topstep.fetch_historical_data(req.contract_id, start_date, end_date, req.interval)
+                # Update Cache
+                TOPSTEP_CACHE["params"] = current_params
+                TOPSTEP_CACHE["data"] = data.copy()
+                TOPSTEP_CACHE["original_start_date"] = original_start_date
         else:
             # Yahoo
             data = yf.download(req.ticker, start=start_date, end=end_date, interval=req.interval, progress=False, auto_adjust=True)
