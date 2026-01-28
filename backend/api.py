@@ -845,3 +845,670 @@ def run_backtest(req: BacktestRequest):
         "trades": trades_list,
         "equity_curve": equity_curve
     }
+
+
+# =============================================================================
+# OPTIMIZATION ENDPOINTS
+# =============================================================================
+
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from uuid import uuid4
+import itertools
+import json
+from pathlib import Path
+
+# Optimization Models
+class ParameterRangeInput(BaseModel):
+    """Input for a parameter range."""
+    name: str
+    min_value: float
+    max_value: float
+    step: float
+    param_type: str = "float"  # "float", "int", "bool"
+
+class OptimizationRequest(BaseModel):
+    """Request model for optimization."""
+    strategy_name: str
+    ticker: str = "BTC-USD"
+    source: str = Field(default="Topstep", pattern="^(Yahoo|Topstep)$")
+    contract_id: Optional[str] = None
+    interval: str = Field(default="15m", pattern="^(1m|2m|5m|15m|30m|1h|4h|1d)$")
+    days: int = Field(default=14, ge=1, le=365)
+
+    # Parameters to optimize (if empty, uses strategy's param_ranges)
+    parameters: List[ParameterRangeInput] = Field(default_factory=list)
+
+    # Sessions to test
+    sessions: List[str] = Field(default=["Asia", "UK", "US"])
+
+    # Risk config
+    initial_equity: float = Field(default=50000.0, ge=1000, le=10000000)
+    risk_per_trade: float = Field(default=0.01, ge=0.001, le=0.1)
+
+    # Optimization settings
+    max_workers: int = Field(default=4, ge=1, le=8)
+
+class OptimizationResultItem(BaseModel):
+    """Single optimization result."""
+    rank: int
+    parameters: Dict[str, Any]
+    sessions: List[str]
+    total_return: float
+    win_rate: float
+    trade_count: int
+    max_drawdown: float
+
+class OptimizationResponse(BaseModel):
+    """Response from optimization."""
+    id: str
+    strategy_name: str
+    total_combinations: int
+    completed: int
+    top_results: List[OptimizationResultItem]
+    errors: int = 0
+
+
+def generate_session_combinations(sessions: List[str]) -> List[List[str]]:
+    """Generate all non-empty subsets of sessions."""
+    combos = []
+    for r in range(1, len(sessions) + 1):
+        for combo in itertools.combinations(sessions, r):
+            combos.append(list(combo))
+    return combos
+
+
+def generate_param_values(param: ParameterRangeInput) -> List[Any]:
+    """Generate values from a parameter range."""
+    if param.param_type == "bool":
+        return [True, False]
+    elif param.param_type == "int":
+        return list(range(int(param.min_value), int(param.max_value) + 1, int(param.step)))
+    else:
+        values = []
+        current = param.min_value
+        while current <= param.max_value + 1e-9:
+            values.append(round(current, 6))
+            current += param.step
+        return values
+
+
+def filter_trades_by_sessions(trades: List[Dict], sessions: List[str]) -> List[Dict]:
+    """Filter trades to only include those in specified sessions."""
+    return [t for t in trades if t.get("session") in sessions]
+
+
+def calculate_metrics_from_trades(trades: List[Dict], initial_equity: float) -> Dict[str, float]:
+    """Calculate metrics from a list of trades."""
+    if not trades:
+        return {
+            "total_return": 0.0,
+            "win_rate": 0.0,
+            "trade_count": 0,
+            "max_drawdown": 0.0
+        }
+
+    total_pnl = sum(t["pnl"] for t in trades)
+    winning = [t for t in trades if t["pnl"] > 0]
+    win_rate = (len(winning) / len(trades) * 100) if trades else 0.0
+
+    # Calculate max drawdown from cumulative PnL
+    cumulative = 0.0
+    peak = 0.0
+    max_dd = 0.0
+
+    for t in trades:
+        cumulative += t["pnl"]
+        if cumulative > peak:
+            peak = cumulative
+        dd = (peak - cumulative) / initial_equity if initial_equity > 0 else 0
+        if dd > max_dd:
+            max_dd = dd
+
+    return {
+        "total_return": (total_pnl / initial_equity * 100) if initial_equity > 0 else 0.0,
+        "win_rate": win_rate,
+        "trade_count": len(trades),
+        "max_drawdown": -max_dd * 100
+    }
+
+
+# Optimization history storage
+OPTIMIZATION_HISTORY_FILE = Path.home() / ".nebular-apollo" / "optimization_history.json"
+
+
+def save_optimization_result(result: Dict) -> None:
+    """Save optimization result to history."""
+    OPTIMIZATION_HISTORY_FILE.parent.mkdir(exist_ok=True)
+
+    history = []
+    if OPTIMIZATION_HISTORY_FILE.exists():
+        try:
+            with open(OPTIMIZATION_HISTORY_FILE, 'r') as f:
+                history = json.load(f)
+        except:
+            pass
+
+    history.append(result)
+
+    # Keep only last 100
+    if len(history) > 100:
+        history = history[-100:]
+
+    with open(OPTIMIZATION_HISTORY_FILE, 'w') as f:
+        json.dump(history, f, indent=2)
+
+
+def load_optimization_history() -> List[Dict]:
+    """Load optimization history."""
+    if not OPTIMIZATION_HISTORY_FILE.exists():
+        return []
+
+    try:
+        with open(OPTIMIZATION_HISTORY_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return []
+
+
+@router.post("/optimize", response_model=OptimizationResponse)
+def run_optimization(req: OptimizationRequest):
+    """
+    Run parameter optimization for a strategy.
+
+    Tests all combinations of parameters × sessions and returns the top 20 results.
+    """
+    load_strategies()
+
+    if req.strategy_name not in STRATEGIES:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+
+    StrategyClass = STRATEGIES[req.strategy_name]
+    strategy_instance = StrategyClass()
+
+    # Determine parameter ranges
+    if req.parameters:
+        # Use custom ranges from request
+        param_ranges = {}
+        for p in req.parameters:
+            param_ranges[p.name] = generate_param_values(p)
+    else:
+        # Use strategy's default param_ranges
+        param_ranges = getattr(strategy_instance, 'param_ranges', {})
+        if not param_ranges:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Strategy {req.strategy_name} has no param_ranges defined and no custom parameters provided"
+            )
+
+    # Generate all parameter combinations
+    param_keys = list(param_ranges.keys())
+    param_values = list(param_ranges.values())
+    param_combinations = list(itertools.product(*param_values))
+
+    # Generate session combinations
+    session_combinations = generate_session_combinations(req.sessions)
+
+    total_combinations = len(param_combinations) * len(session_combinations)
+    logger.info(f"Starting optimization: {len(param_combinations)} param combos × {len(session_combinations)} session combos = {total_combinations} total")
+
+    # Warn if too many combinations
+    if total_combinations > 5000:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many combinations ({total_combinations}). Maximum is 5000. Reduce parameter ranges or sessions."
+        )
+
+    # Fetch data ONCE (it will be cached)
+    end_date = datetime.now()
+    original_start_date = end_date - timedelta(days=req.days)
+
+    # Warmup
+    warmup_bars = 1000
+    map_min = {"1m": 1, "2m": 2, "5m": 5, "15m": 15, "30m": 30, "60m": 60, "1h": 60, "4h": 240, "1d": 1440}
+    minutes_per_bar = map_min.get(req.interval, 15)
+    total_minutes = warmup_bars * minutes_per_bar * 1.5
+    warmup_delta = timedelta(minutes=total_minutes)
+    start_date = original_start_date - warmup_delta
+
+    # Fetch data
+    try:
+        if req.source == "Topstep":
+            if not req.contract_id:
+                raise HTTPException(status_code=400, detail="Contract ID required for Topstep")
+
+            current_params = (req.contract_id, req.interval, req.days)
+            if TOPSTEP_CACHE["params"] == current_params and TOPSTEP_CACHE["data"] is not None:
+                data = TOPSTEP_CACHE["data"].copy()
+                if TOPSTEP_CACHE["original_start_date"]:
+                    original_start_date = TOPSTEP_CACHE["original_start_date"]
+            else:
+                data = topstep.fetch_historical_data(req.contract_id, start_date, end_date, req.interval)
+                TOPSTEP_CACHE["params"] = current_params
+                TOPSTEP_CACHE["data"] = data.copy()
+                TOPSTEP_CACHE["original_start_date"] = original_start_date
+        else:
+            data = yf.download(req.ticker, start=start_date, end=end_date, interval=req.interval, progress=False, auto_adjust=True)
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.droplevel(1)
+
+        if data.empty:
+            raise HTTPException(status_code=400, detail=f"No data found")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Data fetch error: {str(e)}")
+
+    # Get contract specs
+    tick_size = 0.25
+    tick_value = 5.0
+    point_value = 1.0
+    fee_per_trade = 0.0
+
+    if req.source == "Topstep" and req.contract_id:
+        try:
+            contracts = topstep.fetch_available_contracts()
+            contract = next((c for c in contracts if str(c['id']) == str(req.contract_id)), None)
+            if contract:
+                tick_size = float(contract.get('tickSize', 0.25))
+                tick_value = float(contract.get('tickValue', 5.0))
+                contract_name = contract.get('name', '').upper()
+                if tick_size > 0:
+                    point_value = tick_value / tick_size
+
+                sorted_keys = sorted(FEES_MAP.keys(), key=len, reverse=True)
+                for k in sorted_keys:
+                    if k in contract_name:
+                        fee_per_trade = FEES_MAP[k]
+                        break
+
+            # Override with hardcoded specs
+            sorted_spec_keys = sorted(CONTRACT_SPECS.keys(), key=len, reverse=True)
+            for k in sorted_spec_keys:
+                if contract and k in contract.get('name', '').upper():
+                    spec = CONTRACT_SPECS[k]
+                    tick_size = spec['tick_size']
+                    tick_value = spec['tick_value']
+                    if tick_size > 0:
+                        point_value = tick_value / tick_size
+                    break
+        except:
+            pass
+
+    # Run all backtests sequentially (parallelization would require process-safe data sharing)
+    all_results = []
+    errors = 0
+    completed = 0
+
+    for param_combo in param_combinations:
+        params = dict(zip(param_keys, param_combo))
+        params['tick_size'] = tick_size
+
+        # Merge with strategy defaults
+        full_params = strategy_instance.default_params.copy()
+        full_params.update(params)
+
+        try:
+            # Run strategy
+            signals = strategy_instance.generate_signals(data.copy(), full_params)
+
+            exec_price = None
+            sl_dist_series = None
+            exit_ratios = None
+
+            if len(signals) == 7:
+                long_entries, long_exits, short_entries, short_exits, exec_price, sl_dist_series, exit_ratios = signals
+            elif len(signals) == 6:
+                long_entries, long_exits, short_entries, short_exits, exec_price, sl_dist_series = signals
+            elif len(signals) == 5:
+                long_entries, long_exits, short_entries, short_exits, exec_price = signals
+            elif len(signals) == 4:
+                long_entries, long_exits, short_entries, short_exits = signals
+            else:
+                long_entries, short_entries = signals
+                long_exits = None
+                short_exits = None
+
+            # Apply warmup slicing
+            ts_start = pd.Timestamp(original_start_date)
+            if data.index.tz is not None:
+                if ts_start.tzinfo is None:
+                    ts_start = ts_start.tz_localize(data.index.tz)
+                else:
+                    ts_start = ts_start.tz_convert(data.index.tz)
+
+            mask = data.index >= ts_start
+            sliced_data = data.loc[mask].copy()
+
+            long_entries = long_entries.loc[mask]
+            short_entries = short_entries.loc[mask]
+            if long_exits is not None: long_exits = long_exits.loc[mask]
+            if short_exits is not None: short_exits = short_exits.loc[mask]
+            if exec_price is not None: exec_price = exec_price.loc[mask]
+            if sl_dist_series is not None: sl_dist_series = sl_dist_series.loc[mask]
+            if exit_ratios is not None: exit_ratios = exit_ratios.loc[mask]
+
+            # Apply Topstep time filter
+            if req.source == "Topstep":
+                try:
+                    temp_index = sliced_data.index
+                    if temp_index.tz is None:
+                        temp_index = temp_index.tz_localize('UTC')
+                    else:
+                        temp_index = temp_index.tz_convert('UTC')
+                    temp_index_paris = temp_index.tz_convert('Europe/Paris')
+                    time_mask = (temp_index_paris.hour >= 22)
+                    long_entries = long_entries & (~time_mask)
+                    short_entries = short_entries & (~time_mask)
+                except:
+                    time_mask = sliced_data.index.hour >= 21
+                    long_entries = long_entries & (~time_mask)
+                    short_entries = short_entries & (~time_mask)
+
+            # Position sizing
+            risk_amount = req.initial_equity * req.risk_per_trade
+            if sl_dist_series is not None:
+                safe_sl = sl_dist_series.replace(0, tick_size).abs()
+                sl_ticks = safe_sl / tick_size
+                raw_sizes = risk_amount / (sl_ticks * tick_value)
+                entry_sizes = np.maximum(1.0, np.floor(raw_sizes)).fillna(1.0)
+            else:
+                entry_sizes = pd.Series(1.0, index=sliced_data.index)
+
+            size_series = entry_sizes.copy()
+
+            # FIFO for longs
+            current_long_qty = 0.0
+            idx_long_entry = np.where(long_entries)[0]
+            idx_long_exit = np.where(long_exits)[0] if long_exits is not None else []
+            combined_long_indices = sorted(np.unique(np.concatenate([idx_long_entry, idx_long_exit])))
+
+            for i in combined_long_indices:
+                is_entry = long_entries.iloc[i]
+                is_exit = long_exits.iloc[i] if long_exits is not None else False
+                if is_entry:
+                    qty = entry_sizes.iloc[i]
+                    current_long_qty += qty
+                    size_series.iloc[i] = qty
+                if is_exit:
+                    ratio = exit_ratios.iloc[i] if exit_ratios is not None else 1.0
+                    if current_long_qty > 0:
+                        if ratio >= 0.99:
+                            exit_amt = current_long_qty
+                        else:
+                            exit_amt = max(1.0, round(current_long_qty * ratio))
+                        size_series.iloc[i] = min(exit_amt, current_long_qty)
+                        current_long_qty -= size_series.iloc[i]
+
+            # FIFO for shorts
+            current_short_qty = 0.0
+            idx_short_entry = np.where(short_entries)[0] if short_entries is not None else []
+            idx_short_exit = np.where(short_exits)[0] if short_exits is not None else []
+            combined_short_indices = sorted(np.unique(np.concatenate([idx_short_entry, idx_short_exit])))
+
+            for i in combined_short_indices:
+                is_entry = short_entries.iloc[i] if short_entries is not None else False
+                is_exit = short_exits.iloc[i] if short_exits is not None else False
+                if is_entry:
+                    qty = entry_sizes.iloc[i]
+                    current_short_qty += qty
+                    size_series.iloc[i] = qty
+                if is_exit:
+                    ratio = exit_ratios.iloc[i] if exit_ratios is not None else 1.0
+                    if current_short_qty > 0:
+                        if ratio >= 0.99:
+                            exit_amt = current_short_qty
+                        else:
+                            exit_amt = max(1.0, round(current_short_qty * ratio))
+                        size_series.iloc[i] = min(exit_amt, current_short_qty)
+                        current_short_qty -= size_series.iloc[i]
+
+            # Run VBT portfolio
+            price_to_use = exec_price if exec_price is not None else sliced_data['Close']
+            sim_cash = 1_000_000_000.0
+
+            pf = vbt.Portfolio.from_signals(
+                close=price_to_use,
+                entries=long_entries,
+                exits=long_exits,
+                short_entries=short_entries,
+                short_exits=short_exits,
+                init_cash=sim_cash,
+                freq=req.interval,
+                size=size_series,
+                size_type='Amount',
+                accumulate=True,
+                fees=0.0,
+                slippage=0.0,
+                sl_stop=None
+            )
+
+            # Extract trades with session info
+            trades_df = pf.trades.records_readable
+            trades_list = []
+
+            exec_price_lookup = {}
+            if exec_price is not None:
+                for idx, val in exec_price.items():
+                    exec_price_lookup[str(idx)] = float(val)
+                    if hasattr(idx, 'strftime'):
+                        exec_price_lookup[idx.strftime('%Y-%m-%d %H:%M:%S')] = float(val)
+
+            aggregated_trades = {}
+            for _, row in trades_df.iterrows():
+                entry_time_str = str(row['Entry Timestamp'])
+                exit_time_str = str(row['Exit Timestamp'])
+
+                exit_timestamp = row['Exit Timestamp']
+                entry_timestamp = row['Entry Timestamp']
+
+                if hasattr(exit_timestamp, 'strftime'):
+                    exit_time_normalized = exit_timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    exit_time_normalized = str(exit_timestamp)[:19]
+
+                if hasattr(entry_timestamp, 'strftime'):
+                    entry_time_normalized = entry_timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    entry_time_normalized = str(entry_timestamp)[:19]
+
+                size = float(row['Size'])
+                direction = row['Direction']
+
+                entry_price_trade = exec_price_lookup.get(entry_time_str) or exec_price_lookup.get(entry_time_normalized) or float(row['Avg Entry Price'])
+                exit_price_trade = exec_price_lookup.get(exit_time_str) or exec_price_lookup.get(exit_time_normalized) or float(row['Avg Exit Price'])
+
+                def round_to_tick(price, ts):
+                    if ts > 0:
+                        return round(price / ts) * ts
+                    return price
+
+                entry_price_trade = round_to_tick(entry_price_trade, tick_size)
+                exit_price_trade = round_to_tick(exit_price_trade, tick_size)
+
+                if direction == 'Long':
+                    raw_pnl_points = exit_price_trade - entry_price_trade
+                else:
+                    raw_pnl_points = entry_price_trade - exit_price_trade
+
+                gross_pnl = raw_pnl_points * size * point_value
+                total_fee = fee_per_trade * size
+                real_pnl = gross_pnl - total_fee
+
+                if entry_time_str not in aggregated_trades:
+                    aggregated_trades[entry_time_str] = {
+                        "entry_time": entry_time_str,
+                        "exit_time": exit_time_str,
+                        "side": direction,
+                        "entry_price": entry_price_trade,
+                        "net_pnl": 0.0,
+                        "gross_pnl": 0.0,
+                        "fees": 0.0,
+                        "total_size": 0.0,
+                        "exit_p_accum": 0.0,
+                        "exit_size_accum": 0.0,
+                    }
+
+                group = aggregated_trades[entry_time_str]
+                group["net_pnl"] += real_pnl
+                group["gross_pnl"] += gross_pnl
+                group["fees"] += total_fee
+                group["total_size"] += size
+                group["exit_p_accum"] += (exit_price_trade * size)
+                group["exit_size_accum"] += size
+
+                if row['Exit Timestamp'] > pd.to_datetime(group["exit_time"]):
+                    group["exit_time"] = exit_time_str
+
+            # Convert to list with session info
+            for k in sorted(aggregated_trades.keys()):
+                t = aggregated_trades[k]
+                avg_exit = t["exit_p_accum"] / t["exit_size_accum"] if t["exit_size_accum"] > 0 else 0.0
+                session = get_session(t["entry_time"])
+
+                trades_list.append({
+                    "entry_time": t["entry_time"],
+                    "exit_time": t["exit_time"],
+                    "side": t["side"],
+                    "entry_price": t["entry_price"],
+                    "exit_price": avg_exit,
+                    "pnl": t["net_pnl"],
+                    "gross_pnl": t["gross_pnl"],
+                    "fees": t["fees"],
+                    "size": t["total_size"],
+                    "session": session
+                })
+
+            # Now test each session combination
+            for session_combo in session_combinations:
+                filtered_trades = filter_trades_by_sessions(trades_list, session_combo)
+                metrics = calculate_metrics_from_trades(filtered_trades, req.initial_equity)
+
+                all_results.append({
+                    "params": params,
+                    "sessions": session_combo,
+                    "total_return": metrics["total_return"],
+                    "win_rate": metrics["win_rate"],
+                    "trade_count": metrics["trade_count"],
+                    "max_drawdown": metrics["max_drawdown"],
+                })
+
+                completed += 1
+
+        except Exception as e:
+            logger.error(f"Error with params {params}: {e}")
+            errors += len(session_combinations)
+            completed += len(session_combinations)
+
+    # Sort by total_return descending and get top 20
+    all_results.sort(key=lambda x: x["total_return"], reverse=True)
+    top_20 = all_results[:20]
+
+    # Format response
+    top_results = []
+    for rank, res in enumerate(top_20, 1):
+        top_results.append(OptimizationResultItem(
+            rank=rank,
+            parameters=res["params"],
+            sessions=res["sessions"],
+            total_return=round(res["total_return"], 2),
+            win_rate=round(res["win_rate"], 1),
+            trade_count=res["trade_count"],
+            max_drawdown=round(res["max_drawdown"], 2)
+        ))
+
+    # Generate ID and save
+    run_id = str(uuid4())[:8]
+
+    # Save to history
+    history_entry = {
+        "id": run_id,
+        "timestamp": datetime.now().isoformat(),
+        "strategy_name": req.strategy_name,
+        "contract_id": req.contract_id,
+        "ticker": req.ticker,
+        "source": req.source,
+        "interval": req.interval,
+        "days": req.days,
+        "sessions_tested": req.sessions,
+        "total_combinations": total_combinations,
+        "top_results": [r.model_dump() for r in top_results]
+    }
+    save_optimization_result(history_entry)
+
+    return OptimizationResponse(
+        id=run_id,
+        strategy_name=req.strategy_name,
+        total_combinations=total_combinations,
+        completed=completed,
+        top_results=top_results,
+        errors=errors
+    )
+
+
+@router.get("/optimization-history")
+def get_optimization_history():
+    """Get list of past optimization runs."""
+    history = load_optimization_history()
+    # Return summary only (not full top_results to keep response small)
+    return [{
+        "id": h["id"],
+        "timestamp": h["timestamp"],
+        "strategy_name": h["strategy_name"],
+        "contract_id": h.get("contract_id"),
+        "source": h.get("source", "Topstep"),
+        "interval": h.get("interval", "15m"),
+        "days": h.get("days", 14),
+        "total_combinations": h.get("total_combinations", 0),
+        "best_return": h["top_results"][0]["total_return"] if h.get("top_results") else 0
+    } for h in history]
+
+
+@router.get("/optimization-history/{run_id}")
+def get_optimization_run(run_id: str):
+    """Get details of a specific optimization run."""
+    history = load_optimization_history()
+    for h in history:
+        if h["id"] == run_id:
+            return h
+    raise HTTPException(status_code=404, detail="Optimization run not found")
+
+
+@router.get("/strategy-param-ranges/{strategy_name}")
+def get_strategy_param_ranges(strategy_name: str):
+    """Get the default parameter ranges for a strategy."""
+    load_strategies()
+
+    if strategy_name not in STRATEGIES:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+
+    StrategyClass = STRATEGIES[strategy_name]
+    strategy_instance = StrategyClass()
+
+    param_ranges = getattr(strategy_instance, 'param_ranges', {})
+    default_params = getattr(strategy_instance, 'default_params', {})
+
+    # Convert to structured format
+    ranges_info = []
+    for name, values in param_ranges.items():
+        if isinstance(values, (list, tuple)):
+            if all(isinstance(v, bool) for v in values):
+                param_type = "bool"
+            elif all(isinstance(v, int) for v in values):
+                param_type = "int"
+            else:
+                param_type = "float"
+
+            ranges_info.append({
+                "name": name,
+                "values": values,
+                "default": default_params.get(name),
+                "param_type": param_type,
+                "count": len(values)
+            })
+
+    return {
+        "strategy_name": strategy_name,
+        "param_ranges": ranges_info,
+        "total_combinations": int(np.prod([len(r["values"]) for r in ranges_info])) if ranges_info else 0
+    }

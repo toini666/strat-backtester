@@ -18,30 +18,57 @@ class UTBotHeikin(Strategy):
         "key_value": 1,
         "atr_period": 10,
         "use_heikin_ashi": True,
-        
+
         # EMA Ribbon Settings (Filters)
         "ribbon_enabled": True,
         "ribbon_length": 20,
         "ribbon_step": 5,
         "ribbon_count": 8,
-        
+
         # RSI Settings (Filter)
         "rsi_enabled": True,
         "rsi_length": 14,
         "rsi_lookback": 5,
         "rsi_long_level": 40,  # <= for Long
         "rsi_short_level": 60, # >= for Short
-        
+
         # EMA200 Settings (Filter)
         "ema200_filter_enabled": True,
         "ema200_length": 200,
         "ema200_lookback_check": True, # Check if all closes in lookback are above/below
-        
+
         # Position Management
         "stop_loss_lookback": 5,
         "tp_partial_ratio": 2.0,
         "tp_partial_pct": 0.5, # Percentage to close on partial TP (0.0 - 1.0)
         "tick_size": 0.25
+    }
+
+    # Parameter ranges for optimization
+    param_ranges = {
+        # UTBot Settings
+        "key_value": [0.5, 1.0, 1.5, 2.0, 2.5, 3.0],
+        "atr_period": [7, 10, 14, 20],
+        "use_heikin_ashi": [True, False],
+
+        # EMA Ribbon Settings
+        "ribbon_enabled": [True, False],
+        "ribbon_length": [15, 20, 25, 30],
+        "ribbon_step": [3, 5, 7],
+
+        # RSI Settings
+        "rsi_enabled": [True, False],
+        "rsi_length": [10, 14, 20],
+        "rsi_long_level": [30, 35, 40, 45],
+        "rsi_short_level": [55, 60, 65, 70],
+
+        # EMA200 Settings
+        "ema200_filter_enabled": [True, False],
+
+        # Position Management
+        "stop_loss_lookback": [3, 5, 7, 10],
+        "tp_partial_ratio": [1.5, 2.0, 2.5, 3.0],
+        "tp_partial_pct": [0.3, 0.5, 0.7],
     }
 
     def generate_signals(

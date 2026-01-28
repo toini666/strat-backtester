@@ -143,4 +143,132 @@ export const api = {
         const res = await apiClient.get<{ status: string; version: string }>('/health');
         return res.data;
     },
+
+    /**
+     * Get parameter ranges for a strategy
+     */
+    getStrategyParamRanges: async (strategyName: string): Promise<StrategyParamRanges> => {
+        const res = await apiClient.get<StrategyParamRanges>(`/strategy-param-ranges/${strategyName}`);
+        return res.data;
+    },
+
+    /**
+     * Run parameter optimization
+     */
+    runOptimization: async (request: OptimizationRequest): Promise<OptimizationResponse> => {
+        const res = await apiClient.post<OptimizationResponse>('/optimize', {
+            strategy_name: request.strategyName,
+            ticker: request.ticker,
+            source: request.source,
+            contract_id: request.contractId,
+            interval: request.interval,
+            days: request.days,
+            parameters: request.parameters,
+            sessions: request.sessions,
+            initial_equity: request.initialEquity,
+            risk_per_trade: request.riskPerTrade,
+            max_workers: request.maxWorkers,
+        }, {
+            timeout: 600000, // 10 minutes for optimization
+        });
+        return res.data;
+    },
+
+    /**
+     * Get optimization history
+     */
+    getOptimizationHistory: async (): Promise<OptimizationHistoryItem[]> => {
+        const res = await apiClient.get<OptimizationHistoryItem[]>('/optimization-history');
+        return res.data;
+    },
+
+    /**
+     * Get a specific optimization run
+     */
+    getOptimizationRun: async (runId: string): Promise<OptimizationRunDetail> => {
+        const res = await apiClient.get<OptimizationRunDetail>(`/optimization-history/${runId}`);
+        return res.data;
+    },
 };
+
+// Optimization types
+export interface ParamRangeInfo {
+    name: string;
+    values: (number | boolean)[];
+    default: number | boolean;
+    param_type: 'float' | 'int' | 'bool';
+    count: number;
+}
+
+export interface StrategyParamRanges {
+    strategy_name: string;
+    param_ranges: ParamRangeInfo[];
+    total_combinations: number;
+}
+
+export interface ParameterRangeInput {
+    name: string;
+    min_value: number;
+    max_value: number;
+    step: number;
+    param_type: 'float' | 'int' | 'bool';
+}
+
+export interface OptimizationRequest {
+    strategyName: string;
+    ticker: string;
+    source: 'Yahoo' | 'Topstep';
+    contractId: string | null;
+    interval: string;
+    days: number;
+    parameters: ParameterRangeInput[];
+    sessions: string[];
+    initialEquity: number;
+    riskPerTrade: number;
+    maxWorkers: number;
+}
+
+export interface OptimizationResultItem {
+    rank: number;
+    parameters: Record<string, number | boolean>;
+    sessions: string[];
+    total_return: number;
+    win_rate: number;
+    trade_count: number;
+    max_drawdown: number;
+}
+
+export interface OptimizationResponse {
+    id: string;
+    strategy_name: string;
+    total_combinations: number;
+    completed: number;
+    top_results: OptimizationResultItem[];
+    errors: number;
+}
+
+export interface OptimizationHistoryItem {
+    id: string;
+    timestamp: string;
+    strategy_name: string;
+    contract_id: string | null;
+    source: string;
+    interval: string;
+    days: number;
+    total_combinations: number;
+    best_return: number;
+}
+
+export interface OptimizationRunDetail {
+    id: string;
+    timestamp: string;
+    strategy_name: string;
+    contract_id: string | null;
+    ticker: string;
+    source: string;
+    interval: string;
+    days: number;
+    sessions_tested: string[];
+    total_combinations: number;
+    top_results: OptimizationResultItem[];
+}

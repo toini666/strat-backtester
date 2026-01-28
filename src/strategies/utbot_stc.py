@@ -47,6 +47,29 @@ class UTBotSTC(Strategy):
         "tick_size": 0.25
     }
 
+    # Parameter ranges for optimization
+    param_ranges = {
+        # UTBot Settings
+        "key_value": [0.5, 1.0, 1.5, 2.0, 2.5, 3.0],
+        "atr_period": [7, 10, 14, 20],
+        "use_heikin_ashi": [True, False],
+
+        # STC Settings
+        "stc_length": [8, 10, 12, 14, 16],
+        "stc_fast_length": [20, 23, 26, 30],
+        "stc_slow_length": [40, 50, 60],
+
+        # STC Level Filters
+        "stc_min_long": [1.0, 5.0, 10.0],
+        "stc_max_long": [60.0, 70.0, 75.0, 80.0],
+        "stc_min_short": [20.0, 25.0, 30.0, 40.0],
+        "stc_max_short": [90.0, 95.0, 99.0],
+
+        # Position Management
+        "stop_ticks": [2, 3, 4, 5],
+        "risk_reward": [1.5, 2.0, 2.5, 3.0],
+    }
+
     def generate_signals(
         self,
         data: pd.DataFrame,
