@@ -561,65 +561,88 @@ def run_backtest(req: BacktestRequest):
         sl_stop=None
     )
     
-    # 6. Metrics & Trades (Manual PnL Scaling)
-    
-    # 6. Metrics & Trades (Manual PnL Scaling)
-    
+    # 6. Metrics & Trades (Manual PnL Calculation using Strategy's exec_prices)
+    #
+    # IMPORTANT: VectorBT does NOT use exec_price for exit prices - it uses the actual
+    # market close price. We must calculate PnL manually using the strategy's exec_prices.
+
     trades_df = pf.trades.records_readable
-    
+
     # AGGREGATE TRADES by Entry Timestamp to handle Partials as Single Trade
-    # We use a helper dict to accumulate
     aggregated_trades = {}
-    
+
     cumulative_pnl = 0.0
     equity_series = [req.initial_equity]
-    
+
+    # Build a lookup for exec_prices by timestamp for accurate exit prices
+    exec_price_lookup = {}
+    if exec_price is not None:
+        for idx, val in exec_price.items():
+            exec_price_lookup[str(idx)] = float(val)
+
     # Process VBT records
     for _, row in trades_df.iterrows():
         entry_time_str = str(row['Entry Timestamp'])
-        
-        raw_pnl = float(row['PnL'])
+        exit_time_str = str(row['Exit Timestamp'])
+
         size = float(row['Size'])
-        
-        # Gross PnL
-        gross_pnl = raw_pnl * point_value
-        
+        direction = row['Direction']  # 'Long' or 'Short'
+
+        # Get entry price from VBT (this is correct as it uses exec_price for entries)
+        entry_price_trade = float(row['Avg Entry Price'])
+
+        # Get exit price from our exec_price series (NOT from VBT which uses market close)
+        # VBT's 'Avg Exit Price' is the market close, not our SL/TP price
+        if exec_price is not None and exit_time_str in exec_price_lookup:
+            exit_price_trade = exec_price_lookup[exit_time_str]
+        else:
+            # Fallback to VBT's exit price if exec_price not available
+            exit_price_trade = float(row['Avg Exit Price'])
+
+        # Calculate PnL manually using correct prices
+        if direction == 'Long':
+            raw_pnl_points = exit_price_trade - entry_price_trade
+        else:  # Short
+            raw_pnl_points = entry_price_trade - exit_price_trade
+
+        # Convert to dollar PnL: points * size * point_value
+        gross_pnl = raw_pnl_points * size * point_value
+
         # Fee Deduction
         total_fee = fee_per_trade * size
         real_pnl = gross_pnl - total_fee
-        
+
         if entry_time_str not in aggregated_trades:
             # New Trade Group
             aggregated_trades[entry_time_str] = {
                 "entry_time": entry_time_str,
-                "exit_time": str(row['Exit Timestamp']), # Update with latest
-                "side": row['Direction'],
-                "entry_price": float(row['Avg Entry Price']),
+                "exit_time": exit_time_str,
+                "side": direction,
+                "entry_price": entry_price_trade,
                 "net_pnl": 0.0,
                 "gross_pnl": 0.0,
                 "fees": 0.0,
                 "total_size": 0.0,
-                "exit_p_accum": 0.0, # for weighted avg
+                "exit_p_accum": 0.0,
                 "exit_size_accum": 0.0,
                 "status": row['Status']
             }
-            
+
         # Accumulate
         group = aggregated_trades[entry_time_str]
         group["net_pnl"] += real_pnl
         group["gross_pnl"] += gross_pnl
         group["fees"] += total_fee
         group["total_size"] += size
-        
-        # We want Weighted Avg Exit Price
-        exit_p = float(row['Avg Exit Price'])
-        group["exit_p_accum"] += (exit_p * size)
+
+        # Weighted Avg Exit Price using our exec_price (not VBT's)
+        group["exit_p_accum"] += (exit_price_trade * size)
         group["exit_size_accum"] += size
-        
+
         # Update Exit Time to the latest one
         if row['Exit Timestamp'] > pd.to_datetime(group["exit_time"]):
-             group["exit_time"] = str(row['Exit Timestamp']) # Keep string or Obj? VBT is TS.
-             group["status"] = row['Status'] # Update status from latest part
+             group["exit_time"] = exit_time_str
+             group["status"] = row['Status']
              
     # Convert Aggregated Dict to List
     trades_list = []
