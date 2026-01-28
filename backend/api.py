@@ -575,27 +575,62 @@ def run_backtest(req: BacktestRequest):
     equity_series = [req.initial_equity]
 
     # Build a lookup for exec_prices by timestamp for accurate exit prices
+    # Use BOTH string and normalized formats to handle timezone differences
     exec_price_lookup = {}
     if exec_price is not None:
         for idx, val in exec_price.items():
+            # Store with original string key
             exec_price_lookup[str(idx)] = float(val)
+            # Also store with normalized timestamp (no timezone suffix)
+            if hasattr(idx, 'strftime'):
+                normalized_key = idx.strftime('%Y-%m-%d %H:%M:%S')
+                exec_price_lookup[normalized_key] = float(val)
 
     # Process VBT records
     for _, row in trades_df.iterrows():
         entry_time_str = str(row['Entry Timestamp'])
         exit_time_str = str(row['Exit Timestamp'])
 
+        # Also try normalized format for timestamps
+        exit_timestamp = row['Exit Timestamp']
+        entry_timestamp = row['Entry Timestamp']
+
+        if hasattr(exit_timestamp, 'strftime'):
+            exit_time_normalized = exit_timestamp.strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            exit_time_normalized = str(exit_timestamp)[:19]  # First 19 chars: 'YYYY-MM-DD HH:MM:SS'
+
+        if hasattr(entry_timestamp, 'strftime'):
+            entry_time_normalized = entry_timestamp.strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            entry_time_normalized = str(entry_timestamp)[:19]
+
         size = float(row['Size'])
         direction = row['Direction']  # 'Long' or 'Short'
 
-        # Get entry price from VBT (this is correct as it uses exec_price for entries)
-        entry_price_trade = float(row['Avg Entry Price'])
+        # Get entry price from our exec_price series for accuracy
+        entry_price_trade = None
+        if exec_price is not None:
+            if entry_time_str in exec_price_lookup:
+                entry_price_trade = exec_price_lookup[entry_time_str]
+            elif entry_time_normalized in exec_price_lookup:
+                entry_price_trade = exec_price_lookup[entry_time_normalized]
+
+        if entry_price_trade is None:
+            # Fallback to VBT's entry price
+            entry_price_trade = float(row['Avg Entry Price'])
 
         # Get exit price from our exec_price series (NOT from VBT which uses market close)
         # VBT's 'Avg Exit Price' is the market close, not our SL/TP price
-        if exec_price is not None and exit_time_str in exec_price_lookup:
-            exit_price_trade = exec_price_lookup[exit_time_str]
-        else:
+        # Try multiple lookup keys to handle timezone format differences
+        exit_price_trade = None
+        if exec_price is not None:
+            if exit_time_str in exec_price_lookup:
+                exit_price_trade = exec_price_lookup[exit_time_str]
+            elif exit_time_normalized in exec_price_lookup:
+                exit_price_trade = exec_price_lookup[exit_time_normalized]
+
+        if exit_price_trade is None:
             # Fallback to VBT's exit price if exec_price not available
             exit_price_trade = float(row['Avg Exit Price'])
 
