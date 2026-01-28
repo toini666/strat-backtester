@@ -87,15 +87,15 @@ class UTBotHeikin(Strategy):
         ha_high = pd.DataFrame({'a': high_real, 'b': ha_open, 'c': ha_close}).max(axis=1)
         ha_low = pd.DataFrame({'a': low_real, 'b': ha_open, 'c': ha_close}).min(axis=1)
 
-        # 2. Select Candle Source for Strategy Logic
+        # 2. Select Candle Source for Strategy Logic (Signals)
         if p['use_heikin_ashi']:
-            # Use HA for EVERYTHING to match TradingView HA Chart behavior
+            # Use HA for SIGNALS (Indicator Logic)
             calc_open = ha_open
             calc_high = ha_high
             calc_low = ha_low
             calc_close = ha_close
         else:
-            # Use Real candles
+            # Use Real candles for SIGNALS
             calc_open = open_real
             calc_high = high_real
             calc_low = low_real
@@ -103,14 +103,12 @@ class UTBotHeikin(Strategy):
 
         src = calc_close.copy()
 
-        # 2. UTBot Trailing Stop Logic
-        # xATR = ta.atr(atrPeriod)
+        # 2. UTBot Trailing Stop Logic (Uses Signal Source)
+        # xATR uses Signal Source High/Low/Close
         xATR = ta.atr(calc_high, calc_low, calc_close, length=p['atr_period'])
         nLoss = p['key_value'] * xATR
         
         # Recursive Trailing Stop calculation
-        # xATRTrailingStop := ...
-        # Can use numpy loop
         np_src = src.values
         np_nLoss = nLoss.values
         np_trail = np.zeros(len(data))
@@ -132,33 +130,18 @@ class UTBotHeikin(Strategy):
                 
         xATRTrailingStop = pd.Series(np_trail, index=data.index)
         
-        # Buy/Sell Signals based on Trailing Stop Crossover
-        # ema_signal = ta.ema(src, 1) -> Effectively just src
-        # above = ta.crossover(ema_signal, xATRTrailingStop) -> src crosses over trail
-        # below = ta.crossover(xATRTrailingStop, ema_signal) -> trail crosses over src
-        
-        # In Pine: buy = src > xATRTrailingStop and above
-        # Actually logic is state-based "pos".
-        # pos := src[1] < nz(xATRTrailingStop[1], 0) and src > nz(xATRTrailingStop[1], 0) ? 1 : ...
-        
-        # Let's Vectorize Position State
-        # -1 = Short Env, 1 = Long Env
-        # Buy Signal when flipping from -1 to 1
-        
-        # Shifted comparison for crossover
+        # Buy/Sell Signals based on Trailing Stop Crossover (Signal Source)
         prev_src = src.shift(1)
         prev_trail = xATRTrailingStop.shift(1)
         
         buy_signal_raw = (src > xATRTrailingStop) & (prev_src < prev_trail)
         sell_signal_raw = (src < xATRTrailingStop) & (prev_src > prev_trail)
         
-        # 3. Filters (Using Selected Candle Source)
+        # 3. Filters (Using Selected Candle Source for Indicators)
         
         # A. Ribbon Filter
-        # emaFast > emaSlow (Green) or < (Red)
         if p['ribbon_enabled']:
             ema_fast = ta.ema(calc_close, length=p['ribbon_length'])
-            # Calc Slow index: length + (step * (count - 1))
             slow_len = p['ribbon_length'] + (p['ribbon_step'] * (p['ribbon_count'] - 1))
             ema_slow = ta.ema(calc_close, length=slow_len)
             
@@ -176,18 +159,11 @@ class UTBotHeikin(Strategy):
             price_above_ema = calc_close > ema200
             price_below_ema = calc_close < ema200
             
-            # Lookback check logic (Pine: allClosesAboveEma200 in last X bars)
-            # "For LONG: reject if any close below EMA200 in lookback" -> All must be above
             if p['ema200_lookback_check']:
-                lookback = p['rsi_lookback'] # Pine uses RSI lookback for this loop? Yes: "for i = 0 to rsiLookback - 1"
-                # Using rolling min to check if all > ema
-                # We need to check if (Close - EMA200) > 0 for all window
-                # Alternatively: Rolling apply.
-                # Optimized: We can use comparison series
+                lookback = p['rsi_lookback']
                 is_above = (calc_close > ema200).astype(int)
                 is_below = (calc_close < ema200).astype(int)
                 
-                # If sum of last N days == N, then all were true
                 all_closes_above = is_above.rolling(window=lookback).sum() == lookback
                 all_closes_below = is_below.rolling(window=lookback).sum() == lookback
                 
@@ -203,7 +179,6 @@ class UTBotHeikin(Strategy):
         # C. RSI Filter
         if p['rsi_enabled']:
             rsi = ta.rsi(calc_close, length=p['rsi_length'])
-            # Pine: rsiWasLow = ta.lowest(rsi, rsiLookback) <= rsiLongLevel
             rsi_lowest = rsi.rolling(window=p['rsi_lookback']).min()
             rsi_highest = rsi.rolling(window=p['rsi_lookback']).max()
             
@@ -217,22 +192,27 @@ class UTBotHeikin(Strategy):
         filtered_buy = buy_signal_raw & rsi_was_low & final_ema_long_cond & ribbon_green
         filtered_sell = sell_signal_raw & rsi_was_high & final_ema_short_cond & ribbon_red
         
-        # 4. Position Management Loop (Using Selected Candle Source for Levels)
+        # 4. Position Management Loop
+        # IMPORTANT: Use REAL prices for Execution, SL, TP, and Structure!
+        
         long_entries = pd.Series(False, index=data.index)
         long_exits = pd.Series(False, index=data.index)
         short_entries = pd.Series(False, index=data.index)
         short_exits = pd.Series(False, index=data.index)
-        exec_prices = calc_close.copy() # Use logic close (Real or HA) for recording
+        exec_prices = close_real.copy() # Execution always at Real Close
         sl_dists = pd.Series(np.nan, index=data.index)
-        exit_ratios = pd.Series(1.0, index=data.index) # Default 100% exit
+        exit_ratios = pd.Series(1.0, index=data.index)
         
-        # Arrays for loop
-        np_calc_close = calc_close.values
-        np_calc_high = calc_high.values
-        np_calc_low = calc_low.values
+        # Arrays for loop (Use REAL prices for structure/execution)
+        np_real_close = close_real.values
+        np_real_high = high_real.values
+        np_real_low = low_real.values
+        
+        # Signal Arrays (From Signal Source)
+        np_calc_close = calc_close.values # Still needed for some checks?
         np_buy = filtered_buy.values
         np_sell = filtered_sell.values
-        np_atr_trail = xATRTrailingStop.values
+        np_atr_trail = xATRTrailingStop.values # Trail is from Signal Source
         
         sl_lookback = p['stop_loss_lookback']
         tp_ratio = p['tp_partial_ratio']
@@ -252,62 +232,66 @@ class UTBotHeikin(Strategy):
 
         for i in range(sl_lookback, len(data)):
             
+            # Use REAL prices for checking if SL/TP was hit
+            idx_real_close = np_real_close[i]
+            idx_real_high = np_real_high[i]
+            idx_real_low = np_real_low[i]
+            
+            # Use SIGNAL prices for Strategy Exit Logic (Trail Cross)
+            idx_signal_close = np_calc_close[i] # HA close if enabled
+            
             if in_pos:
-                # Use Calc High/Low/Close (HA or Real) to check exits
-                # matching "Chart Visualization"
-                idx_low = np_calc_low[i]
-                idx_high = np_calc_high[i]
-                idx_close = np_calc_close[i]
-                
                 if i != entry_idx:
                     if pos_side == 1: # LONG
-                        if idx_low <= current_sl:
+                        # Check Hard SL (Real Low)
+                        if idx_real_low <= current_sl:
                             long_exits.iloc[i] = True
                             exec_prices.iloc[i] = current_sl
                             in_pos = False
                             pos_side = 0
                             continue
                         
-                        if not partial_taken and idx_high >= partial_tp_price:
+                        # Check Partial TP (Real High)
+                        if not partial_taken and idx_real_high >= partial_tp_price:
                             partial_taken = True
                             current_sl = entry_price 
                             
                             # Partial Exit Signal
                             long_exits.iloc[i] = True
-                            exec_prices.iloc[i] = partial_tp_price # Execution at Target Level
+                            exec_prices.iloc[i] = partial_tp_price
                             exit_ratios.iloc[i] = tp_pct
-                            # Note: in_pos REMAINS True because we still hold position
                             
-                        trail_cross = idx_close < np_atr_trail[i]
+                        # Check Strategy Exit (Trail Cross) - Uses SIGNAL Close vs Trail
+                        # "Like on the Chart" -> The line crosses the candle body on the chart
+                        trail_cross = idx_signal_close < np_atr_trail[i]
+                        
                         if partial_taken and trail_cross:
                             long_exits.iloc[i] = True
-                            exec_prices.iloc[i] = round_to_tick(idx_close, tick_sz)
+                            exec_prices.iloc[i] = round_to_tick(idx_real_close, tick_sz) # Execute at Real Price
                             in_pos = False
                             pos_side = 0
                             continue
                             
                     elif pos_side == -1: # SHORT
-                        if idx_high >= current_sl:
+                        # Check Hard SL (Real High)
+                        if idx_real_high >= current_sl:
                             short_exits.iloc[i] = True
                             exec_prices.iloc[i] = current_sl
                             in_pos = False
                             pos_side = 0
                             continue
                             
-                        if not partial_taken and idx_low <= partial_tp_price:
+                        # Check Partial TP (Real Low)
+                        if not partial_taken and idx_real_low <= partial_tp_price:
                             partial_taken = True
                             current_sl = entry_price 
                             
-                            # Partial Exit Signal
-                            short_exits.iloc[i] = True
-                            exec_prices.iloc[i] = partial_tp_price
-                            exit_ratios.iloc[i] = tp_pct
-                            # Note: in_pos REMAINS True
-                            
-                        trail_cross = idx_close > np_atr_trail[i]
+                        # Check Strategy Exit (Trail Cross) - Uses SIGNAL Close vs Trail
+                        trail_cross = idx_signal_close > np_atr_trail[i]
+                        
                         if partial_taken and trail_cross:
                             short_exits.iloc[i] = True
-                            exec_prices.iloc[i] = round_to_tick(idx_close, tick_sz)
+                            exec_prices.iloc[i] = round_to_tick(idx_real_close, tick_sz) # Execute at Real Price
                             in_pos = False
                             pos_side = 0
                             continue
@@ -316,7 +300,8 @@ class UTBotHeikin(Strategy):
                 tick_sz = p['tick_size']
 
                 if np_buy[i]:
-                    entry_p = round_to_tick(np_calc_close[i], tick_sz)
+                    # Execute at REAL Close
+                    entry_p = round_to_tick(np_real_close[i], tick_sz)
                     
                     long_entries.iloc[i] = True
                     exec_prices.iloc[i] = entry_p
@@ -326,7 +311,8 @@ class UTBotHeikin(Strategy):
                     entry_price = entry_p
                     partial_taken = False
                     
-                    window_lows = np_calc_low[i-sl_lookback+1 : i+1]
+                    # Calc SL from REAL Lows (Structure)
+                    window_lows = np_real_low[i-sl_lookback+1 : i+1]
                     raw_sl = np.min(window_lows)
                     initial_sl = round_to_tick(raw_sl, tick_sz)
                     
@@ -335,11 +321,13 @@ class UTBotHeikin(Strategy):
                         
                     current_sl = initial_sl
                     risk = entry_price - current_sl
+                    # TP based on Risk from Real Entry
                     partial_tp_price = round_to_tick(entry_price + (risk * tp_ratio), tick_sz)
                     sl_dists.iloc[i] = risk
 
                 elif np_sell[i]:
-                    entry_p = round_to_tick(np_calc_close[i], tick_sz)
+                    # Execute at REAL Close
+                    entry_p = round_to_tick(np_real_close[i], tick_sz)
                     
                     short_entries.iloc[i] = True
                     exec_prices.iloc[i] = entry_p
@@ -349,7 +337,8 @@ class UTBotHeikin(Strategy):
                     entry_price = entry_p
                     partial_taken = False
                     
-                    window_highs = np_calc_high[i-sl_lookback+1 : i+1]
+                    # Calc SL from REAL Highs (Structure)
+                    window_highs = np_real_high[i-sl_lookback+1 : i+1]
                     raw_sl = np.max(window_highs)
                     initial_sl = round_to_tick(raw_sl, tick_sz)
                     

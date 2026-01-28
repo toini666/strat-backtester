@@ -63,19 +63,24 @@ class UTBotSTC(Strategy):
             return empty, empty, empty, empty, zeros, nans, nans
 
         # REAL prices - always used for ATR, STC, and execution
+        # REAL prices - always used for execution and structural levels (SL/TP)
         real_close = data['Close']
         real_open = data['Open']
         real_high = data['High']
         real_low = data['Low']
 
         # ===========================================
-        # 1. Heikin Ashi Calculation
+        # 2. Select Candle Source for Strategy Logic (Signals)
         # ===========================================
-        # When useHeikinAshi=True AND chart is displayed as HA on TradingView:
-        # - ALL indicators (ATR, STC) use HA prices from the chart
-        # - src also uses HA close
-        # This matches TradingView behavior when viewing HA chart
-
+        # HYBRID LOGIC:
+        # - ATR and STC always use REAL prices (Standard Chart).
+        # - UTBot Signal Source (src) uses Heikin Ashi if enabled.
+        
+        # Default: Indicators use Real Prices
+        calc_close = real_close
+        calc_high = real_high
+        calc_low = real_low
+        
         if p['use_heikin_ashi']:
             ha_close = (real_open + real_high + real_low + real_close) / 4
 
@@ -93,21 +98,16 @@ class UTBotSTC(Strategy):
             ha_high = pd.DataFrame({'a': real_high, 'b': ha_open, 'c': ha_close}).max(axis=1)
             ha_low = pd.DataFrame({'a': real_low, 'b': ha_open, 'c': ha_close}).min(axis=1)
 
-            # Use HA prices for everything when in HA mode
-            calc_close = ha_close
-            calc_high = ha_high
-            calc_low = ha_low
+            # UTBot Source uses HA
             src = ha_close
         else:
-            calc_close = real_close
-            calc_high = real_high
-            calc_low = real_low
+            # UTBot Source uses Real
             src = real_close
 
         # ===========================================
         # 2. UTBot Trailing Stop Calculation
         # ===========================================
-        # ATR uses calc prices (HA when enabled, real otherwise)
+        # ATR uses REAL prices (calc_*) regardless of HA setting
         xATR = ta.atr(calc_high, calc_low, calc_close, length=p['atr_period'])
         nLoss = p['key_value'] * xATR
 
@@ -156,7 +156,7 @@ class UTBotSTC(Strategy):
         prev_src = src.shift(1)
         prev_trail = xATRTrailingStop.shift(1)
 
-        # Crossover detection
+        # Crossover detection using SIGNAL prices
         above = (src > xATRTrailingStop) & (prev_src <= prev_trail)
         below = (src < xATRTrailingStop) & (prev_src >= prev_trail)
 
@@ -291,10 +291,20 @@ class UTBotSTC(Strategy):
         np_short_sig = short_signal.values
 
         # Pre-convert to numpy for speed
-        # Use calc prices (HA when enabled) to match TradingView chart behavior
-        np_calc_close = calc_close.values
-        np_calc_high = calc_high.values
-        np_calc_low = calc_low.values
+        # Use REAL prices to detect SL/TP hits and execution
+        # FIX: Forward fill NaNs to prevent "Zombie Positions" where SL/TP logic always returns False
+        # If Low is NaN, use previous valid Low. If Entry Bar Low is NaN, use Close?
+        # Robust approach: ffill then bfill to ensure no NaNs exist to break logic.
+        np_real_close = real_close.fillna(method='ffill').fillna(method='bfill').values
+        np_real_high = real_high.fillna(method='ffill').fillna(method='bfill').values
+        np_real_low = real_low.fillna(method='ffill').fillna(method='bfill').values
+        
+        # Use REAL prices to determine SL location for entry (Structure)
+        # Since TradingView chart is Normal, we use High/Low of Normal candles for SL placement logic?
+        # User Request: "Mais dans ce cas-là, il utilise ces bougies-là pour déclencher le signal, mais exécute au prix réel."
+        # And usually SL placement is structural based on "Signal Candle".
+        # If chart is Normal, "Signal Candle" High/Low is Normal High/Low.
+        # So we use REAL High/Low for structure too.
 
         for i in range(1, len(data)):
 
@@ -302,10 +312,10 @@ class UTBotSTC(Strategy):
             # Check Exits FIRST (but NOT on entry bar)
             # ===========================================
             # Pine: if inPosition and bar_index > signalBar
-            # Use calc (chart) prices to detect SL/TP hits
+            # Use REAL prices to detect SL/TP hits
             if in_pos and i > entry_idx:
-                curr_low = np_calc_low[i]
-                curr_high = np_calc_high[i]
+                curr_low = np_real_low[i]
+                curr_high = np_real_high[i]
 
                 if pos_side == 1:  # Long position
                     # Check SL first (priority over TP in same bar)
@@ -342,11 +352,11 @@ class UTBotSTC(Strategy):
             # ===========================================
             if not in_pos:
                 if np_long_sig[i]:
-                    # Entry at close of signal bar (chart close - HA when enabled)
-                    entry_p = round_to_tick(np_calc_close[i])
+                    # Entry at REAL Close
+                    entry_p = round_to_tick(np_real_close[i])
 
-                    # SL/TP based on SIGNAL CANDLE's chart low (HA when enabled)
-                    sig_low = np_calc_low[i]
+                    # SL/TP based on SIGNAL CANDLE's REAL LOW (Structure)
+                    sig_low = np_real_low[i]
                     stop_p = round_to_tick(sig_low - stop_ticks * tick_sz)
                     risk_amt = entry_p - stop_p
                     tp_p = round_to_tick(entry_p + risk_amt * rr)
@@ -363,11 +373,11 @@ class UTBotSTC(Strategy):
                         sl_dists.iloc[i] = risk_amt
 
                 elif np_short_sig[i]:
-                    # Entry at close of signal bar (chart close - HA when enabled)
-                    entry_p = round_to_tick(np_calc_close[i])
+                    # Entry at REAL Close
+                    entry_p = round_to_tick(np_real_close[i])
 
-                    # SL/TP based on SIGNAL CANDLE's chart high (HA when enabled)
-                    sig_high = np_calc_high[i]
+                    # SL/TP based on SIGNAL CANDLE's REAL HIGH (Structure)
+                    sig_high = np_real_high[i]
                     stop_p = round_to_tick(sig_high + stop_ticks * tick_sz)
                     risk_amt = stop_p - entry_p
                     tp_p = round_to_tick(entry_p - risk_amt * rr)

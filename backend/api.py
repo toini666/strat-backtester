@@ -230,19 +230,53 @@ def run_backtest(req: BacktestRequest):
     
     # 1. Fetch Data
     end_date = datetime.now()
-    start_date = end_date - timedelta(days=req.days)
+    original_start_date = end_date - timedelta(days=req.days)
     
+    # Warmup Logic
+    # Always fetch extra 1000 bars to ensure indicator convergence for all strategies (EMA, RSI, HA, etc)
+    warmup_bars = 1000
+    
+    start_date = original_start_date
+    if warmup_bars > 0:
+        # Approximate Lookback Calculation
+        # We need to subtract N bars from original_start_date
+        # Simple mapping
+        map_min = {
+            "1m": 1, "2m": 2, "5m": 5, "15m": 15, "30m": 30, "60m": 60, "1h": 60,
+            "4h": 240, "1d": 1440 
+        }
+        
+        minutes_per_bar = 15 # default
+        if req.interval in map_min:
+            minutes_per_bar = map_min[req.interval]
+        elif req.interval.endswith('m'):
+            try:
+                minutes_per_bar = int(req.interval[:-1])
+            except:
+                pass
+        elif req.interval.endswith('h'):
+             try:
+                minutes_per_bar = int(req.interval[:-1]) * 60
+             except:
+                pass
+        elif req.interval.endswith('d'):
+             try:
+                minutes_per_bar = int(req.interval[:-1]) * 1440
+             except:
+                pass
+                
+        # Add 50% buffer for weekends/holidays if using Minute candles
+        total_minutes = warmup_bars * minutes_per_bar * 1.5
+        warmup_delta = timedelta(minutes=total_minutes)
+        start_date = original_start_date - warmup_delta
+        logger.info(f"Warmup Active: Fetching {warmup_bars} extra bars. Adjusted Start: {start_date}")
+
     try:
         data = pd.DataFrame()
         if req.source == "Topstep":
             if not req.contract_id:
                 raise HTTPException(status_code=400, detail="Contract ID required for Topstep")
             data = topstep.fetch_historical_data(req.contract_id, start_date, end_date, req.interval)
-            
-            # Identify Contract Symbol for Fees
-            # Contract ID format usually "CON.F.US.MNQ.H26" or similar
-            # Robust way: check if keys in contract name/desc
-            # We'll infer fee later
         else:
             # Yahoo
             data = yf.download(req.ticker, start=start_date, end=end_date, interval=req.interval, progress=False, auto_adjust=True)
@@ -255,16 +289,21 @@ def run_backtest(req: BacktestRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Data fetch error: {str(e)}")
 
-    # 2. Run Strategy
+    # 2. Run Strategy on FULL DATA (including warmup)
     StrategyClass = STRATEGIES[req.strategy_name]
     strategy_instance = StrategyClass()
     params = strategy_instance.default_params.copy()
     params.update(req.params)
     
-    # Auto-inject tick_size if available from Topstep or Contract Specs
-    # We essentially duplicate the logic from "4. Position Sizing" to get tick_size early
-    current_tick_size = 0.25 # Default
+    # ... (Tick Size Logic omitted for brevity, assumed unchanged in context) ...
+    # Auto-inject tick_size logic duplicated here just for context integration if needed,
+    # but practically we should just keep the existing block. 
+    # Since replace_file_content replaces a block, I must include the Tick Size logic or ensure I don't overwrite it bad.
+    # The Block I am replacing ends at "except Exception as e: raise ... strategy execution error" (Line 348).
+    # So I need to include the Tick Size Setup (Lines 264-292) and Simulation (295+).
     
+    # RE-INSERT TICK SIZE LOGIC (Lines 264-292 from original)
+    current_tick_size = 0.25 
     if req.source == "Topstep" and req.contract_id:
         try:
             contracts = topstep.fetch_available_contracts()
@@ -272,17 +311,13 @@ def run_backtest(req: BacktestRequest):
             if contract:
                 current_tick_size = float(contract.get('tickSize', 0.25))
             else:
-                # Fallback to specs
                  sorted_spec_keys = sorted(CONTRACT_SPECS.keys(), key=len, reverse=True)
                  for k in sorted_spec_keys:
-                    if req.ticker and k in req.ticker.upper(): # req.ticker might be contract name in Topstep mode?
-                         # Usually req.ticker is symbol. For Topstep, ticker in request might be empty or Name?
-                         # We rely on contract_id for lookup mainly.
+                    if req.ticker and k in req.ticker.upper():
                          pass
         except:
             pass
     else:
-        # Yahoo mode - check ticker vs Specs
         sorted_spec_keys = sorted(CONTRACT_SPECS.keys(), key=len, reverse=True)
         for k in sorted_spec_keys:
             if k in req.ticker.upper():
@@ -311,23 +346,50 @@ def run_backtest(req: BacktestRequest):
             long_exits = None
             short_exits = None
             
+        # --- WARMUP SLICING ---
+        # Now that indicators are calculated on full history, we slice everything to the Requested Period.
+        if warmup_bars > 0:
+            # Mask: Keep only data >= original_start_date
+            # Ensure timezone awareness match
+            
+            # Convert original_start_date to match index tz if needed
+            ts_start = pd.Timestamp(original_start_date)
+            if data.index.tz is not None:
+                if ts_start.tzinfo is None:
+                     # Assume input was local/naive, but we used it to fetch. 
+                     # Ideally utilize the same timezone as data.
+                     ts_start = ts_start.tz_localize(data.index.tz)
+                else:
+                     ts_start = ts_start.tz_convert(data.index.tz)
+            
+            mask = data.index >= ts_start
+            
+            # Slice Data
+            data = data.loc[mask]
+            
+            # Slice Signals
+            long_entries = long_entries.loc[mask]
+            short_entries = short_entries.loc[mask]
+            
+            if long_exits is not None: long_exits = long_exits.loc[mask]
+            if short_exits is not None: short_exits = short_exits.loc[mask]
+            if exec_price is not None: exec_price = exec_price.loc[mask]
+            if sl_dist_series is not None: sl_dist_series = sl_dist_series.loc[mask]
+            if exit_ratios is not None: exit_ratios = exit_ratios.loc[mask]
+            
+            if data.empty:
+                 raise HTTPException(status_code=400, detail="Data empty after warmup slicing. Fetch more history?")
+
         # --- Topstep Time Filter (22:00 - 00:00 Paris Time) ---
         if req.source == "Topstep":
-            # Data from Topstep is UTC. User operates in CET (Paris).
-            # We must convert to ensure "22h" means 22h local.
             try:
-                # Create a temporary index for filtering logic
                 temp_index = data.index
                 if temp_index.tz is None:
-                    # Assume UTC if naive
                     temp_index = temp_index.tz_localize('UTC')
                 else:
                     temp_index = temp_index.tz_convert('UTC')
                 
-                # Convert to Paris Time
                 temp_index_paris = temp_index.tz_convert('Europe/Paris')
-                
-                # Filter 22h to 24h (hours 22 and 23)
                 time_mask = (temp_index_paris.hour >= 22)
                 
                 if long_entries is not None:
@@ -337,7 +399,6 @@ def run_backtest(req: BacktestRequest):
                     short_entries = short_entries & (~time_mask)
             except Exception as e:
                 logger.warning(f"Timezone conversion failed for filter: {e}")
-                # Fallback to UTC filter >= 21 (Approx)
                 time_mask = data.index.hour >= 21
                 if long_entries is not None:
                     long_entries = long_entries & (~time_mask)
