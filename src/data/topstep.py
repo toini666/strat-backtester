@@ -203,12 +203,36 @@ class TopstepClient:
         logger.info(f"Fetched {len(contracts)} available contracts")
         return contracts
 
+    def get_contract_details(self, contract_id: str) -> Dict[str, Any]:
+        """
+        Fetch details for a specific contract by ID (including Legacy).
+        Useful for getting tickSize and tickValue.
+        """
+        url = f"{self.BASE_URL}/api/Contract/searchById"
+        payload = {"contractId": contract_id}
+
+        logger.debug(f"Fetching details for contract: {contract_id}")
+        
+        # Use retry=False or handle errors gracefully if contract doesn't exist
+        try:
+            data = self._make_request("POST", url, payload)
+        except ConnectionError as e:
+            logger.error(f"Failed to fetch details for {contract_id}: {e}")
+            return {}
+
+        if not data.get("success"):
+            logger.warning(f"Contract detail fetch failed: {data.get('errorMessage')}")
+            return {}
+
+        return data.get("contract", {})
+
     def fetch_historical_data(
         self,
         contract_id: str,
         start: datetime,
         end: datetime,
-        timeframe: str = '15m'
+        timeframe: str = '15m',
+        live: bool = False
     ) -> pd.DataFrame:
         """
         Fetch historical OHLCV bars for a contract.
@@ -218,6 +242,7 @@ class TopstepClient:
             start: Start datetime for the data range.
             end: End datetime for the data range.
             timeframe: Candle timeframe ('1m', '5m', '15m', '1h', '4h', '1d').
+            live: Whether to fetch data for active/live contracts (True) or legacy/sim (False).
 
         Returns:
             DataFrame with columns: Open, High, Low, Close, Volume.
@@ -272,7 +297,7 @@ class TopstepClient:
 
             payload = {
                 "contractId": contract_id,
-                "live": False,
+                "live": live,
                 "startTime": start_str,
                 "endTime": end_str,
                 "unit": unit,
@@ -293,10 +318,12 @@ class TopstepClient:
                 raise
 
             if not data.get("success"):
+                error_msg = data.get("errorMessage")
                 if all_bars:
-                    logger.warning(f"History fetch error on pagination: {data.get('errorMessage')}")
+                    logger.warning(f"History fetch error on pagination: {error_msg} | Full Response: {data}")
                     break
-                raise ConnectionError(f"History fetch error: {data.get('errorMessage')}")
+                # Raise detailed error
+                raise ConnectionError(f"History fetch error: {error_msg} | Full Response: {data}")
 
             bars = data.get("bars", [])
 

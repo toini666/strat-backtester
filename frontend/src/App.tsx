@@ -33,6 +33,27 @@ function App() {
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
   const [interval, setInterval] = useState('15m');
   const [days, setDays] = useState(14);
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30); // 30 days before end date (inclusive range = 30 days?)
+    // User wants "30 days full". If End=29, Start=31/12/25.
+    // 29 Jan - 31 Dec = 29 days difference. Inclusive = 30 days.
+    // Today (30 Jan) - 1 = 29 Jan.
+    // Today (30 Jan) - ? = 31 Dec.
+    // 30 Jan - 30 days = 31 Dec?
+    // Jan has 31 days. 30 Jan - 30 days -> 31 Dec?
+    // Jan 1 is 29 days diff.
+    // Dec 31 is 30 days diff.
+    // So 30 is correct.
+    return d.toISOString().split('T')[0];
+  });
+  const [endDate, setEndDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1); // Yesterday
+    return d.toISOString().split('T')[0];
+  });
+  const [topstepLiveMode, setTopstepLiveMode] = useState(true);
+  const [manualContractId, setManualContractId] = useState('');
 
   // Risk Mgmt
   const [initialEquity, setInitialEquity] = useState(50000);
@@ -66,6 +87,9 @@ function App() {
     riskPerTrade: number;
     maxContracts: number;
     blockMarketOpen: boolean;
+    startDate?: string;
+    endDate?: string;
+    topstepLiveMode?: boolean;
   } | null>(null);
 
   // Config to reuse for optimization
@@ -82,6 +106,9 @@ function App() {
     riskPerTrade: number;
     maxContracts: number;
     blockMarketOpen: boolean;
+    startDate?: string;
+    endDate?: string;
+    topstepLiveMode?: boolean;
   } | null>(null);
 
   useEffect(() => {
@@ -127,14 +154,17 @@ function App() {
         selectedStrategy.name,
         ticker,
         dataSource,
-        selectedContract?.id || null,
+        topstepLiveMode ? (selectedContract?.id || null) : manualContractId,
         interval,
         days,
         initialEquity,
         riskPerTrade / 100, // Send as decimal
         params,
         maxContracts,
-        blockMarketOpen
+        blockMarketOpen,
+        startDate,
+        endDate,
+        topstepLiveMode
       );
       setResult(res);
     } catch (err: unknown) {
@@ -243,6 +273,9 @@ function App() {
     riskPerTrade: number;
     maxContracts: number;
     blockMarketOpen: boolean;
+    startDate?: string;
+    endDate?: string;
+    topstepLiveMode?: boolean;
   }) => {
     setOptimizationLoading(true);
     setError('');
@@ -264,7 +297,10 @@ function App() {
         initialEquity: config.initialEquity,
         riskPerTrade: config.riskPerTrade,
         maxContracts: config.maxContracts,
-        blockMarketOpen: config.blockMarketOpen
+        blockMarketOpen: config.blockMarketOpen,
+        startDate: config.startDate,
+        endDate: config.endDate,
+        topstepLiveMode: config.topstepLiveMode
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -300,12 +336,26 @@ function App() {
         setRiskPerTrade(lastOptimizationConfig.riskPerTrade * 100); // Convert back to percentage
         setMaxContracts(lastOptimizationConfig.maxContracts);
         setBlockMarketOpen(lastOptimizationConfig.blockMarketOpen);
+        if (lastOptimizationConfig.startDate) setStartDate(lastOptimizationConfig.startDate);
+        if (lastOptimizationConfig.endDate) setEndDate(lastOptimizationConfig.endDate);
+        if (lastOptimizationConfig.topstepLiveMode !== undefined) setTopstepLiveMode(lastOptimizationConfig.topstepLiveMode);
 
         // Set the contract if Topstep
-        if (lastOptimizationConfig.source === 'Topstep' && lastOptimizationConfig.contractId) {
-          const contract = contracts.find(c => c.id === lastOptimizationConfig.contractId);
-          if (contract) {
-            setSelectedContract(contract);
+        if (lastOptimizationConfig.source === 'Topstep') {
+          if (lastOptimizationConfig.topstepLiveMode) {
+            setManualContractId(''); // Clear manual
+            if (lastOptimizationConfig.contractId) {
+              const contract = contracts.find(c => c.id === lastOptimizationConfig.contractId);
+              if (contract) {
+                setSelectedContract(contract);
+              }
+            }
+          } else {
+            // Legacy
+            setSelectedContract(null); // Clear active
+            if (lastOptimizationConfig.contractId) {
+              setManualContractId(lastOptimizationConfig.contractId);
+            }
           }
         }
       }
@@ -345,7 +395,10 @@ function App() {
       initialEquity: 50000, // Default values since history doesn't store these
       riskPerTrade: 0.01,
       maxContracts: 50,
-      blockMarketOpen: true
+      blockMarketOpen: true,
+      startDate: run.start_date,
+      endDate: run.end_date,
+      topstepLiveMode: run.topstep_live_mode !== undefined ? run.topstep_live_mode : true
     });
   }, []);
 
@@ -353,6 +406,8 @@ function App() {
     // Create config object from run details
     // Note: Some fields like initialEquity/risk might be missing if not saved in older runs
     // We will use defaults for those if missing
+
+    const liveMode = run.topstep_live_mode !== undefined ? run.topstep_live_mode : true;
 
     setConfigToReuse({
       strategyName: run.strategy_name,
@@ -366,7 +421,10 @@ function App() {
       initialEquity: run.initial_equity || 50000,
       riskPerTrade: run.risk_per_trade !== undefined ? run.risk_per_trade : 0.01,
       maxContracts: 50,
-      blockMarketOpen: true
+      blockMarketOpen: true,
+      startDate: run.start_date,
+      endDate: run.end_date,
+      topstepLiveMode: liveMode
     });
 
     setOptimizationResult(null);
@@ -470,6 +528,14 @@ function App() {
             setMaxContracts={setMaxContracts}
             blockMarketOpen={blockMarketOpen}
             setBlockMarketOpen={setBlockMarketOpen}
+            startDate={startDate}
+            setStartDate={setStartDate}
+            endDate={endDate}
+            setEndDate={setEndDate}
+            topstepLiveMode={topstepLiveMode}
+            setTopstepLiveMode={setTopstepLiveMode}
+            manualContractId={manualContractId}
+            setManualContractId={setManualContractId}
             strategies={strategies}
             selectedStrategy={selectedStrategy}
             selectStrategy={selectStrategy}

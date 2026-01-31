@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { X, AlertTriangle, CheckCircle, Info } from 'lucide-react';
+import { X, AlertTriangle, Info } from 'lucide-react';
 
 interface ModalProps {
     isOpen: boolean;

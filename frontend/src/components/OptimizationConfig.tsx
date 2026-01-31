@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Settings, AlertTriangle, Play, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { api, type Strategy, type Contract, type ParameterRangeInput } from '../api';
 
@@ -30,6 +30,9 @@ interface OptimizationConfigProps {
         riskPerTrade: number;
         maxContracts: number;
         blockMarketOpen: boolean;
+        startDate?: string;
+        endDate?: string;
+        topstepLiveMode?: boolean;
     }) => void;
     loading: boolean;
     onContractsNeeded?: () => void;
@@ -46,6 +49,9 @@ interface OptimizationConfigProps {
         riskPerTrade: number;
         maxContracts: number;
         blockMarketOpen: boolean;
+        startDate?: string;
+        endDate?: string;
+        topstepLiveMode?: boolean;
     } | null;
 }
 
@@ -68,6 +74,18 @@ export function OptimizationConfig({
     const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
     const [interval, setInterval] = useState('15m');
     const [days, setDays] = useState(14);
+    const [startDate, setStartDate] = useState(() => {
+        const d = new Date();
+        d.setDate(d.getDate() - 30); // 30 days before end date
+        return d.toISOString().split('T')[0];
+    });
+    const [endDate, setEndDate] = useState(() => {
+        const d = new Date();
+        d.setDate(d.getDate() - 1);
+        return d.toISOString().split('T')[0];
+    });
+    const [topstepLiveMode, setTopstepLiveMode] = useState(true);
+    const [manualContractId, setManualContractId] = useState('');
 
     // Risk config
     const [initialEquity, setInitialEquity] = useState(50000);
@@ -163,8 +181,16 @@ export function OptimizationConfig({
     }, [strategies, initialConfig]);
 
     // Apply initial config when available
+    // Use a ref to track if we've already applied this specific config instance
+    const configAppliedRef = useRef<object | null>(null);
+
     useEffect(() => {
         if (initialConfig && selectedStrategy && selectedStrategy.name === initialConfig.strategyName && paramConfigs.length > 0) {
+            // Only apply if this specific config object hasn't been applied yet
+            if (configAppliedRef.current === initialConfig) return;
+
+            configAppliedRef.current = initialConfig;
+
             // Check if paramConfigs match the current strategy (basic check)
             const hasMatchingParams = paramConfigs.some(p => initialConfig.parameters.some(ip => ip.name === p.name));
             if (!hasMatchingParams) return;
@@ -177,6 +203,15 @@ export function OptimizationConfig({
             }
             setInterval(initialConfig.interval);
             setDays(initialConfig.days);
+            if (initialConfig.startDate) setStartDate(initialConfig.startDate);
+            if (initialConfig.endDate) setEndDate(initialConfig.endDate);
+            if (initialConfig.topstepLiveMode !== undefined) setTopstepLiveMode(initialConfig.topstepLiveMode);
+
+            // Handle Manual Contract if Legacy mode was saved
+            if (initialConfig.source === 'Topstep' && !initialConfig.topstepLiveMode && initialConfig.contractId) {
+                setManualContractId(initialConfig.contractId);
+            }
+
             setInitialEquity(initialConfig.initialEquity);
 
             // Fix Risk Per Trade: If < 1, assumes it was saved as decimal (e.g. 0.01). Convert to %.
@@ -292,7 +327,7 @@ export function OptimizationConfig({
             strategyName: selectedStrategy.name,
             ticker,
             source: dataSource,
-            contractId: selectedContract?.id || null,
+            contractId: topstepLiveMode ? (selectedContract?.id || null) : manualContractId,
             interval,
             days,
             parameters,
@@ -300,9 +335,12 @@ export function OptimizationConfig({
             initialEquity,
             riskPerTrade: riskPerTrade / 100,
             maxContracts,
-            blockMarketOpen
+            blockMarketOpen,
+            startDate,
+            endDate,
+            topstepLiveMode
         });
-    }, [selectedStrategy, paramConfigs, ticker, dataSource, selectedContract, interval, days, selectedSessions, initialEquity, riskPerTrade, maxContracts, blockMarketOpen, onRunOptimization]);
+    }, [selectedStrategy, paramConfigs, ticker, dataSource, selectedContract, manualContractId, interval, days, selectedSessions, initialEquity, riskPerTrade, maxContracts, blockMarketOpen, startDate, endDate, topstepLiveMode, onRunOptimization]);
 
     const canRun = selectedStrategy &&
         selectedSessions.length > 0 &&
@@ -350,19 +388,46 @@ export function OptimizationConfig({
 
                 {dataSource === 'Topstep' ? (
                     <div className="space-y-2">
-                        <label className="text-sm text-gray-400 font-medium">Contract</label>
-                        <select
-                            value={selectedContract?.id || ''}
-                            onChange={(e) => {
-                                const contract = contracts.find(c => c.id === e.target.value);
-                                setSelectedContract(contract || null);
-                            }}
-                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm"
-                        >
-                            {contracts.map(c => (
-                                <option key={c.id} value={c.id}>{c.name}</option>
-                            ))}
-                        </select>
+                        <div className="flex justify-between items-center">
+                            <label className="text-sm text-gray-400 font-medium">{topstepLiveMode ? "Active Contract" : "Contract ID"}</label>
+                            <div className="flex gap-1 bg-gray-900/40 rounded p-0.5">
+                                <button
+                                    onClick={() => setTopstepLiveMode(true)}
+                                    className={`text-[10px] px-2 py-0.5 rounded ${topstepLiveMode ? 'bg-purple-600 text-white' : 'text-gray-500 hover:text-white'}`}
+                                >
+                                    Active
+                                </button>
+                                <button
+                                    onClick={() => setTopstepLiveMode(false)}
+                                    className={`text-[10px] px-2 py-0.5 rounded ${!topstepLiveMode ? 'bg-purple-600 text-white' : 'text-gray-500 hover:text-white'}`}
+                                >
+                                    Legacy
+                                </button>
+                            </div>
+                        </div>
+
+                        {topstepLiveMode ? (
+                            <select
+                                value={selectedContract?.id || ''}
+                                onChange={(e) => {
+                                    const contract = contracts.find(c => c.id === e.target.value);
+                                    setSelectedContract(contract || null);
+                                }}
+                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm"
+                            >
+                                {contracts.map(c => (
+                                    <option key={c.id} value={c.id}>{c.name}</option>
+                                ))}
+                            </select>
+                        ) : (
+                            <input
+                                type="text"
+                                placeholder="e.g. ESZ3"
+                                value={manualContractId}
+                                onChange={(e) => setManualContractId(e.target.value)}
+                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm"
+                            />
+                        )}
                     </div>
                 ) : (
                     <div className="space-y-2">
@@ -391,15 +456,28 @@ export function OptimizationConfig({
                     </select>
                 </div>
                 <div className="space-y-2">
-                    <label className="text-sm text-gray-400 font-medium">Days</label>
-                    <input
-                        type="number"
-                        value={days}
-                        onChange={(e) => setDays(parseInt(e.target.value) || 14)}
-                        min={1}
-                        max={365}
-                        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm"
-                    />
+                    <div className="flex justify-between items-center">
+                        <label className="text-sm text-gray-400 font-medium">Date Range</label>
+                        {startDate && endDate && (
+                            <span className="text-[10px] text-gray-500 font-mono">
+                                {Math.max(0, Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))) + 1} days
+                            </span>
+                        )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                        <input
+                            type="date"
+                            value={startDate}
+                            onChange={(e) => setStartDate(e.target.value)}
+                            className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-gray-200 text-xs"
+                        />
+                        <input
+                            type="date"
+                            value={endDate}
+                            onChange={(e) => setEndDate(e.target.value)}
+                            className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-gray-200 text-xs"
+                        />
+                    </div>
                 </div>
             </div>
 

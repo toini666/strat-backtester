@@ -18,6 +18,14 @@ interface SidebarProps {
     setInterval: (v: string) => void;
     days: number;
     setDays: (v: number) => void;
+    startDate: string;
+    setStartDate: (v: string) => void;
+    endDate: string;
+    setEndDate: (v: string) => void;
+    topstepLiveMode: boolean;
+    setTopstepLiveMode: (v: boolean) => void;
+    manualContractId: string;
+    setManualContractId: (v: string) => void;
 
     // Risk State
     initialEquity: number;
@@ -49,7 +57,11 @@ export function Sidebar({
     ticker, setTicker,
     contracts, selectedContract, setSelectedContract,
     interval, setInterval,
-    days, setDays,
+    // days, setDays, // Removed unused props
+    startDate, setStartDate,
+    endDate, setEndDate,
+    topstepLiveMode, setTopstepLiveMode,
+    manualContractId, setManualContractId,
     initialEquity, setInitialEquity,
     riskPerTrade, setRiskPerTrade,
     maxContracts, setMaxContracts,
@@ -89,7 +101,7 @@ export function Sidebar({
                 </div>
 
                 <div className="space-y-4">
-                    {dataSource === 'Yahoo' ? (
+                    {dataSource === 'Yahoo' && (
                         <div>
                             <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Ticker</label>
                             <input
@@ -99,20 +111,49 @@ export function Sidebar({
                                 onChange={e => setTicker(e.target.value)}
                             />
                         </div>
-                    ) : (
+                    )}
+                    {dataSource === 'Topstep' && (
                         <div>
-                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Contract</label>
-                            <select
-                                className="input-base appearance-none"
-                                value={selectedContract?.id || ''}
-                                onChange={(e) => {
-                                    const c = contracts.find(c => c.id === e.target.value);
-                                    if (c) setSelectedContract(c);
-                                }}
-                            >
-                                {contracts.length === 0 && <option>Loading...</option>}
-                                {contracts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                            </select>
+                            <div className="flex gap-2 mb-2 p-1 bg-gray-900/40 rounded-lg">
+                                <button
+                                    onClick={() => setTopstepLiveMode(true)}
+                                    className={`flex-1 text-xs py-1 rounded ${topstepLiveMode ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                                >
+                                    Active Contract
+                                </button>
+                                <button
+                                    onClick={() => setTopstepLiveMode(false)}
+                                    className={`flex-1 text-xs py-1 rounded ${!topstepLiveMode ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                                >
+                                    Legacy/Manual
+                                </button>
+                            </div>
+
+                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">
+                                {topstepLiveMode ? "Active Contract" : "Contract ID"}
+                            </label>
+
+                            {topstepLiveMode ? (
+                                <select
+                                    className="input-base appearance-none"
+                                    value={selectedContract?.id || ''}
+                                    onChange={(e) => {
+                                        const c = contracts.find(c => c.id === e.target.value);
+                                        if (c) setSelectedContract(c);
+                                    }}
+                                >
+                                    {contracts.length === 0 && <option>Loading...</option>}
+                                    {contracts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                </select>
+                            ) : (
+                                <input
+                                    type="text"
+                                    className="input-base"
+                                    placeholder="e.g. CON.F.US.ES.Z23 (Contract ID)"
+                                    value={manualContractId}
+                                    onChange={e => setManualContractId(e.target.value)}
+                                />
+                            )}
                         </div>
                     )}
 
@@ -127,16 +168,35 @@ export function Sidebar({
                                 {['1m', '2m', '5m', '15m', '30m', '1h', '4h', '1d'].map(t => <option key={t} value={t}>{t}</option>)}
                             </select>
                         </div>
+                        {/* Display Duration Helper */}
+
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Days</label>
+                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Start Date</label>
                             <input
-                                type="number"
+                                type="date"
                                 className="input-base"
-                                value={days}
-                                onChange={e => setDays(Number(e.target.value))}
+                                value={startDate}
+                                onChange={e => setStartDate(e.target.value)}
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">End Date</label>
+                            <input
+                                type="date"
+                                className="input-base"
+                                value={endDate}
+                                onChange={e => setEndDate(e.target.value)}
                             />
                         </div>
                     </div>
+                    {startDate && endDate && (
+                        <div className="text-xs text-center text-gray-500 -mt-2">
+                            Duration: {Math.max(0, Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))) + 1} days
+                        </div>
+                    )}
                 </div>
             </div>
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { History, TrendingUp, Calendar, Clock, ChevronRight, Loader2, RefreshCw, RotateCcw } from 'lucide-react';
+import { History, Calendar, Clock, Loader2, RefreshCw, RotateCcw } from 'lucide-react';
 import { api, type OptimizationHistoryItem, type OptimizationRunDetail } from '../api';
 import { ConfirmModal } from './ui/Modal';
 import { useToast, ToastContainer } from './ui/Toast';
@@ -178,7 +178,17 @@ export function OptimizationHistory({ onLoadRun, onReuseRun }: OptimizationHisto
                                         </span>
                                         <span className="flex items-center gap-1">
                                             <Clock className="w-3 h-3" />
-                                            {item.interval} / {item.days}d
+                                            {item.interval} / {item.start_date && item.end_date
+                                                ? (
+                                                    <span title={`${item.start_date} - ${item.end_date}`}>
+                                                        {new Date(item.start_date).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })} - {new Date(item.end_date).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })}
+                                                        <span className="ml-1 text-gray-600">
+                                                            ({Math.max(0, Math.ceil((new Date(item.end_date).getTime() - new Date(item.start_date).getTime()) / (1000 * 60 * 60 * 24))) + 1}d)
+                                                        </span>
+                                                    </span>
+                                                )
+                                                : `${item.days}d`
+                                            }
                                         </span>
                                         <span className="text-gray-600">
                                             {item.total_combinations.toLocaleString()} combos

@@ -86,6 +86,9 @@ export interface BacktestParams {
     contractId: string | null;
     interval: string;
     days: number;
+    startDate?: string;
+    endDate?: string;
+    topstepLiveMode?: boolean;
     initialEquity: number;
     riskPerTrade: number;
     params: Record<string, number | string | boolean>;
@@ -122,7 +125,10 @@ export const api = {
         riskPerTrade: number,
         params: Record<string, number | string | boolean>,
         maxContracts: number = 50,
-        blockMarketOpen: boolean = true
+        blockMarketOpen: boolean = true,
+        startDate?: string,
+        endDate?: string,
+        topstepLiveMode?: boolean
     ): Promise<BacktestResult> => {
         const res = await apiClient.post<BacktestResult>('/backtest', {
             strategy_name: strategyName,
@@ -136,6 +142,9 @@ export const api = {
             params,
             max_contracts: maxContracts,
             block_market_open: blockMarketOpen,
+            start_date: startDate,
+            end_date: endDate,
+            topstep_live_mode: topstepLiveMode
         });
         return res.data;
     },
@@ -174,6 +183,9 @@ export const api = {
             max_workers: request.maxWorkers,
             max_contracts: request.maxContracts,
             block_market_open: request.blockMarketOpen,
+            start_date: request.startDate,
+            end_date: request.endDate,
+            topstep_live_mode: request.topstepLiveMode
         }, {
             timeout: 600000, // 10 minutes for optimization
         });
@@ -240,6 +252,9 @@ export interface OptimizationRequest {
     maxWorkers: number;
     maxContracts: number;
     blockMarketOpen: boolean;
+    startDate?: string;
+    endDate?: string;
+    topstepLiveMode?: boolean;
 }
 
 export interface OptimizationResultItem {
@@ -272,6 +287,8 @@ export interface OptimizationHistoryItem {
     days: number;
     total_combinations: number;
     best_return: number;
+    start_date?: string;
+    end_date?: string;
 }
 
 export interface OptimizationRunDetail {
@@ -283,8 +300,13 @@ export interface OptimizationRunDetail {
     source: string;
     interval: string;
     days: number;
+    start_date?: string;
+    end_date?: string;
+    topstep_live_mode?: boolean;
     initial_equity?: number;
     risk_per_trade?: number;
+    max_contracts?: number;
+    block_market_open?: boolean;
     sessions_tested: string[];
     parameters?: ParameterRangeInput[]; // Optional for backward compatibility
     total_combinations: number;

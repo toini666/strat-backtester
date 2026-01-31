@@ -12,6 +12,9 @@ interface OptimizationConfigSummary {
     riskPerTrade: number;
     maxContracts: number;
     blockMarketOpen: boolean;
+    startDate?: string;
+    endDate?: string;
+    topstepLiveMode?: boolean;
 }
 
 interface OptimizationResultsProps {
@@ -106,8 +109,20 @@ export function OptimizationResults({
                             <span className="text-gray-200 font-medium">{config.interval}</span>
                         </div>
                         <div>
-                            <span className="text-gray-500 block text-xs">Days</span>
-                            <span className="text-gray-200 font-medium">{config.days}</span>
+                            <span className="text-gray-500 block text-xs">Date Range</span>
+                            <span className="text-gray-200 font-medium whitespace-nowrap">
+                                {config.startDate && config.endDate ? (
+                                    <div className="flex flex-col">
+                                        <span>{new Date(config.startDate).toLocaleDateString()} -</span>
+                                        <span>{new Date(config.endDate).toLocaleDateString()}</span>
+                                        <span className="text-[10px] text-gray-500 font-mono mt-0.5">
+                                            ({Math.max(0, Math.ceil((new Date(config.endDate).getTime() - new Date(config.startDate).getTime()) / (1000 * 60 * 60 * 24))) + 1} days)
+                                        </span>
+                                    </div>
+                                ) : (
+                                    `${config.days} days`
+                                )}
+                            </span>
                         </div>
                         <div>
                             <span className="text-gray-500 block text-xs">Initial Equity</span>

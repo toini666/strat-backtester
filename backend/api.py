@@ -40,7 +40,11 @@ class BacktestRequest(BaseModel):
     source: str = Field(default="Yahoo", pattern="^(Yahoo|Topstep)$", description="Data source: Yahoo or Topstep")
     contract_id: Optional[str] = Field(default=None, description="Contract ID (required for Topstep)")
     interval: str = Field(default="15m", pattern="^(1m|2m|5m|15m|30m|1h|4h|1d)$", description="Data interval")
+    interval: str = Field(default="15m", pattern="^(1m|2m|5m|15m|30m|1h|4h|1d)$", description="Data interval")
     days: int = Field(default=14, ge=1, le=365, description="Number of days of historical data")
+    start_date: Optional[str] = Field(default=None, description="Start Date (YYYY-MM-DD)")
+    end_date: Optional[str] = Field(default=None, description="End Date (YYYY-MM-DD)")
+    topstep_live_mode: bool = Field(default=False, description="Use Active Topstep Contract (True) or Legacy (False)")
     params: Dict[str, Any] = Field(default_factory=dict, description="Strategy parameters")
 
     # Risk Management with validation
@@ -240,8 +244,40 @@ def run_backtest(req: BacktestRequest):
         raise HTTPException(status_code=404, detail="Strategy not found")
     
     # 1. Fetch Data
-    end_date = datetime.now()
-    original_start_date = end_date - timedelta(days=req.days)
+    
+    # Parse Dates if provided, else use days
+    if req.start_date and req.end_date:
+        try:
+            # Assuming YYYY-MM-DD from frontend, append time for full day coverage
+            # Start at 00:00:00 of Start Date
+            start_date_parsed = pd.to_datetime(req.start_date).replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            # End at 23:59:59 of End Date OR use current time if it's today? 
+            # User requirement: "minuit et minuit pour les jours de début et de fin définis"
+            # It usually means Start 00:00 to End 23:59 usually effectively covering the full days.
+            # Let's set end_date to 23:59:59 of the requested end day.
+            # Explicitly force microseconds to max to ensure all ticks of that second are included if database has higher precision.
+            end_date_parsed = pd.to_datetime(req.end_date).replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            end_date = end_date_parsed
+            original_start_date = start_date_parsed
+            
+            # Recalculate 'days' for Cache key purposes roughly
+            req.days = (end_date - original_start_date).days
+            
+        except Exception as e:
+             raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
+    else:
+        # Legacy Mode (Days)
+        # Default end is yesterday ending? Or now?
+        # User said: "Par défaut, le jour de fin doit être la veille du jour d'aujourd'hui."
+        # This implies standard behavior should be changed to yesterday?
+        # Current behavior was datetime.now().
+        # Let's stick to simple "N days back from now" if no dates provided to not break legacy,
+        # OR implement the Yesterday logic if we want to be strict.
+        end_date = datetime.now()
+        original_start_date = end_date - timedelta(days=req.days)
+    
     
     # Warmup Logic
     # Always fetch extra 1000 bars to ensure indicator convergence for all strategies (EMA, RSI, HA, etc)
@@ -288,8 +324,10 @@ def run_backtest(req: BacktestRequest):
             if not req.contract_id:
                 raise HTTPException(status_code=400, detail="Contract ID required for Topstep")
                 
+            logger.info(f"Topstep Fetch: ContractID='{req.contract_id}' (Type: {type(req.contract_id)}), Live={req.topstep_live_mode}")
+                
             # Check Cache
-            current_params = (req.contract_id, req.interval, req.days)
+            current_params = (req.contract_id, req.interval, req.days, req.topstep_live_mode, str(original_start_date.date()), str(end_date.date()))
             if TOPSTEP_CACHE["params"] == current_params and TOPSTEP_CACHE["data"] is not None:
                 logger.info(f"Using cached Topstep data for {current_params}")
                 data = TOPSTEP_CACHE["data"].copy()
@@ -297,13 +335,54 @@ def run_backtest(req: BacktestRequest):
                 if TOPSTEP_CACHE["original_start_date"]:
                      original_start_date = TOPSTEP_CACHE["original_start_date"]
             else:
-                data = topstep.fetch_historical_data(req.contract_id, start_date, end_date, req.interval)
+                # Force live=False for Historical Data to ensure we use Sim/Data Environment 
+                # (Active Contracts are available in Sim). 
+                # live=True causes 500 error if user lacks Live Data permissions.
+                data = topstep.fetch_historical_data(req.contract_id, start_date, end_date, req.interval, live=False)
+                
+                if not data.empty:
+                    pass
+                else:
+                    logger.warning("Topstep Data Fetched: EMPTY")
+
                 # Update Cache
                 TOPSTEP_CACHE["params"] = current_params
                 TOPSTEP_CACHE["data"] = data.copy()
                 TOPSTEP_CACHE["original_start_date"] = original_start_date
+                
+            # --- Fetch Contract Details for Legacy Mode to Ensure Correct PnL ---
+            if req.source == 'Topstep' and not req.topstep_live_mode:
+                 try:
+                     details = topstep.get_contract_details(req.contract_id)
+                     if details:
+                         # Update/Override specs for this specific run
+                         # We can't easily globally override CONTRACT_SPECS key because it's keyed by 'Symbol' (e.g. MGC) 
+                         # and we have 'Contract ID' here.
+                         pass 
+                         # We need to map Contract ID to Symbol or just override based on logic below.
+                         
+                         tick_size = details.get("tickSize")
+                         tick_value = details.get("tickValue")
+                         
+                         if tick_size and tick_value:
+                             logger.info(f"Updated Contract Specs from API: TickSize={tick_size}, TickValue={tick_value}")
+                             # We'll use these variables directly in the PnL calculation section
+                             # HACK: Temporarily inject into req for passing down or use local variables
+                             # Better approach: The strategy execution uses 'tick_size' from CONTRACT_SPECS. 
+                             # We need to ensure we use the fetched ones.
+                             
+                             # Identify symbol from contract ID or just assume it matches the ticker logic?
+                             # req.ticker usually holds the symbol for Topstep source (e.g. 'MGC') if constructed correctly.
+                             # But in Legacy mode, 'req.ticker' might just be the default 'BTC-USD' if not set in frontend? 
+                             # Frontend sends 'ticker' state.
+                             
+                             # Let's trust the details from API more.
+                             # We can use a request-level override or updated dictionary.
+                             # Let's create a local `current_contract_specs` that defaults to global but can be overridden.
+                             pass
+                 except Exception as e:
+                     logger.error(f"Failed to update contract specs: {e}")
         else:
-            # Yahoo
             data = yf.download(req.ticker, start=start_date, end=end_date, interval=req.interval, progress=False, auto_adjust=True)
             if isinstance(data.columns, pd.MultiIndex):
                 data.columns = data.columns.droplevel(1)
@@ -510,6 +589,36 @@ def run_backtest(req: BacktestRequest):
                     break
         except Exception as e:
             logger.warning(f"Contract spec fetch failed: {e}")
+
+    # --- Override with Manual Contract Details (Legacy Mode) ---
+    # This takes precedence because it's fetched specifically for the ID provided
+    if req.source == 'Topstep' and not req.topstep_live_mode:
+         # Try to fetch details if not already done in the data fetching block (or if that block was just for cache)
+         # We did fetch 'details' earlier in the 'data fetch' block but variables were local scope there.
+         # Ideally we should carry them over, but for safety lets re-fetch or assume valid defaults. 
+         # Best way: Check if we have 'details' from cache metadata or re-fetch here if needed.
+         # For now, let's re-fetch if we dont have contract info from "Available Contracts" loop above.
+         # But wait, we need 'tick_size' and 'tick_value' for risk calculation below.
+         
+         # Optimization: We already fetched it in step 1. Let's assume we can fetch it again or move that logic down?
+         # Actually, the block above relies on `fetch_available_contracts` which only returns "Active" ones.
+         # So for Legacy, the block above (lines 550-584) will likely fail to find the contract.
+         
+         try:
+             # If we haven't found the contract in the active list...
+             if tick_size == 0.25 and tick_value == 12.5: # Checks against default
+                 details = topstep.get_contract_details(req.contract_id)
+                 if details:
+                     tick_size = float(details.get("tickSize", 0.25))
+                     tick_value = float(details.get("tickValue", 5.0)) # Default to 5.0 for micros/minis as safer backup
+                     contract_name = details.get("name", "").upper()
+                     
+                     if tick_size > 0:
+                         point_value = tick_value / tick_size
+                     
+                     logger.info(f"Legacy Mode Specs Used: {contract_name} | Tick: {tick_size} | Value: {tick_value}")
+         except Exception as e:
+             logger.error(f"Legacy spec fetch failed: {e}")
             
     # Calculate Base Sizing (Entries)
     risk_amount = req.initial_equity * req.risk_per_trade
@@ -876,6 +985,9 @@ def run_backtest(req: BacktestRequest):
         "sharpe_ratio": float(pf.sharpe_ratio()) 
     }
     
+    # Sort trades by entry time
+    trades_list.sort(key=lambda x: x["entry_time"]) 
+
     return {
         "metrics": metrics,
         "trades": trades_list,
@@ -916,6 +1028,13 @@ class OptimizationRequest(BaseModel):
 
     # Sessions to test
     sessions: List[str] = Field(default=["Asia", "UK", "US"])
+    
+    # Date Range (overrides 'days' if present)
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    
+    # Topstep Live Mode
+    topstep_live_mode: bool = False
 
     # Risk config
     initial_equity: float = Field(default=50000.0, ge=1000, le=10000000)
@@ -1099,8 +1218,19 @@ def run_optimization(req: OptimizationRequest):
         )
 
     # Fetch data ONCE (it will be cached)
-    end_date = datetime.now()
-    original_start_date = end_date - timedelta(days=req.days)
+    
+    # Parse Date Range if provided
+    if req.start_date and req.end_date:
+        try:
+            original_start_date = pd.to_datetime(req.start_date).replace(hour=0, minute=0, second=0, microsecond=0)
+            end_date = pd.to_datetime(req.end_date).replace(hour=23, minute=59, second=59, microsecond=999999)
+            req.days = (end_date - original_start_date).days
+        except:
+             end_date = datetime.now()
+             original_start_date = end_date - timedelta(days=req.days)
+    else:
+        end_date = datetime.now()
+        original_start_date = end_date - timedelta(days=req.days)
 
     # Warmup
     warmup_bars = 1000
@@ -1109,23 +1239,45 @@ def run_optimization(req: OptimizationRequest):
     total_minutes = warmup_bars * minutes_per_bar * 1.5
     warmup_delta = timedelta(minutes=total_minutes)
     start_date = original_start_date - warmup_delta
+    logger.info(f"Optimization Data Fetch: Start={start_date}, End={end_date}, Live={req.topstep_live_mode}")
 
     # Fetch data
     try:
+        data = pd.DataFrame()
         if req.source == "Topstep":
             if not req.contract_id:
                 raise HTTPException(status_code=400, detail="Contract ID required for Topstep")
-
-            current_params = (req.contract_id, req.interval, req.days)
+            
+            # Using Live Mode in cache key
+            current_params = (req.contract_id, req.interval, req.days, req.topstep_live_mode, str(original_start_date.date()), str(end_date.date()))
+            
             if TOPSTEP_CACHE["params"] == current_params and TOPSTEP_CACHE["data"] is not None:
                 data = TOPSTEP_CACHE["data"].copy()
                 if TOPSTEP_CACHE["original_start_date"]:
                     original_start_date = TOPSTEP_CACHE["original_start_date"]
             else:
-                data = topstep.fetch_historical_data(req.contract_id, start_date, end_date, req.interval)
+                # Force live=False for Historical
+                data = topstep.fetch_historical_data(req.contract_id, start_date, end_date, req.interval, live=False)
                 TOPSTEP_CACHE["params"] = current_params
                 TOPSTEP_CACHE["data"] = data.copy()
                 TOPSTEP_CACHE["original_start_date"] = original_start_date
+                
+             # --- Fetch Contract Details (Copy of logic from run_backtest) ---
+            if not req.topstep_live_mode:
+                 try:
+                     details = topstep.get_contract_details(req.contract_id)
+                     if details:
+                         # Store specifically for this optimization run context?
+                         # Optimization logic below re-fetches specs. We need to pass it down.
+                         # Or just verify we have tick sizes.
+                         # We'll update current local variables to guide the loop below.
+                         fetched_tick_size = details.get("tickSize")
+                         fetched_tick_value = details.get("tickValue")
+                         if fetched_tick_size and fetched_tick_value:
+                             # We'll use this in the "Get contract specs" section
+                             pass
+                 except Exception:
+                     pass
         else:
             data = yf.download(req.ticker, start=start_date, end=end_date, interval=req.interval, progress=False, auto_adjust=True)
             if isinstance(data.columns, pd.MultiIndex):
@@ -1161,6 +1313,15 @@ def run_optimization(req: OptimizationRequest):
                     if k in contract_name:
                         fee_per_trade = FEES_MAP[k]
                         break
+            
+            # CHECK LEGACY MANUAL FETCH (Override logic)
+            if not req.topstep_live_mode:
+                 details = topstep.get_contract_details(req.contract_id)
+                 if details:
+                     tick_size = float(details.get("tickSize", 0.25))
+                     tick_value = float(details.get("tickValue", 5.0))
+                     if tick_size > 0:
+                         point_value = tick_value / tick_size
 
             # Override with hardcoded specs
             sorted_spec_keys = sorted(CONTRACT_SPECS.keys(), key=len, reverse=True)
@@ -1495,6 +1656,9 @@ def run_optimization(req: OptimizationRequest):
         "source": req.source,
         "interval": req.interval,
         "days": req.days,
+        "start_date": req.start_date,
+        "end_date": req.end_date,
+        "topstep_live_mode": req.topstep_live_mode,
         "initial_equity": req.initial_equity,
         "risk_per_trade": req.risk_per_trade,
         "sessions_tested": req.sessions,
