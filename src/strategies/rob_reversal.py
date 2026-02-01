@@ -35,7 +35,7 @@ class RobReversal(Strategy):
         "take_profit": [20.0, 25.0, 30.0, 35.0, 40.0, 50.0],
         "max_stop_loss": [20.0, 25.0, 30.0, 35.0, 40.0, 50.0],
         "trigger_bars": [1, 2, 3],
-        "block_new_signals": [True, False],
+        # "block_new_signals": [True, False], # Removed to prevent overriding default True
     }
 
     def generate_signals(
@@ -135,6 +135,9 @@ class RobReversal(Strategy):
         np_exec_price = exec_price.values
 
         for i in range(len(data)):
+            # Reset daily/bar flags
+            trade_closed_this_bar = False
+
             # Data for this bar
             O = np_open[i]
             H = np_high[i]
@@ -152,20 +155,24 @@ class RobReversal(Strategy):
                     long_exits.iloc[i] = True
                     np_exec_price[i] = round_to_tick(O, ts_tick) # Fill at Open
                     active_trade_side = 0
+                    trade_closed_this_bar = True
                 elif O >= active_tp:
                     long_exits.iloc[i] = True
                     np_exec_price[i] = round_to_tick(O, ts_tick) # Fill at Open
                     active_trade_side = 0
+                    trade_closed_this_bar = True
             elif active_trade_side == -1:
                 # Short: Check Gap
                 if O >= active_sl:
                     short_exits.iloc[i] = True
                     np_exec_price[i] = round_to_tick(O, ts_tick)
                     active_trade_side = 0
+                    trade_closed_this_bar = True
                 elif O <= active_tp:
                     short_exits.iloc[i] = True
                     np_exec_price[i] = round_to_tick(O, ts_tick)
                     active_trade_side = 0
+                    trade_closed_this_bar = True
             
             # Pending Entry Gap Fill
             # Only if no active trade (or if we support reversal, but here we block new)
@@ -244,6 +251,7 @@ class RobReversal(Strategy):
                                 long_exits.iloc[i] = True
                                 np_exec_price[i] = round_to_tick(active_sl, ts_tick)
                             active_trade_side = 0
+                            trade_closed_this_bar = True
                         else:
                             # TP first
                             if long_entries.iloc[i] and i < len(data) - 1:
@@ -253,6 +261,7 @@ class RobReversal(Strategy):
                                 long_exits.iloc[i] = True
                                 np_exec_price[i] = round_to_tick(active_tp, ts_tick)
                             active_trade_side = 0
+                            trade_closed_this_bar = True
                             
                     elif sl_hit:
                         if long_entries.iloc[i] and i < len(data) - 1:
@@ -262,6 +271,7 @@ class RobReversal(Strategy):
                              long_exits.iloc[i] = True
                              np_exec_price[i] = round_to_tick(active_sl, ts_tick)
                         active_trade_side = 0
+                        trade_closed_this_bar = True
                     elif tp_hit:
                         if long_entries.iloc[i] and i < len(data) - 1:
                              long_exits.iloc[i+1] = True
@@ -270,6 +280,7 @@ class RobReversal(Strategy):
                              long_exits.iloc[i] = True
                              np_exec_price[i] = round_to_tick(active_tp, ts_tick)
                         active_trade_side = 0
+                        trade_closed_this_bar = True
                         
                 elif active_trade_side == -1:
                     # Short Exits
@@ -289,6 +300,7 @@ class RobReversal(Strategy):
                                 short_exits.iloc[i] = True
                                 np_exec_price[i] = round_to_tick(active_sl, ts_tick)
                             active_trade_side = 0
+                            trade_closed_this_bar = True
                         else:
                             if short_entries.iloc[i] and i < len(data) - 1:
                                 short_exits.iloc[i+1] = True
@@ -297,6 +309,7 @@ class RobReversal(Strategy):
                                 short_exits.iloc[i] = True
                                 np_exec_price[i] = round_to_tick(active_tp, ts_tick)
                             active_trade_side = 0
+                            trade_closed_this_bar = True
                     elif sl_hit:
                         if short_entries.iloc[i] and i < len(data) - 1:
                              short_exits.iloc[i+1] = True
@@ -305,6 +318,7 @@ class RobReversal(Strategy):
                              short_exits.iloc[i] = True
                              np_exec_price[i] = round_to_tick(active_sl, ts_tick)
                         active_trade_side = 0
+                        trade_closed_this_bar = True
                     elif tp_hit:
                         if short_entries.iloc[i] and i < len(data) - 1:
                              short_exits.iloc[i+1] = True
@@ -313,6 +327,7 @@ class RobReversal(Strategy):
                              short_exits.iloc[i] = True
                              np_exec_price[i] = round_to_tick(active_tp, ts_tick)
                         active_trade_side = 0
+                        trade_closed_this_bar = True
                 
                 # B. CHECK PENDING ENTRIES
                 # Check can_take_new again because we might have just closed a trade above
@@ -372,11 +387,13 @@ class RobReversal(Strategy):
                                     long_exits.iloc[i+1] = True 
                                     np_exec_price[i+1] = round_to_tick(active_sl, ts_tick)
                                 active_trade_side = 0
+                                trade_closed_this_bar = True
                             elif rem_max >= active_tp:
                                 if i < len(data) - 1:
                                     long_exits.iloc[i+1] = True
                                     np_exec_price[i+1] = active_tp
                                 active_trade_side = 0
+                                trade_closed_this_bar = True
                             
                             # Setup consumed
                             can_take_new = False
@@ -403,11 +420,13 @@ class RobReversal(Strategy):
                                     short_exits.iloc[i+1] = True
                                     np_exec_price[i+1] = round_to_tick(active_sl, ts_tick)
                                 active_trade_side = 0
+                                trade_closed_this_bar = True
                             elif rem_min <= active_tp:
                                 if i < len(data) - 1:
                                     short_exits.iloc[i+1] = True
                                     np_exec_price[i+1] = active_tp
                                 active_trade_side = 0
+                                trade_closed_this_bar = True
                                 
                             can_take_new = False
 
@@ -416,7 +435,8 @@ class RobReversal(Strategy):
                 
             # --- 3. NEW SETUP GENERATION (End of Bar) ---
             check_for_new = True
-            if block_new and active_trade_side != 0:
+            # If block_new is active, we check if we have an active trade OR if we just closed one in this bar.
+            if block_new and (active_trade_side != 0 or trade_closed_this_bar):
                 check_for_new = False
             
             # Expiry check logic (moved from inside loop)

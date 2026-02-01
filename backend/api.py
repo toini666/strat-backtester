@@ -1119,7 +1119,14 @@ def calculate_metrics_from_trades(trades: List[Dict], initial_equity: float) -> 
         cumulative += t["pnl"]
         if cumulative > peak:
             peak = cumulative
-        dd = (peak - cumulative) / initial_equity if initial_equity > 0 else 0
+        
+        # Drawdown is relative to Peak Equity (Initial + Peak PnL)
+        peak_equity = initial_equity + peak
+        if peak_equity > 0:
+            dd = (peak - cumulative) / peak_equity
+        else:
+             dd = 0.0 # Or 1.0 (100%) if equity is 0? Let's say 0 to avoid spikes if logic fails.
+             
         if dd > max_dd:
             max_dd = dd
 
@@ -1127,7 +1134,7 @@ def calculate_metrics_from_trades(trades: List[Dict], initial_equity: float) -> 
         "total_return": (total_pnl / initial_equity * 100) if initial_equity > 0 else 0.0,
         "win_rate": win_rate,
         "trade_count": len(trades),
-        "max_drawdown": -max_dd * 100
+        "max_drawdown": max_dd * 100
     }
 
 

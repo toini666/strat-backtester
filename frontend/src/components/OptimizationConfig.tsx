@@ -109,6 +109,7 @@ export function OptimizationConfig({
         }
 
         setLoadingParams(true);
+        setParamConfigs([]);
         api.getStrategyParamRanges(selectedStrategy.name)
             .then(data => {
                 const configs: ParamConfig[] = data.param_ranges
@@ -173,18 +174,27 @@ export function OptimizationConfig({
         if (strategies.length > 0) {
             if (initialConfig) {
                 const strat = strategies.find(s => s.name === initialConfig.strategyName);
-                if (strat) setSelectedStrategy(strat);
+                if (strat) {
+                    // If switching strategies, clear params immediately to prevent applying config to stale params
+                    if (strat.name !== selectedStrategy?.name) {
+                        setParamConfigs([]);
+                        setLoadingParams(true);
+                    }
+                    setSelectedStrategy(strat);
+                }
             } else if (!selectedStrategy) {
                 setSelectedStrategy(strategies[0]);
             }
         }
-    }, [strategies, initialConfig]);
+    }, [strategies, initialConfig, selectedStrategy]);
 
     // Apply initial config when available
     // Use a ref to track if we've already applied this specific config instance
     const configAppliedRef = useRef<object | null>(null);
 
     useEffect(() => {
+        if (loadingParams) return;
+
         if (initialConfig && selectedStrategy && selectedStrategy.name === initialConfig.strategyName && paramConfigs.length > 0) {
             // Only apply if this specific config object hasn't been applied yet
             if (configAppliedRef.current === initialConfig) return;
@@ -262,7 +272,7 @@ export function OptimizationConfig({
                 return p;
             }));
         }
-    }, [initialConfig, selectedStrategy, contracts, paramConfigs]);
+    }, [initialConfig, selectedStrategy, contracts, paramConfigs, loadingParams]);
 
     // Calculate counts
     const calculateParamCount = useCallback((config: ParamConfig): number => {
