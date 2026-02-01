@@ -460,7 +460,7 @@ export function OptimizationConfig({
                         onChange={(e) => setInterval(e.target.value)}
                         className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm"
                     >
-                        {['1m', '2m', '5m', '15m', '30m', '1h', '4h', '1d'].map(tf => (
+                        {['1m', '2m', '5m', '7m', '15m', '30m', '1h', '4h', '1d'].map(tf => (
                             <option key={tf} value={tf}>{tf}</option>
                         ))}
                     </select>

@@ -165,7 +165,7 @@ export function Sidebar({
                                 value={interval}
                                 onChange={e => setInterval(e.target.value)}
                             >
-                                {['1m', '2m', '5m', '15m', '30m', '1h', '4h', '1d'].map(t => <option key={t} value={t}>{t}</option>)}
+                                {['1m', '2m', '5m', '7m', '15m', '30m', '1h', '4h', '1d'].map(t => <option key={t} value={t}>{t}</option>)}
                             </select>
                         </div>
                         {/* Display Duration Helper */}
