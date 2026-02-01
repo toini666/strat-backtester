@@ -320,6 +320,7 @@ def run_backtest(req: BacktestRequest):
 
     try:
         data = pd.DataFrame()
+        legacy_contract_details = None
         if req.source == "Topstep":
             if not req.contract_id:
                 raise HTTPException(status_code=400, detail="Contract ID required for Topstep")
@@ -366,20 +367,8 @@ def run_backtest(req: BacktestRequest):
                          
                          if tick_size and tick_value:
                              logger.info(f"Updated Contract Specs from API: TickSize={tick_size}, TickValue={tick_value}")
-                             # We'll use these variables directly in the PnL calculation section
-                             # HACK: Temporarily inject into req for passing down or use local variables
-                             # Better approach: The strategy execution uses 'tick_size' from CONTRACT_SPECS. 
-                             # We need to ensure we use the fetched ones.
-                             
-                             # Identify symbol from contract ID or just assume it matches the ticker logic?
-                             # req.ticker usually holds the symbol for Topstep source (e.g. 'MGC') if constructed correctly.
-                             # But in Legacy mode, 'req.ticker' might just be the default 'BTC-USD' if not set in frontend? 
-                             # Frontend sends 'ticker' state.
-                             
-                             # Let's trust the details from API more.
-                             # We can use a request-level override or updated dictionary.
-                             # Let's create a local `current_contract_specs` that defaults to global but can be overridden.
-                             pass
+                             # Store details for later use in Sizing/PnL section to ensure consistency
+                             legacy_contract_details = details
                  except Exception as e:
                      logger.error(f"Failed to update contract specs: {e}")
         else:
@@ -408,7 +397,11 @@ def run_backtest(req: BacktestRequest):
     
     # RE-INSERT TICK SIZE LOGIC (Lines 264-292 from original)
     current_tick_size = 0.25 
-    if req.source == "Topstep" and req.contract_id:
+    
+    # Use Legacy details if available (Highest Priority for Legacy Mode)
+    if legacy_contract_details:
+        current_tick_size = float(legacy_contract_details.get('tickSize', 0.25))
+    elif req.source == "Topstep" and req.contract_id:
         try:
             contracts = topstep.fetch_available_contracts()
             contract = next((c for c in contracts if str(c['id']) == str(req.contract_id)), None)
@@ -592,31 +585,33 @@ def run_backtest(req: BacktestRequest):
 
     # --- Override with Manual Contract Details (Legacy Mode) ---
     # This takes precedence because it's fetched specifically for the ID provided
-    if req.source == 'Topstep' and not req.topstep_live_mode:
-         # Try to fetch details if not already done in the data fetching block (or if that block was just for cache)
-         # We did fetch 'details' earlier in the 'data fetch' block but variables were local scope there.
-         # Ideally we should carry them over, but for safety lets re-fetch or assume valid defaults. 
-         # Best way: Check if we have 'details' from cache metadata or re-fetch here if needed.
-         # For now, let's re-fetch if we dont have contract info from "Available Contracts" loop above.
-         # But wait, we need 'tick_size' and 'tick_value' for risk calculation below.
-         
-         # Optimization: We already fetched it in step 1. Let's assume we can fetch it again or move that logic down?
-         # Actually, the block above relies on `fetch_available_contracts` which only returns "Active" ones.
-         # So for Legacy, the block above (lines 550-584) will likely fail to find the contract.
-         
+    # --- Override with Manual Contract Details (Legacy Mode) ---
+    # This takes precedence because it's fetched specifically for the ID provided in Legacy Mode
+    if legacy_contract_details:
          try:
-             # If we haven't found the contract in the active list...
-             if tick_size == 0.25 and tick_value == 12.5: # Checks against default
-                 details = topstep.get_contract_details(req.contract_id)
-                 if details:
-                     tick_size = float(details.get("tickSize", 0.25))
-                     tick_value = float(details.get("tickValue", 5.0)) # Default to 5.0 for micros/minis as safer backup
-                     contract_name = details.get("name", "").upper()
-                     
-                     if tick_size > 0:
-                         point_value = tick_value / tick_size
-                     
-                     logger.info(f"Legacy Mode Specs Used: {contract_name} | Tick: {tick_size} | Value: {tick_value}")
+             tick_size = float(legacy_contract_details.get("tickSize", 0.25))
+             tick_value = float(legacy_contract_details.get("tickValue", 5.0)) # Default to 5.0 matches Optimization
+             contract_name = legacy_contract_details.get("name", "").upper()
+             
+             if tick_size > 0:
+                 point_value = tick_value / tick_size
+             
+             logger.info(f"Legacy Mode Specs Used: {contract_name} | Tick: {tick_size} | Value: {tick_value} | PV: {point_value}")
+         except Exception as e:
+             logger.error(f"Legacy spec override failed: {e}")
+    elif req.source == 'Topstep' and not req.topstep_live_mode:
+         # Fallback re-fetch if not captured earlier (unlikely but safe)
+         try:
+             details = topstep.get_contract_details(req.contract_id)
+             if details:
+                 tick_size = float(details.get("tickSize", 0.25))
+                 tick_value = float(details.get("tickValue", 5.0))
+                 contract_name = details.get("name", "").upper()
+                 
+                 if tick_size > 0:
+                     point_value = tick_value / tick_size
+                 
+                 logger.info(f"Legacy Mode Specs Fetched (Fallback): {contract_name} | Tick: {tick_size} | Value: {tick_value}")
          except Exception as e:
              logger.error(f"Legacy spec fetch failed: {e}")
             
