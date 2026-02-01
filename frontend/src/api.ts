@@ -213,6 +213,20 @@ export const api = {
     deleteOptimizationRun: async (runId: string): Promise<void> => {
         await apiClient.delete(`/optimization-history/${runId}`);
     },
+    /**
+     * Toggle favorite status of an optimization run
+     */
+    toggleOptimizationFavorite: async (runId: string): Promise<boolean> => {
+        const res = await apiClient.post<{ status: string; is_favorite: boolean }>(`/optimization-history/${runId}/favorite`);
+        return res.data.is_favorite;
+    },
+
+    /**
+     * Delete multiple optimization runs
+     */
+    bulkDeleteOptimizationRuns: async (runIds: string[]): Promise<void> => {
+        await apiClient.post('/optimization-history/bulk-delete', { run_ids: runIds });
+    },
 };
 
 // Optimization types
@@ -289,6 +303,7 @@ export interface OptimizationHistoryItem {
     best_return: number;
     start_date?: string;
     end_date?: string;
+    is_favorite: boolean;
 }
 
 export interface OptimizationRunDetail {

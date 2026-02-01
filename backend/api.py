@@ -1146,6 +1146,10 @@ def save_optimization_result(result: Dict) -> None:
     """Save optimization result to history."""
     OPTIMIZATION_HISTORY_FILE.parent.mkdir(exist_ok=True)
 
+    # Ensure is_favorite is set
+    if "is_favorite" not in result:
+        result["is_favorite"] = False
+
     history = []
     if OPTIMIZATION_HISTORY_FILE.exists():
         try:
@@ -1174,6 +1178,61 @@ def load_optimization_history() -> List[Dict]:
             return json.load(f)
     except:
         return []
+
+
+def toggle_optimization_favorite(run_id: str) -> Optional[bool]:
+    """Toggle favorite status. Returns new state or None if not found."""
+    if not OPTIMIZATION_HISTORY_FILE.exists():
+        return None
+
+    try:
+        with open(OPTIMIZATION_HISTORY_FILE, 'r') as f:
+            history = json.load(f)
+        
+        found = False
+        new_state = False
+        
+        for h in history:
+            if h["id"] == run_id:
+                h["is_favorite"] = not h.get("is_favorite", False)
+                new_state = h["is_favorite"]
+                found = True
+                break
+        
+        if not found:
+            return None
+            
+        with open(OPTIMIZATION_HISTORY_FILE, 'w') as f:
+            json.dump(history, f, indent=2)
+            
+        return new_state
+    except Exception as e:
+        logger.error(f"Failed to toggle favorite for {run_id}: {e}")
+        return None
+
+
+def delete_optimization_runs(run_ids: List[str]) -> int:
+    """Delete multiple optimization runs from history. Returns count of deleted items."""
+    if not OPTIMIZATION_HISTORY_FILE.exists():
+        return 0
+
+    try:
+        with open(OPTIMIZATION_HISTORY_FILE, 'r') as f:
+            history = json.load(f)
+        
+        original_len = len(history)
+        history = [h for h in history if h["id"] not in run_ids]
+        
+        if len(history) == original_len:
+            return 0
+            
+        with open(OPTIMIZATION_HISTORY_FILE, 'w') as f:
+            json.dump(history, f, indent=2)
+            
+        return original_len - len(history)
+    except Exception as e:
+        logger.error(f"Failed to delete runs: {e}")
+        return 0
 
 
 @router.post("/optimize", response_model=OptimizationResponse)
@@ -1700,7 +1759,8 @@ def get_optimization_history():
         "interval": h.get("interval", "15m"),
         "days": h.get("days", 14),
         "total_combinations": h.get("total_combinations", 0),
-        "best_return": h["top_results"][0]["total_return"] if h.get("top_results") else 0
+        "best_return": h["top_results"][0]["total_return"] if h.get("top_results") else 0,
+        "is_favorite": h.get("is_favorite", False)
     } for h in history]
 
 
@@ -1738,13 +1798,30 @@ def delete_optimization_run(run_id: str) -> bool:
         return False
 
 
+class BulkDeleteRequest(BaseModel):
+    run_ids: List[str]
+
 @router.delete("/optimization-history/{run_id}")
 def delete_optimization_history_item(run_id: str):
     """Delete a specific optimization run."""
-    success = delete_optimization_run(run_id)
-    if not success:
+    count = delete_optimization_runs([run_id])
+    if count == 0:
         raise HTTPException(status_code=404, detail="Optimization run not found or could not be deleted")
     return {"status": "success", "message": f"Run {run_id} deleted"}
+
+@router.post("/optimization-history/bulk-delete")
+def bulk_delete_optimization_history_items(req: BulkDeleteRequest):
+    """Delete multiple optimization runs."""
+    count = delete_optimization_runs(req.run_ids)
+    return {"status": "success", "message": f"Deleted {count} runs", "deleted_count": count}
+
+@router.post("/optimization-history/{run_id}/favorite")
+def toggle_optimization_history_favorite(run_id: str):
+    """Toggle favorite status of an optimization run."""
+    new_state = toggle_optimization_favorite(run_id)
+    if new_state is None:
+        raise HTTPException(status_code=404, detail="Optimization run not found")
+    return {"status": "success", "is_favorite": new_state}
 
 
 @router.get("/strategy-param-ranges/{strategy_name}")
