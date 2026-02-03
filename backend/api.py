@@ -40,7 +40,7 @@ class BacktestRequest(BaseModel):
     source: str = Field(default="Yahoo", pattern="^(Yahoo|Topstep)$", description="Data source: Yahoo or Topstep")
     contract_id: Optional[str] = Field(default=None, description="Contract ID (required for Topstep)")
     interval: str = Field(default="15m", pattern="^(1m|2m|5m|15m|30m|1h|4h|1d)$", description="Data interval")
-    interval: str = Field(default="15m", pattern="^(1m|2m|5m|7m|15m|30m|1h|4h|1d)$", description="Data interval")
+    interval: str = Field(default="15m", pattern="^(1m|2m|3m|5m|7m|15m|30m|1h|4h|1d)$", description="Data interval")
     days: int = Field(default=14, ge=1, le=365, description="Number of days of historical data")
     start_date: Optional[str] = Field(default=None, description="Start Date (YYYY-MM-DD)")
     end_date: Optional[str] = Field(default=None, description="End Date (YYYY-MM-DD)")
@@ -291,7 +291,7 @@ def run_backtest(req: BacktestRequest):
         # We need to subtract N bars from original_start_date
         # Simple mapping
         map_min = {
-            "1m": 1, "2m": 2, "5m": 5, "7m": 7, "15m": 15, "30m": 30, "60m": 60, "1h": 60,
+            "1m": 1, "2m": 2, "3m": 3, "5m": 5, "7m": 7, "15m": 15, "30m": 30, "60m": 60, "1h": 60,
             "4h": 240, "1d": 1440 
         }
         
@@ -1009,7 +1009,8 @@ class ParameterRangeInput(BaseModel):
     min_value: float
     max_value: float
     step: float
-    param_type: str = "float"  # "float", "int", "bool"
+    param_type: str = "float"  # "float", "int", "bool", "str_options"
+    str_values: Optional[List[str]] = None  # For str_options type
 
 class OptimizationRequest(BaseModel):
     """Request model for optimization."""
@@ -1017,7 +1018,7 @@ class OptimizationRequest(BaseModel):
     ticker: str = "BTC-USD"
     source: str = Field(default="Topstep", pattern="^(Yahoo|Topstep)$")
     contract_id: Optional[str] = None
-    interval: str = Field(default="15m", pattern="^(1m|2m|5m|7m|15m|30m|1h|4h|1d)$")
+    interval: str = Field(default="15m", pattern="^(1m|2m|3m|5m|7m|15m|30m|1h|4h|1d)$")
     days: int = Field(default=14, ge=1, le=365)
 
     # Parameters to optimize (if empty, uses strategy's param_ranges)
@@ -1079,6 +1080,12 @@ def generate_param_values(param: ParameterRangeInput) -> List[Any]:
         if param.min_value == param.max_value:
             return [bool(param.min_value)]
         return [True, False]
+    elif param.param_type == "str_options":
+        # String options are stored in 'str_values' field
+        if hasattr(param, 'str_values') and param.str_values:
+            return param.str_values
+        # Fallback: single value (min_value treated as index or direct value)
+        return [param.min_value] if param.min_value == param.max_value else []
     elif param.param_type == "int":
         return list(range(int(param.min_value), int(param.max_value) + 1, int(param.step)))
     else:
@@ -1299,7 +1306,7 @@ def run_optimization(req: OptimizationRequest):
 
     # Warmup
     warmup_bars = 1000
-    map_min = {"1m": 1, "2m": 2, "5m": 5, "7m": 7, "15m": 15, "30m": 30, "60m": 60, "1h": 60, "4h": 240, "1d": 1440}
+    map_min = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "7m": 7, "15m": 15, "30m": 30, "60m": 60, "1h": 60, "4h": 240, "1d": 1440}
     minutes_per_bar = map_min.get(req.interval, 15)
     total_minutes = warmup_bars * minutes_per_bar * 1.5
     warmup_delta = timedelta(minutes=total_minutes)
@@ -1843,6 +1850,8 @@ def get_strategy_param_ranges(strategy_name: str):
         if isinstance(values, (list, tuple)):
             if all(isinstance(v, bool) for v in values):
                 param_type = "bool"
+            elif all(isinstance(v, str) for v in values):
+                param_type = "str_options"
             elif all(isinstance(v, int) for v in values):
                 param_type = "int"
             else:

@@ -232,9 +232,9 @@ export const api = {
 // Optimization types
 export interface ParamRangeInfo {
     name: string;
-    values: (number | boolean)[];
-    default: number | boolean;
-    param_type: 'float' | 'int' | 'bool';
+    values: (number | boolean | string)[];
+    default: number | boolean | string;
+    param_type: 'float' | 'int' | 'bool' | 'str_options';
     count: number;
 }
 
@@ -249,7 +249,8 @@ export interface ParameterRangeInput {
     min_value: number;
     max_value: number;
     step: number;
-    param_type: 'float' | 'int' | 'bool';
+    param_type: 'float' | 'int' | 'bool' | 'str_options';
+    str_values?: string[];  // For str_options type
 }
 
 export interface OptimizationRequest {

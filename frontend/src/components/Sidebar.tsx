@@ -165,7 +165,7 @@ export function Sidebar({
                                 value={interval}
                                 onChange={e => setInterval(e.target.value)}
                             >
-                                {['1m', '2m', '5m', '7m', '15m', '30m', '1h', '4h', '1d'].map(t => <option key={t} value={t}>{t}</option>)}
+                                {['1m', '2m', '3m', '5m', '7m', '15m', '30m', '1h', '4h', '1d'].map(t => <option key={t} value={t}>{t}</option>)}
                             </select>
                         </div>
                         {/* Display Duration Helper */}
@@ -307,13 +307,29 @@ export function Sidebar({
                                             <option value="true">True</option>
                                             <option value="false">False</option>
                                         </select>
+                                    ) : key === 'filter_method' ? (
+                                        <select
+                                            className="input-base focus:border-purple-500 focus:ring-purple-500"
+                                            value={String(value)}
+                                            onChange={e => handleParamChange(key, e.target.value)}
+                                        >
+                                            <option value="slope">slope</option>
+                                            <option value="spread">spread</option>
+                                        </select>
+                                    ) : typeof value === 'string' ? (
+                                        <input
+                                            type="text"
+                                            className="input-base focus:border-purple-500 focus:ring-purple-500"
+                                            value={value}
+                                            onChange={e => handleParamChange(key, e.target.value)}
+                                        />
                                     ) : (
                                         <input
-                                            type={typeof value === 'number' ? 'number' : 'text'}
+                                            type="number"
                                             className="input-base focus:border-purple-500 focus:ring-purple-500"
                                             value={value}
                                             step={typeof value === 'number' && !Number.isInteger(value) ? "0.1" : "1"}
-                                            onChange={e => handleParamChange(key, typeof value === 'number' ? Number(e.target.value) : e.target.value)}
+                                            onChange={e => handleParamChange(key, Number(e.target.value))}
                                         />
                                     )}
                                 </div>

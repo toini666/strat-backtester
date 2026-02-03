@@ -8,10 +8,11 @@ interface ParamConfig {
     min: number;
     max: number;
     step: number;
-    paramType: 'float' | 'int' | 'bool';
-    defaultValue: number | boolean;
-    customValue: number | boolean;
+    paramType: 'float' | 'int' | 'bool' | 'str_options';
+    defaultValue: number | boolean | string;
+    customValue: number | boolean | string;
     count: number;
+    strOptions?: string[];  // For str_options type
 }
 
 interface OptimizationConfigProps {
@@ -126,6 +127,22 @@ export function OptimizationConfig({
                                 defaultValue: p.default,
                                 customValue: p.default,
                                 count: 2
+                            };
+                        }
+
+                        if (p.param_type === 'str_options') {
+                            const strValues = p.values as string[];
+                            return {
+                                name: p.name,
+                                enabled: false,
+                                min: 0,
+                                max: strValues.length - 1,
+                                step: 1,
+                                paramType: 'str_options',
+                                defaultValue: p.default,
+                                customValue: p.default,
+                                count: strValues.length,
+                                strOptions: strValues
                             };
                         }
 
@@ -278,6 +295,7 @@ export function OptimizationConfig({
     const calculateParamCount = useCallback((config: ParamConfig): number => {
         if (!config.enabled) return 1;
         if (config.paramType === 'bool') return 2;
+        if (config.paramType === 'str_options') return config.strOptions?.length || 1;
 
         const range = config.max - config.min;
         if (config.step <= 0) return 1;
@@ -294,7 +312,7 @@ export function OptimizationConfig({
         ));
     }, []);
 
-    const updateParamConfig = useCallback((name: string, field: 'min' | 'max' | 'step' | 'customValue', value: number | boolean) => {
+    const updateParamConfig = useCallback((name: string, field: 'min' | 'max' | 'step' | 'customValue', value: number | boolean | string) => {
         setParamConfigs(prev => prev.map(p =>
             p.name === name ? { ...p, [field]: value } : p
         ));
@@ -314,6 +332,16 @@ export function OptimizationConfig({
         const parameters: ParameterRangeInput[] = paramConfigs.map(p => {
             if (p.enabled) {
                 // Optimization Enabled: Send Range
+                if (p.paramType === 'str_options') {
+                    return {
+                        name: p.name,
+                        min_value: 0,
+                        max_value: (p.strOptions?.length || 1) - 1,
+                        step: 1,
+                        param_type: p.paramType,
+                        str_values: p.strOptions
+                    };
+                }
                 return {
                     name: p.name,
                     min_value: p.min,
@@ -322,7 +350,17 @@ export function OptimizationConfig({
                     param_type: p.paramType
                 };
             } else {
-                // Optimization Disabled: Send Fixed Value as Range [Val, Val]
+                // Optimization Disabled: Send Fixed Value
+                if (p.paramType === 'str_options') {
+                    return {
+                        name: p.name,
+                        min_value: 0,
+                        max_value: 0,
+                        step: 1,
+                        param_type: p.paramType,
+                        str_values: [String(p.customValue)]
+                    };
+                }
                 return {
                     name: p.name,
                     min_value: Number(p.customValue),
@@ -460,7 +498,7 @@ export function OptimizationConfig({
                         onChange={(e) => setInterval(e.target.value)}
                         className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm"
                     >
-                        {['1m', '2m', '5m', '7m', '15m', '30m', '1h', '4h', '1d'].map(tf => (
+                        {['1m', '2m', '3m', '5m', '7m', '15m', '30m', '1h', '4h', '1d'].map(tf => (
                             <option key={tf} value={tf}>{tf}</option>
                         ))}
                     </select>
@@ -665,6 +703,10 @@ export function OptimizationConfig({
                                                                 <div className="text-xs text-purple-400 italic">
                                                                     Will test both True and False
                                                                 </div>
+                                                            ) : param.paramType === 'str_options' ? (
+                                                                <div className="text-xs text-purple-400 italic">
+                                                                    Will test: {param.strOptions?.join(', ')}
+                                                                </div>
                                                             ) : (
                                                                 <div className="grid grid-cols-3 gap-3">
                                                                     <div>
@@ -719,6 +761,16 @@ export function OptimizationConfig({
                                                                             False
                                                                         </button>
                                                                     </div>
+                                                                ) : param.paramType === 'str_options' ? (
+                                                                    <select
+                                                                        value={String(param.customValue)}
+                                                                        onChange={(e) => updateParamConfig(param.name, 'customValue', e.target.value)}
+                                                                        className="bg-gray-900 border border-gray-700 rounded px-3 py-1.5 text-gray-200 text-sm font-mono focus:border-gray-500 focus:ring-1 focus:ring-gray-500"
+                                                                    >
+                                                                        {param.strOptions?.map(opt => (
+                                                                            <option key={opt} value={opt}>{opt}</option>
+                                                                        ))}
+                                                                    </select>
                                                                 ) : (
                                                                     <input
                                                                         type="number"

@@ -1,0 +1,263 @@
+//@version=6
+indicator("🍢 Brochettes Strategy", overlay=true)
+
+// ============================================
+// PARAMÈTRES INPUT
+// ============================================
+// Crocodile (Alligator)
+jawLength = input.int(13, "Jaw Length", minval=1, group="Crocodile")
+teethLength = input.int(8, "Teeth Length", minval=1, group="Crocodile")
+lipsLength = input.int(5, "Lips Length", minval=1, group="Crocodile")
+jawOffset = input.int(8, "Jaw Offset", minval=0, group="Crocodile")
+teethOffset = input.int(5, "Teeth Offset", minval=0, group="Crocodile")
+lipsOffset = input.int(3, "Lips Offset", minval=0, group="Crocodile")
+
+jawColor = input.color(#2962FF, "Jaw Color", group="Crocodile")
+teethColor = input.color(color.red, "Teeth Color", group="Crocodile")
+lipsColor = input.color(#66BB6A, "Lips Color", group="Crocodile")
+
+// Risk Management
+riskReward = input.float(2.0, "Risk/Reward Ratio", minval=0.1, step=0.1, group="Risk Management")
+strategyName = input.string("Brochettes", "Strategy Name", group="Alerts")
+
+// 🛡️ NOUVEAU : FILTRES DE RANGE
+useFilter = input.bool(true, "Activer le filtre de Range", group="🛡️ Filtres de Range")
+filterMethod = input.string("Slope (Pente Jaw)", "Méthode de calcul", options=["Slope (Pente Jaw)", "Spread (Écart Jaw-Lips)"], group="🛡️ Filtres de Range")
+filterLookback = input.int(5, "Lookback (Bougies)", minval=1, tooltip="Sur combien de bougies on calcule la pente", group="🛡️ Filtres de Range")
+filterThreshold = input.float(2.0, "Seuil de sensibilité", minval=0.1, step=0.1, tooltip="Augmenter pour filtrer plus agressivement", group="🛡️ Filtres de Range")
+showFilterState = input.bool(true, "Griser l'Alligator si Range", tooltip="Change la couleur des lignes quand le filtre bloque les trades", group="🛡️ Filtres de Range")
+
+// ============================================
+// VARIABLES D'ÉTAT
+// ============================================
+var bool inPosition = false
+var float entryPrice = na
+var float stopLoss = na
+var float takeProfit = na
+var string positionSide = na
+var line entryLine = na
+var line slLine = na
+var line tpLine = na
+
+// Variables pour stocker le setup validé de la bougie précédente
+var float pendingEntryPrice = na
+var float pendingStopLoss = na
+var float pendingTakeProfit = na
+var string pendingSide = na
+
+// ============================================
+// FONCTIONS UTILITAIRES
+// ============================================
+smma(src, length) =>
+    var float smma = na
+    smaVal = ta.sma(src, length)
+    smma := na(smma[1]) ? smaVal : (smma[1] * (length - 1) + src) / length
+    smma
+
+roundToTick(price) =>
+    math.round(price / syminfo.mintick) * syminfo.mintick
+
+// ============================================
+// CALCUL DU CROCODILE
+// ============================================
+jaw = smma(hl2, jawLength)
+teeth = smma(hl2, teethLength)
+lips = smma(hl2, lipsLength)
+
+// ============================================
+// CALCUL DU FILTRE (NOUVEAU)
+// ============================================
+float filterValue = 0.0
+
+if filterMethod == "Slope (Pente Jaw)"
+    // On calcule la différence absolue de la Mâchoire sur X bougies
+    // Divisé par mintick pour avoir une valeur en "points/ticks" lisible
+    filterValue := math.abs(jaw - jaw[filterLookback]) / syminfo.mintick
+else
+    // Spread : Écart entre la Mâchoire (Lente) et les Lèvres (Rapide)
+    filterValue := math.abs(jaw - lips) / syminfo.mintick
+
+// Le marché est-il plat ? (Si filtre activé ET valeur sous le seuil)
+isMarketFlat = useFilter and (filterValue < filterThreshold)
+
+// Affichage conditionnel des couleurs (Gris si plat)
+c_jaw = showFilterState and isMarketFlat ? color.gray : color.new(jawColor, 70)
+c_teeth = showFilterState and isMarketFlat ? color.gray : color.new(teethColor, 70)
+c_lips = showFilterState and isMarketFlat ? color.gray : color.new(lipsColor, 70)
+
+plot(jaw, offset=jawOffset, color=c_jaw, linewidth=1, title="Jaw")
+plot(teeth, offset=teethOffset, color=c_teeth, linewidth=1, title="Teeth")
+plot(lips, offset=lipsOffset, color=c_lips, linewidth=1, title="Lips")
+
+// ============================================
+// LOGIQUE DE TRADING
+// ============================================
+
+bool didEnter = false
+bool didExit = false
+string tradeSideForPlot = na 
+string exitType = na 
+
+// 1. GESTION DE L'ENTRÉE
+if not inPosition and not na(pendingEntryPrice)
+    inPosition := true
+    entryPrice := pendingEntryPrice
+    stopLoss := pendingStopLoss
+    takeProfit := pendingTakeProfit
+    positionSide := pendingSide
+    tradeSideForPlot := positionSide
+    didEnter := true
+
+    pendingEntryPrice := na
+    pendingStopLoss := na
+    pendingTakeProfit := na
+    pendingSide := na
+    
+    alertJson = '{"ticker": "{{ticker}}", "type": "SIGNAL", "side": "' + positionSide + 
+         '", "entry": ' + str.tostring(entryPrice) + 
+         ', "stop": ' + str.tostring(stopLoss) + 
+         ', "tp": ' + str.tostring(takeProfit) + 
+         ', "strat": "' + strategyName + '"}'
+    alert(alertJson, alert.freq_once_per_bar_close)
+
+// 2. GESTION DE LA SORTIE
+if inPosition
+    bool hitSL = false
+    bool hitTP = false
+    
+    if positionSide == "BUY"
+        hitSL := low <= stopLoss
+        hitTP := high >= takeProfit
+    else
+        hitSL := high >= stopLoss
+        hitTP := low <= takeProfit
+    
+    if hitSL or hitTP
+        didExit := true
+        exitType := hitTP ? "TP" : "SL"
+        if na(tradeSideForPlot)
+            tradeSideForPlot := positionSide
+            
+        float exitPriceLocal = hitTP ? takeProfit : stopLoss 
+        
+        alertJson = '{"ticker": "{{ticker}}", "type": "CLOSE", "side": "' + 
+             (positionSide == "BUY" ? "SELL" : "BUY") + 
+             '", "entry": ' + str.tostring(exitPriceLocal) + 
+             ', "stop": ' + str.tostring(stopLoss) + 
+             ', "tp": ' + str.tostring(takeProfit) + 
+             ', "strat": "' + strategyName + '"}'
+        alert(alertJson, alert.freq_once_per_bar)
+        
+        inPosition := false
+        entryPrice := na
+        stopLoss := na
+        takeProfit := na
+        positionSide := na
+
+// 3. DÉTECTION DU SIGNAL BROCHETTE
+bodySize = math.abs(close - open)
+wickSizeUp = math.abs(high - math.max(open, close))
+wickSizeDown = math.abs(low - math.min(open, close))
+wickRetracementUp = bodySize > 0 ? (wickSizeUp / bodySize * 100) : 0
+wickRetracementDown = bodySize > 0 ? (wickSizeDown / bodySize * 100) : 0
+
+brochetteBear = (open > close and 
+     open > jaw[jawOffset] and open > teeth[teethOffset] and open > lips[lipsOffset] and 
+     close < jaw[jawOffset] and close < teeth[teethOffset] and close < lips[lipsOffset])
+
+brochetteBull = (open < close and 
+     open < jaw[jawOffset] and open < teeth[teethOffset] and open < lips[lipsOffset] and 
+     close > jaw[jawOffset] and close > teeth[teethOffset] and close > lips[lipsOffset])
+
+isBrochette = brochetteBear or brochetteBull
+
+// VALIDATION DU SIGNAL (AVEC FILTRE)
+// On ignore si : Position en cours OU Sortie ce tour OU Marché Plat (Filtre)
+bool ignoreSignal = inPosition or didExit or isMarketFlat
+bool validSignal = isBrochette and not ignoreSignal
+
+// Enregistrement du setup
+if validSignal
+    pendingEntryPrice := close
+    
+    if brochetteBear
+        pendingSide := "SELL"
+        pendingStopLoss := roundToTick(high)
+        slDistance = pendingStopLoss - pendingEntryPrice
+        pendingTakeProfit := roundToTick(pendingEntryPrice - (riskReward * slDistance))
+    else
+        pendingSide := "BUY"
+        pendingStopLoss := roundToTick(low)
+        slDistance = pendingEntryPrice - pendingStopLoss
+        pendingTakeProfit := roundToTick(pendingEntryPrice + (riskReward * slDistance))
+
+    alertJson = '{"ticker": "{{ticker}}", "type": "SETUP", "side": "' + pendingSide + 
+         '", "entry": ' + str.tostring(pendingEntryPrice) + 
+         ', "stop": ' + str.tostring(pendingStopLoss) + 
+         ', "tp": ' + str.tostring(pendingTakeProfit) + 
+         ', "strat": "' + strategyName + '"}'
+    alert(alertJson, alert.freq_once_per_bar_close)
+else
+    if not didEnter
+        pendingEntryPrice := na
+        pendingStopLoss := na
+        pendingTakeProfit := na
+        pendingSide := na
+
+// ============================================
+// VISUALISATION
+// ============================================
+
+// 1. Brochettes
+plotchar(validSignal and brochetteBear, char="🍢", location=location.abovebar, color=color.yellow, size=size.tiny, title="Valid Bear")
+plotchar(validSignal and brochetteBull, char="🍢", location=location.belowbar, color=color.yellow, size=size.tiny, title="Valid Bull")
+
+// Ignored (Blanc = Technique, Gris = Filtré par Range)
+// Si c'est ignoré UNIQUEMENT à cause du filtre de range, on peut mettre une couleur différente (ex: gris foncé)
+// Ici je laisse en blanc pour simplifier, mais tu verras l'Alligator gris.
+plotchar(isBrochette and ignoreSignal and brochetteBear, char="🍢", location=location.abovebar, color=color.white, size=size.tiny, title="Ignored Bear")
+plotchar(isBrochette and ignoreSignal and brochetteBull, char="🍢", location=location.belowbar, color=color.white, size=size.tiny, title="Ignored Bull")
+
+// 2. Entrées
+plotshape(didEnter and tradeSideForPlot == "BUY", style=shape.circle, location=location.belowbar, color=color.green, size=size.tiny, title="Entry Buy")
+plotshape(didEnter and tradeSideForPlot == "SELL", style=shape.circle, location=location.abovebar, color=color.red, size=size.tiny, title="Entry Sell")
+
+// 3. Sorties
+plotshape(didExit and tradeSideForPlot == "BUY" and exitType == "SL", style=shape.xcross, location=location.belowbar, color=color.red, size=size.tiny, title="SL Buy")
+plotshape(didExit and tradeSideForPlot == "BUY" and exitType == "TP", style=shape.xcross, location=location.abovebar, color=color.green, size=size.tiny, title="TP Buy")
+plotshape(didExit and tradeSideForPlot == "SELL" and exitType == "SL", style=shape.xcross, location=location.abovebar, color=color.red, size=size.tiny, title="SL Sell")
+plotshape(didExit and tradeSideForPlot == "SELL" and exitType == "TP", style=shape.xcross, location=location.belowbar, color=color.green, size=size.tiny, title="TP Sell")
+
+// 4. Lignes
+if inPosition
+    if not na(entryLine)
+        line.delete(entryLine)
+    if not na(slLine)
+        line.delete(slLine)
+    if not na(tpLine)
+        line.delete(tpLine)
+    
+    entryLine := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue, style=line.style_dotted)
+    slLine := line.new(bar_index, stopLoss, bar_index + 1, stopLoss, color=color.red, style=line.style_dotted)
+    tpLine := line.new(bar_index, takeProfit, bar_index + 1, takeProfit, color=color.green, style=line.style_dotted)
+else
+    if not na(entryLine)
+        line.delete(entryLine)
+        entryLine := na
+    if not na(slLine)
+        line.delete(slLine)
+        slLine := na
+    if not na(tpLine)
+        line.delete(tpLine)
+        tpLine := na
+
+// Coloration des bougies : Jaune si signal, Gris si brochette filtrée par range, Blanc si brochette ignorée pour autre raison
+color barCol = na
+if validSignal
+    barCol := color.yellow
+else if isBrochette
+    if isMarketFlat
+        barCol := color.gray // Indique visuellement que c'est le filtre qui a bloqué
+    else
+        barCol := color.white
+barcolor(barCol)
