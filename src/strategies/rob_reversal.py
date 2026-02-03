@@ -22,7 +22,8 @@ class RobReversal(Strategy):
     
     default_params = {
         "ema_length": 8,
-        "take_profit": 35.0,  # Points
+        "take_profit": 35.0,  # Points fixes
+        "risk_reward_ratio": 2.0,  # RR ratio pour calcul TP
         "max_stop_loss": 35.0, # Points
         "trigger_bars": 1,    # Bars to trigger entry
         "tick_size": 0.25,    # Default tick size (MNQ/MES) - adjusted via params
@@ -33,6 +34,7 @@ class RobReversal(Strategy):
     param_ranges = {
         "ema_length": [5, 8, 10, 13, 20],
         "take_profit": [20.0, 25.0, 30.0, 35.0, 40.0, 50.0],
+        "risk_reward_ratio": [1.0, 1.5, 2.0, 2.5, 3.0],
         "max_stop_loss": [20.0, 25.0, 30.0, 35.0, 40.0, 50.0],
         "trigger_bars": [1, 2, 3],
         # "block_new_signals": [True, False], # Removed to prevent overriding default True
@@ -460,7 +462,13 @@ class RobReversal(Strategy):
                          actual_sl_price = pending_long_entry - p['max_stop_loss']
                     
                     pending_long_sl = actual_sl_price
-                    pending_long_tp = pending_long_entry + p['take_profit']
+                    
+                    # TP intelligent: minimum entre RR et points fixes
+                    sl_distance = pending_long_entry - pending_long_sl
+                    tp_based_on_rr = pending_long_entry + (sl_distance * p['risk_reward_ratio'])
+                    tp_based_on_points = pending_long_entry + p['take_profit']
+                    pending_long_tp = min(tp_based_on_rr, tp_based_on_points)
+                    
                     long_setup_idx = i
                     
                 if np_short_setup[i]:
@@ -473,7 +481,13 @@ class RobReversal(Strategy):
                         actual_sl_price = pending_short_entry + p['max_stop_loss']
                         
                     pending_short_sl = actual_sl_price
-                    pending_short_tp = pending_short_entry - p['take_profit']
+                    
+                    # TP intelligent: maximum entre RR et points fixes (car short = prix baisse)
+                    sl_distance = pending_short_sl - pending_short_entry
+                    tp_based_on_rr = pending_short_entry - (sl_distance * p['risk_reward_ratio'])
+                    tp_based_on_points = pending_short_entry - p['take_profit']
+                    pending_short_tp = max(tp_based_on_rr, tp_based_on_points)
+                    
                     short_setup_idx = i
                 
         # Assign modified numpy array back to Series

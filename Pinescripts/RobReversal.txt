@@ -2,7 +2,7 @@
 // © Antoine - Indicateur Rob Reversal 15min
 
 //@version=6
-indicator("Rob Reversal 15min", overlay=true, max_labels_count=500, max_lines_count=500)
+indicator("Rob Reversal Toini", overlay=true, max_labels_count=500, max_lines_count=500)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // INPUTS - PARAMÈTRES CONFIGURABLES
@@ -13,7 +13,8 @@ emaLength = input.int(8, "Période EMA", minval=1, group="Filtre EMA")
 emaColor = input.color(color.orange, "Couleur EMA", group="Filtre EMA")
 
 // Paramètres de la stratégie
-takeProfit = input.float(35, "Take Profit (points)", minval=1, group="Stratégie")
+takeProfit = input.float(35, "Take Profit (points fixes)", minval=1, group="Stratégie", tooltip="TP en nombre de points fixes")
+riskRewardRatio = input.float(2.0, "Risk/Reward Ratio", minval=0.1, step=0.1, group="Stratégie", tooltip="RR souhaité. Le TP sera défini au minimum entre RR et points fixes")
 maxStopLoss = input.float(35, "Stop Loss Maximum (points)", minval=1, group="Stratégie")
 triggerBars = input.int(1, "Bougies pour déclencher", minval=1, maxval=10, group="Stratégie", tooltip="Nombre de bougies après le setup pour déclencher l'entrée")
 blockNewSignals = input.bool(false, "Bloquer signaux si trade en cours", group="Stratégie", tooltip="Si activé, n'affiche pas de nouveaux signaux tant que le TP ou SL n'est pas atteint")
@@ -66,18 +67,46 @@ var float activeSL = na
 var float activeTP = na
 var bool isLongTrade = false
 
+// Variables pour les alertes de close
+var bool justClosedTP = false
+var bool justClosedSL = false
+var float priceAtClose = na
+var string sideAtClose = ""
+
 // Vérifier si le trade en cours a atteint TP ou SL
 if tradeInProgress
     if isLongTrade
         // Long : TP atteint si high >= TP, SL atteint si low <= SL
-        if high >= activeTP or low <= activeSL
+        if high >= activeTP
+            justClosedTP := true
+            priceAtClose := activeTP
+            sideAtClose := "SELL"
+            tradeInProgress := false
+            activeEntryPrice := na
+            activeSL := na
+            activeTP := na
+        else if low <= activeSL
+            justClosedSL := true
+            priceAtClose := activeSL
+            sideAtClose := "SELL"
             tradeInProgress := false
             activeEntryPrice := na
             activeSL := na
             activeTP := na
     else
         // Short : TP atteint si low <= TP, SL atteint si high >= SL
-        if low <= activeTP or high >= activeSL
+        if low <= activeTP
+            justClosedTP := true
+            priceAtClose := activeTP
+            sideAtClose := "BUY"
+            tradeInProgress := false
+            activeEntryPrice := na
+            activeSL := na
+            activeTP := na
+        else if high >= activeSL
+            justClosedSL := true
+            priceAtClose := activeSL
+            sideAtClose := "BUY"
             tradeInProgress := false
             activeEntryPrice := na
             activeSL := na
@@ -150,7 +179,13 @@ if longSetup
     // Stop Loss : bas de Barre B, sauf si > maxStopLoss points
     rawSL = pendingLongEntry - barB_low
     pendingLongSL := rawSL > maxStopLoss ? pendingLongEntry - maxStopLoss : barB_low
-    pendingLongTP := pendingLongEntry + takeProfit
+    
+    // Calcul du TP intelligent : minimum entre RR et points fixes
+    slDistance = pendingLongEntry - pendingLongSL
+    tpBasedOnRR = pendingLongEntry + (slDistance * riskRewardRatio)
+    tpBasedOnPoints = pendingLongEntry + takeProfit
+    pendingLongTP := math.min(tpBasedOnRR, tpBasedOnPoints)
+    
     pendingLongOrder := true
     longSetupBarIndex := bar_index
 
@@ -160,7 +195,13 @@ if shortSetup
     // Stop Loss : haut de Barre B, sauf si > maxStopLoss points
     rawSL = barB_high - pendingShortEntry
     pendingShortSL := rawSL > maxStopLoss ? pendingShortEntry + maxStopLoss : barB_high
-    pendingShortTP := pendingShortEntry - takeProfit
+    
+    // Calcul du TP intelligent : maximum entre RR et points fixes (car short = prix baisse)
+    slDistance = pendingShortSL - pendingShortEntry
+    tpBasedOnRR = pendingShortEntry - (slDistance * riskRewardRatio)
+    tpBasedOnPoints = pendingShortEntry - takeProfit
+    pendingShortTP := math.max(tpBasedOnRR, tpBasedOnPoints)
+    
     pendingShortOrder := true
     shortSetupBarIndex := bar_index
 
@@ -232,6 +273,15 @@ plotshape(showTradeSignals and shortTriggered, title="Entrée SHORT",
           style=shape.labeldown, location=location.abovebar, 
           color=color.red, size=size.tiny, text="SELL", textcolor=color.white)
 
+// Marqueurs pour les closes (croix sur le prix de clôture)
+plotshape(showTradeSignals and justClosedTP, title="TP Atteint", 
+          style=shape.xcross, location=location.absolute, 
+          color=color.green, size=size.tiny)
+
+plotshape(showTradeSignals and justClosedSL, title="SL Atteint", 
+          style=shape.xcross, location=location.absolute, 
+          color=color.red, size=size.tiny)
+
 // ══════════════════════════════════════════════════════════════════════════════
 // LIGNES DE NIVEAUX DU TRADE ACTIF
 // ══════════════════════════════════════════════════════════════════════════════
@@ -287,20 +337,22 @@ formatTimeframe() =>
 
 tfFormatted = formatTimeframe()
 
-// Alertes pour les SETUPS
-if longSetup
-    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SETUP","side":"BUY","entry":"' + formatPrice(pendingLongEntry) + '","stop":"' + formatPrice(pendingLongSL) + '","tp":"' + formatPrice(pendingLongTP) + '","strat":"RobReversal", "timeframe":"' + tfFormatted + '"}'
-    alert(alertMsg, alert.freq_once_per_bar_close)
-
-if shortSetup
-    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SETUP","side":"SELL","entry":"' + formatPrice(pendingShortEntry) + '","stop":"' + formatPrice(pendingShortSL) + '","tp":"' + formatPrice(pendingShortTP) + '","strat":"RobReversal", "timeframe":"' + tfFormatted + '"}'
-    alert(alertMsg, alert.freq_once_per_bar_close)
-
 // Alertes pour les SIGNAUX (entrées déclenchées)
 if longTriggered
-    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":"' + formatPrice(activeEntryPrice) + '","stop":"' + formatPrice(activeSL) + '","tp":"' + formatPrice(activeTP) + '","strat":"RobReversal", "timeframe":"' + tfFormatted + '"}'
+    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":' + formatPrice(activeEntryPrice) + ',"stop":' + formatPrice(activeSL) + ',"tp":' + formatPrice(activeTP) + ',"strat":"RobReversal-' + syminfo.ticker + '-' + tfFormatted + '","timeframe":"' + tfFormatted + '"}'
     alert(alertMsg, alert.freq_once_per_bar)
 
 if shortTriggered
-    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":"' + formatPrice(activeEntryPrice) + '","stop":"' + formatPrice(activeSL) + '","tp":"' + formatPrice(activeTP) + '","strat":"RobReversal", "timeframe":"' + tfFormatted + '"}'
+    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":' + formatPrice(activeEntryPrice) + ',"stop":' + formatPrice(activeSL) + ',"tp":' + formatPrice(activeTP) + ',"strat":"RobReversal-' + syminfo.ticker + '-' + tfFormatted + '","timeframe":"' + tfFormatted + '"}'
     alert(alertMsg, alert.freq_once_per_bar)
+
+// Alertes pour les CLOSES (TP ou SL atteints)
+if justClosedTP
+    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + sideAtClose + '","entry":' + formatPrice(priceAtClose) + ',"strat":"RobReversal-' + syminfo.ticker + '-' + tfFormatted + '","timeframe":"' + tfFormatted + '"}'
+    alert(alertMsg, alert.freq_once_per_bar)
+    justClosedTP := false
+
+if justClosedSL
+    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + sideAtClose + '","entry":' + formatPrice(priceAtClose) + ',"strat":"RobReversal-' + syminfo.ticker + '-' + tfFormatted + '","timeframe":"' + tfFormatted + '"}'
+    alert(alertMsg, alert.freq_once_per_bar)
+    justClosedSL := false

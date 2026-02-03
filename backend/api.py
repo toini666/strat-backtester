@@ -81,17 +81,24 @@ class Trade(BaseModel):
 
 def get_session(dt_str: str) -> str:
     # Assuming dt_str is ISO format "YYYY-MM-DD HH:MM:SS"
+    # Convert to Europe/Brussels timezone for session determination
     try:
         dt = pd.to_datetime(dt_str)
-        # Using simple hour check (Timezone assumed UTC or Local as per data)
-        # User defined sessions (assuming 24h format):
+        
+        # Convert to Brussels timezone for consistent session categorization
+        if dt.tzinfo is None:
+            # Assume naive timestamps are UTC (common for market data)
+            dt = dt.tz_localize('UTC')
+        dt_brussels = dt.tz_convert('Europe/Brussels')
+        
+        # User defined sessions (Brussels time, 24h format):
         # Asia: 00:00 - 08:59
         # UK: 09:00 - 15:29
         # US: 15:30 - 22:00
         # Outside: 22:01 - 23:59
         
-        h = dt.hour
-        m = dt.minute
+        h = dt_brussels.hour
+        m = dt_brussels.minute
         time_val = h * 60 + m
         
         # Asia: 0 -> 8:59 (0 -> 539)
@@ -103,11 +110,6 @@ def get_session(dt_str: str) -> str:
             return "UK"
             
         # US: 15:30 -> 22:00 (930 -> 1320)
-        # Logic says 22:00 is IN US session? "15h30 à 22h".
-        # Usually implies up to 22:00:00 or end of 22:00?
-        # Let's assume inclusive of 22:00 (1320) or up to 22:00 exclusive?
-        # User said "exclude trades between 22h and midnight".
-        # So US ends at 22:00.
         if 930 <= time_val <= 1320:
             return "US"
             
