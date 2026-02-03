@@ -1,0 +1,608 @@
+//@version=6
+indicator("Delta-div", shorttitle="Delta-Div", overlay=true, max_lines_count=500)
+
+// ============================================
+// PARAMÈTRES INPUT
+// ============================================
+
+// --- 4Kings Oscillator Core ---
+simple int    mL     = input.int(5,   "Hyper Wave Length",        group="4KINGS OSCILLATOR", minval=1, maxval=21)
+simple string sT     = input.string("SMA", "Signal Type",         group="4KINGS OSCILLATOR", options=["SMA", "EMA"])
+simple int    sL     = input.int(3,   "Signal Length",            group="4KINGS OSCILLATOR", minval=2, maxval=10)
+simple int    dvT    = input.int(20,  "Divergence Sensibility",   group="4KINGS OSCILLATOR", minval=20, maxval=40, tooltip="Sensibility of divergence detection (higher = less sensitive)")
+
+simple int    mfL    = input.int(35,  "Money Flow Length",        group="SMART MONEY FLOW", minval=10, maxval=55)
+simple int    mfS    = input.int(6,   "Money Flow Smooth",        group="SMART MONEY FLOW", minval=2, maxval=10)
+
+simple int    rsF    = input.int(4,   "Reversal Factor",          group="REVERSAL", options=[1,2,3,4,5,6,7,8,9,10])
+
+// --- Strategy Settings ---
+simple int    slLookback       = input.int(5, "Stop Loss Lookback",     group="STRATEGY", minval=1, maxval=50)
+simple float  tpRR             = input.float(2.0, "Take Profit RR",     group="STRATEGY", minval=0.5, maxval=10, step=0.5)
+simple float  tpPercent        = input.float(50, "Take Profit %",       group="STRATEGY", minval=1, maxval=100)
+simple int    maxBarsSinceCircle = input.int(15, "Max Bars Since Circle", group="STRATEGY", minval=1, maxval=50, tooltip="Maximum number of bars between circle and divergence confirmation")
+
+// --- Visualisation ---
+simple color  longColor  = input.color(#089981, "Long Color",     group="COLORS")
+simple color  shortColor = input.color(#f23645, "Short Color",    group="COLORS")
+simple color  tpColor    = input.color(#51B155, "TP Color",       group="COLORS")
+simple color  slColor    = input.color(#f23645, "SL Color",       group="COLORS")
+
+// ============================================
+// VARIABLES D'ÉTAT
+// ============================================
+
+// 4Kings Oscillator core types
+type OscData
+    float sig
+    float sgD
+    
+type DivData
+    int   n
+    float src
+    float p
+    
+type MFIData
+    float mfi
+    color mfc
+    float blMFI
+    float brMFI
+    float[] blT
+    float[] brT
+
+var OscData osc = OscData.new(na, na)
+var DivData div = DivData.new(na, na, na)
+var MFIData mf = MFIData.new(na, na, na, na, array.new<float>(1, na), array.new<float>(1, na))
+
+// Strategy state variables
+var bool inPosition = false
+var bool isLong = false
+var float entryPrice = na
+var float stopLoss = na
+var float takeProfit = na
+var int entryBar = na
+var bool tpPartialHit = false
+
+// Setup tracking
+var bool circleDetected = false
+var bool circleLong = false
+var int circleBarIndex = na
+var bool divDetected = false
+var bool divLong = false
+var bool setupReady = false
+var bool setupLong = false
+var bool deltaHasBeenOn = false
+
+// Delta tracking
+var bool deltaLongPrev = false
+var bool deltaShortPrev = false
+
+// ============================================
+// FONCTIONS UTILITAIRES
+// ============================================
+
+roundToTick(float price) =>
+    math.round(price / syminfo.mintick) * syminfo.mintick
+
+getTimeframe() =>
+    string tf = timeframe.period
+    string result = switch
+        tf == "1"  => "M1"
+        tf == "2"  => "M2"
+        tf == "3"  => "M3"
+        tf == "4"  => "M4"
+        tf == "5"  => "M5"
+        tf == "10" => "M10"
+        tf == "15" => "M15"
+        tf == "30" => "M30"
+        tf == "45" => "M45"
+        tf == "60" => "H1"
+        tf == "120" => "H2"
+        tf == "180" => "H3"
+        tf == "240" => "H4"
+        tf == "360" => "H6"
+        tf == "480" => "H8"
+        tf == "720" => "H12"
+        tf == "D"  => "D1"
+        tf == "W"  => "W1"
+        tf == "M"  => "MO1"
+        => tf
+    result
+
+method st(simple string src, float oscVal, simple int len) =>
+    float o = switch src
+        "SMA" => ta.sma(oscVal, len)
+        "EMA" => ta.ema(oscVal, len)
+    o
+
+// ============================================
+// 4KINGS OSCILLATOR CORE LOGIC
+// ============================================
+
+// Calculate oscillator
+calcOscillator() =>
+    float hi = ta.highest(mL)
+    float lo = ta.lowest(mL)
+    float av = ta.sma(hl2, mL)
+    
+    osc.sig := ta.ema(ta.linreg((close - math.avg(hi, lo, av)) / (hi - lo) * 100, mL, 0), sL)
+    osc.sgD := sT.st(osc.sig, 2)
+
+// Calculate MFI (from 4Kings original)
+calcMFI() =>
+    mf.mfi := ta.sma(ta.mfi(hl2, mfL) - 50, mfS)
+
+    mf.mfc := mf.mfi > 0 ? color.rgb(233, 30, 99) : color.rgb(8, 153, 129)
+
+    bL = mf.mfi - 10
+    bR = mf.mfi + 10
+
+    mf.blMFI := mf.mfi > 0 and mf.mfi > mf.blT.avg() ? bL : 0
+    mf.brMFI := mf.mfi < 0 and mf.mfi < mf.brT.avg() ? bR : 0
+
+// Update MFI tracking arrays (from 4Kings original mfT function)
+updateMFITracking() =>
+    if mf.mfi > 0
+        if mf.brT.size() > 1
+            mf.brT.pop()
+        if mf.blT.size() > mfL
+            mf.blT.pop()
+        if mf.mfi > mf.blT.avg()
+            mf.blT.unshift(mf.mfi)
+        else
+            mf.blT.unshift((mf[mfL]).mfi > 0 ? (mf[mfL]).mfi : mf.mfi)
+
+    if mf.mfi < 0
+        if mf.blT.size() > 1
+            mf.blT.pop()
+        if mf.brT.size() > mfL
+            mf.brT.pop()
+        if mf.mfi < mf.brT.avg()
+            mf.brT.unshift(mf.mfi)
+        else
+            mf.brT.unshift((mf[mfL]).mfi < 0 ? (mf[mfL]).mfi : mf.mfi)
+
+// Detect reversal signals (circles)
+detectReversal() =>
+    vMA = ta.sma(volume, 7)
+    rsi = ta.rsi(vMA, 7) - 50
+    
+    tMj = volume > vMA * (rsF != 10 ? 1 + (rsF / 10) : 2)
+    tMn = volume > vMA * (rsF != 10 ? 0 + (rsF / 10) : 2) and not tMj
+    
+    mjBR = tMj and osc.sig > rsF and mf.mfi > mf.blT.avg()
+    mjBL = tMj and osc.sig < -rsF and mf.mfi < mf.brT.avg()
+    
+    mnBR = tMn and osc.sig > 20 and osc.sig > osc.sgD and rsi > 20
+    mnBL = tMn and osc.sig < -20 and osc.sig < osc.sgD and rsi < -20
+    
+    [mnBL, mnBR, mjBL, mjBR]
+
+// Detect divergences
+detectDivergence() =>
+    bool divBullish = false
+    bool divBearish = false
+    
+    // Extract ta.* calls for consistency (no warnings)
+    bool crossUnder = ta.crossunder(osc.sig, osc.sgD)
+    bool crossOver = ta.crossover(osc.sig, osc.sgD)
+    
+    // Safety check: need at least 1 bar of history
+    if bar_index < 1
+        [divBullish, divBearish]
+    else
+        // Safe to access historical data
+        float oscSig1 = (osc[1]).sig
+        float oscSgD1 = (osc[1]).sgD
+        
+        mx = math.max(osc.sig, osc.sgD, oscSig1, oscSgD1)
+        mn = math.min(osc.sig, osc.sgD, oscSig1, oscSgD1)
+        
+        mxid = mx == oscSig1 or mx == oscSgD1 ? 1 : 0
+        mnid = mn == oscSig1 or mn == oscSgD1 ? 1 : 0
+        
+        if osc.sig > dvT and crossUnder
+            if na(div.src)
+                div.n := bar_index - mxid
+                div.src := math.max(open[mxid], close[mxid])
+                div.p := mx
+            else
+                if math.max(open[mxid], close[mxid]) > div.src and not((osc[mxid]).sig > div.p)
+                    divBearish := true
+                    div.n := na
+                    div.src := na
+                    div.p := na
+                else
+                    div.n := bar_index - mxid
+                    div.src := math.max(open[mxid], close[mxid])
+                    div.p := mx
+        
+        if osc.sig < -dvT and crossOver
+            if na(div.src)
+                div.n := bar_index - mnid
+                div.src := math.min(open[mnid], close[mnid])
+                div.p := mn
+            else
+                if math.min(open[mnid], close[mnid]) < div.src and not((osc[mnid]).sig < div.p)
+                    divBullish := true
+                    div.n := na
+                    div.src := na
+                    div.p := na
+                else
+                    div.n := bar_index - mnid
+                    div.src := math.min(open[mnid], close[mnid])
+                    div.p := mn
+        
+        [divBullish, divBearish]
+
+// ============================================
+// STRATEGY LOGIC
+// ============================================
+
+// Calculate oscillator and indicators
+calcOscillator()
+calcMFI()
+updateMFITracking()
+
+// Detect signals
+[circleBullish, circleBearish, mjBullish, mjBearish] = detectReversal()
+[divBullish, divBearish] = detectDivergence()
+
+// Delta states (using mf not mfi)
+bool deltaLongOn = osc.sig > 0 and mf.mfi > 0
+bool deltaShortOn = osc.sig < 0 and mf.mfi < 0
+
+// Track circle detection (only if no setup ready and not in position)
+// Use minor circles (mnBL/mnBR) for our strategy
+if circleBullish and not inPosition and not setupReady
+    circleDetected := true
+    circleLong := true
+    circleBarIndex := bar_index
+    
+if circleBearish and not inPosition and not setupReady
+    circleDetected := true
+    circleLong := false
+    circleBarIndex := bar_index
+
+// Track divergence after circle
+// Check that circle is not too old (max X bars since circle)
+if circleDetected and divBullish and circleLong and not inPosition
+    int barsSinceCircle = bar_index - circleBarIndex
+    if barsSinceCircle <= maxBarsSinceCircle
+        divDetected := true
+        divLong := true
+        setupReady := true
+        setupLong := true
+        deltaHasBeenOn := false  // Reset tracking
+    
+if circleDetected and divBearish and not circleLong and not inPosition
+    int barsSinceCircle = bar_index - circleBarIndex
+    if barsSinceCircle <= maxBarsSinceCircle
+        divDetected := true
+        divLong := false
+        setupReady := true
+        setupLong := false
+        deltaHasBeenOn := false  // Reset tracking
+
+// Continuous tracking: mark deltas as "seen" if they turn ON while setup is ready
+// IMPORTANT: Delta logic is INVERTED!
+// - Delta SHORT ON (osc < 0, mfi < 0) = green zone at bottom = LOOKING FOR LONG
+// - Delta LONG ON (osc > 0, mfi > 0) = green zone at top = LOOKING FOR SHORT
+if setupReady and setupLong and not inPosition
+    if deltaShortOn
+        // If delta relights after being seen, invalidate the setup
+        if deltaHasBeenOn and not deltaShortPrev
+            // Delta is relighting - reset setup
+            setupReady := false
+            circleDetected := false
+            circleBarIndex := na
+            divDetected := false
+            deltaHasBeenOn := false
+            // Reset divergence tracking
+            div.n := na
+            div.src := na
+            div.p := na
+        else
+            deltaHasBeenOn := true
+
+if setupReady and not setupLong and not inPosition
+    if deltaLongOn
+        // If delta relights after being seen, invalidate the setup
+        if deltaHasBeenOn and not deltaLongPrev
+            // Delta is relighting - reset setup
+            setupReady := false
+            circleDetected := false
+            circleBarIndex := na
+            divDetected := false
+            deltaHasBeenOn := false
+            // Reset divergence tracking
+            div.n := na
+            div.src := na
+            div.p := na
+        else
+            deltaHasBeenOn := true
+
+// Entry logic: delta extinction after setup
+bool enterLong = false
+bool enterShort = false
+
+if setupReady and setupLong and not inPosition and deltaHasBeenOn
+    // For LONG: wait for SHORT delta to turn OFF
+    if deltaShortPrev and not deltaShortOn
+        enterLong := true
+        
+if setupReady and not setupLong and not inPosition and deltaHasBeenOn
+    // For SHORT: wait for LONG delta to turn OFF
+    if deltaLongPrev and not deltaLongOn
+        enterShort := true
+
+// Pre-calculate stop loss levels (extract ta.* calls for consistency)
+float lowestLow = ta.lowest(low, slLookback)
+float highestHigh = ta.highest(high, slLookback)
+
+// Entry execution
+if enterLong and not inPosition
+    inPosition := true
+    isLong := true
+    entryPrice := roundToTick(close)
+    entryBar := bar_index
+    
+    // Calculate stop loss (low of X bars)
+    stopLoss := roundToTick(lowestLow)
+    
+    // Calculate take profit based on RR
+    float risk = entryPrice - stopLoss
+    takeProfit := roundToTick(entryPrice + (risk * tpRR))
+    
+    tpPartialHit := false
+    
+    // Reset setup tracking
+    circleDetected := false
+    circleBarIndex := na
+    divDetected := false
+    setupReady := false
+    deltaHasBeenOn := false
+    
+    // Send SIGNAL alert
+    alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopLoss) + ',"tp":' + str.tostring(takeProfit) + ',"strat":"4KingsSetup-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+
+if enterShort and not inPosition
+    inPosition := true
+    isLong := false
+    entryPrice := roundToTick(close)
+    entryBar := bar_index
+    
+    // Calculate stop loss (high of X bars)
+    stopLoss := roundToTick(highestHigh)
+    
+    // Calculate take profit based on RR
+    float risk = stopLoss - entryPrice
+    takeProfit := roundToTick(entryPrice - (risk * tpRR))
+    
+    tpPartialHit := false
+    
+    // Reset setup tracking
+    circleDetected := false
+    circleBarIndex := na
+    divDetected := false
+    setupReady := false
+    deltaHasBeenOn := false
+    
+    // Send SIGNAL alert
+    alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopLoss) + ',"tp":' + str.tostring(takeProfit) + ',"strat":"4KingsSetup-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+
+// Exit logic
+bool hitStopLoss = false
+bool hitTakeProfit = false
+bool oppositeSignal = false
+bool hitBreakeven = false
+
+if inPosition and isLong and bar_index > entryBar
+    // Check stop loss (only after entry bar)
+    if low <= stopLoss
+        hitStopLoss := true
+    
+    // Check take profit (only after entry bar)
+    if not tpPartialHit and high >= takeProfit
+        tpPartialHit := true
+        alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopLoss) + ',"tp":' + str.tostring(takeProfit) + ',"strat":"4KingsSetup-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
+    
+    // Check breakeven after TP partial (only after entry bar)
+    if tpPartialHit and low <= entryPrice
+        hitBreakeven := true
+    
+    // Check opposite delta signal (for LONG, watch LONG delta on/off)
+    if deltaLongPrev and not deltaLongOn
+        oppositeSignal := true
+
+if inPosition and not isLong and bar_index > entryBar
+    // Check stop loss (only after entry bar)
+    if high >= stopLoss
+        hitStopLoss := true
+    
+    // Check take profit (only after entry bar)
+    if not tpPartialHit and low <= takeProfit
+        tpPartialHit := true
+        alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopLoss) + ',"tp":' + str.tostring(takeProfit) + ',"strat":"4KingsSetup-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
+    
+    // Check breakeven after TP partial (only after entry bar)
+    if tpPartialHit and high >= entryPrice
+        hitBreakeven := true
+    
+    // Check opposite delta signal (for SHORT, watch SHORT delta on/off)
+    if deltaShortPrev and not deltaShortOn
+        oppositeSignal := true
+
+// Close position
+bool closePosition = hitStopLoss or oppositeSignal or hitBreakeven
+
+// Capture exit state BEFORE resetting variables
+bool exitedLong = false
+bool exitedShort = false
+bool wasStopLoss = false
+bool wasBreakeven = false
+bool wasInProfit = false
+
+if inPosition and closePosition
+    exitedLong := isLong
+    exitedShort := not isLong
+    wasStopLoss := hitStopLoss
+    wasBreakeven := hitBreakeven
+    
+    // Check if trade was in profit at exit
+    if isLong
+        wasInProfit := close > entryPrice
+    else
+        wasInProfit := close < entryPrice
+    
+    alert('{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + (isLong ? "BUY" : "SELL") + '","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopLoss) + ',"tp":' + str.tostring(takeProfit) + ',"strat":"4KingsSetup-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
+    
+    inPosition := false
+    isLong := false
+    entryPrice := na
+    stopLoss := na
+    takeProfit := na
+    entryBar := na
+    tpPartialHit := false
+    
+    // CRITICAL: Reset setup tracking after exit to prevent re-entry with same setup
+    circleDetected := false
+    circleBarIndex := na
+    divDetected := false
+    setupReady := false
+    deltaHasBeenOn := false
+    
+    // CRITICAL: Reset divergence tracking variables
+    div.n := na
+    div.src := na
+    div.p := na
+
+// Update delta previous states
+deltaLongPrev := deltaLongOn
+deltaShortPrev := deltaShortOn
+
+// ============================================
+// VISUALISATION
+// ============================================
+
+// Entry markers (small circles only)
+plotshape(enterLong ? low : na, "Entry Long", shape.circle, location.belowbar, longColor, size=size.tiny)
+plotshape(enterShort ? high : na, "Entry Short", shape.circle, location.abovebar, shortColor, size=size.tiny)
+
+// Exit markers (small crosses)
+// TP Partial - use captured state
+plotshape(tpPartialHit and not tpPartialHit[1] and (exitedLong or (isLong and inPosition)) ? high : na, 
+     "TP Partial Long", shape.xcross, location.abovebar, tpColor, size=size.tiny)
+plotshape(tpPartialHit and not tpPartialHit[1] and (exitedShort or (not isLong and inPosition)) ? low : na, 
+     "TP Partial Short", shape.xcross, location.belowbar, tpColor, size=size.tiny)
+
+// Stop Loss - RED
+plotshape(exitedLong and wasStopLoss ? low : na, 
+     "SL Long", shape.xcross, location.belowbar, slColor, size=size.tiny)
+plotshape(exitedShort and wasStopLoss ? high : na, 
+     "SL Short", shape.xcross, location.abovebar, slColor, size=size.tiny)
+
+// Breakeven - ORANGE
+plotshape(exitedLong and wasBreakeven ? high : na, 
+     "Breakeven Long", shape.xcross, location.abovebar, color.orange, size=size.tiny)
+plotshape(exitedShort and wasBreakeven ? low : na, 
+     "Breakeven Short", shape.xcross, location.belowbar, color.orange, size=size.tiny)
+
+// Opposite signal exit - GREEN if profit, RED if loss
+color exitColorLong = wasInProfit ? tpColor : slColor
+color exitColorShort = wasInProfit ? tpColor : slColor
+
+plotshape(exitedLong and not wasStopLoss and not wasBreakeven ? high : na, 
+     "Exit Long", shape.xcross, location.abovebar, exitColorLong, size=size.tiny)
+plotshape(exitedShort and not wasStopLoss and not wasBreakeven ? low : na, 
+     "Exit Short", shape.xcross, location.belowbar, exitColorShort, size=size.tiny)
+
+// Position lines (dotted)
+var line entryLine = na
+var line slLine = na
+var line tpLine = na
+
+if inPosition and bar_index == entryBar
+    entryLine := line.new(entryBar, entryPrice, bar_index + 1, entryPrice, 
+         color=color.white, style=line.style_dotted, width=1)
+    slLine := line.new(entryBar, stopLoss, bar_index + 1, stopLoss, 
+         color=slColor, style=line.style_dotted, width=1)
+    tpLine := line.new(entryBar, takeProfit, bar_index + 1, takeProfit, 
+         color=tpColor, style=line.style_dotted, width=1)
+
+if inPosition and not na(entryLine)
+    line.set_x2(entryLine, bar_index + 1)
+    line.set_x2(slLine, bar_index + 1)
+    line.set_x2(tpLine, bar_index + 1)
+
+if not inPosition
+    if not na(entryLine)
+        line.delete(entryLine)
+        line.delete(slLine)
+        line.delete(tpLine)
+        entryLine := na
+        slLine := na
+        tpLine := na
+
+// ============================================
+// STATUS TABLE
+// ============================================
+
+var table statusTable = table.new(position.top_right, 2, 8, 
+     border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+
+if barstate.islast
+    // Header
+    table.cell(statusTable, 0, 0, "Condition", text_color=color.white, bgcolor=color.new(color.gray, 70))
+    table.cell(statusTable, 1, 0, "Status", text_color=color.white, bgcolor=color.new(color.gray, 70))
+    
+    // Circle detection
+    string circleStatus = circleDetected ? (circleLong ? "✓ LONG" : "✓ SHORT") : "✗"
+    color circleColor = circleDetected ? (circleLong ? longColor : shortColor) : color.gray
+    table.cell(statusTable, 0, 1, "Circle", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 1, circleStatus, text_color=color.white, bgcolor=color.new(circleColor, 70))
+    
+    // Divergence detection
+    string divStatus = divDetected ? (divLong ? "✓ LONG" : "✓ SHORT") : "✗"
+    color divColor = divDetected ? (divLong ? longColor : shortColor) : color.gray
+    table.cell(statusTable, 0, 2, "Divergence", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 2, divStatus, text_color=color.white, bgcolor=color.new(divColor, 70))
+    
+    // Setup ready
+    string setupStatus = setupReady ? (setupLong ? "✓ LONG" : "✓ SHORT") : "✗"
+    color setupColor = setupReady ? (setupLong ? longColor : shortColor) : color.gray
+    table.cell(statusTable, 0, 3, "Setup Ready", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 3, setupStatus, text_color=color.white, bgcolor=color.new(setupColor, 70))
+    
+    // Delta has been seen
+    string deltaSeenStatus = deltaHasBeenOn ? "✓ YES" : "✗ NO"
+    color deltaSeenColor = deltaHasBeenOn ? color.green : color.gray
+    table.cell(statusTable, 0, 4, "Delta Seen", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 4, deltaSeenStatus, text_color=color.white, bgcolor=color.new(deltaSeenColor, 70))
+    
+    // Delta status (INVERTED LOGIC!)
+    // For LONG: we watch SHORT delta (green zone bottom)
+    // For SHORT: we watch LONG delta (green zone top)
+    string deltaStatus = ""
+    if setupReady and setupLong
+        deltaStatus := deltaShortOn ? "SHORT ON (→LONG)" : "SHORT OFF"
+    else if setupReady and not setupLong
+        deltaStatus := deltaLongOn ? "LONG ON (→SHORT)" : "LONG OFF"
+    else
+        deltaStatus := deltaLongOn ? "LONG ON" : (deltaShortOn ? "SHORT ON" : "OFF")
+    
+    color deltaColor = deltaLongOn or deltaShortOn ? (setupLong ? longColor : shortColor) : color.gray
+    table.cell(statusTable, 0, 5, "Deltas", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 5, deltaStatus, text_color=color.white, bgcolor=color.new(deltaColor, 70))
+    
+    // Position status
+    string posStatus = inPosition ? (isLong ? "LONG" : "SHORT") : "NONE"
+    color posColor = inPosition ? (isLong ? longColor : shortColor) : color.gray
+    table.cell(statusTable, 0, 6, "In Position", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 6, posStatus, text_color=color.white, bgcolor=color.new(posColor, 70))
+    
+    // TP Partial status
+    string tpStatus = tpPartialHit ? "✓ HIT" : "PENDING"
+    color tpStatusColor = tpPartialHit ? tpColor : color.gray
+    table.cell(statusTable, 0, 7, "TP Partial", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 7, tpStatus, text_color=color.white, bgcolor=color.new(tpStatusColor, 70))

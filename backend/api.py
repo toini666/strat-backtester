@@ -1074,6 +1074,8 @@ def generate_session_combinations(sessions: List[str]) -> List[List[str]]:
 def generate_param_values(param: ParameterRangeInput) -> List[Any]:
     """Generate values from a parameter range."""
     if param.param_type == "bool":
+        if param.min_value == param.max_value:
+            return [bool(param.min_value)]
         return [True, False]
     elif param.param_type == "int":
         return list(range(int(param.min_value), int(param.max_value) + 1, int(param.step)))

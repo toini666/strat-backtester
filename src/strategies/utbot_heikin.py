@@ -48,7 +48,7 @@ class UTBotHeikin(Strategy):
     param_ranges = {
         # UTBot Settings
         "key_value": [0.5, 1.0, 1.5, 2.0, 2.5, 3.0],
-        "atr_period": [7, 10, 14, 20],
+        "atr_period": [10, 15, 20], # Standardized to uniform step 5
         "use_heikin_ashi": [True, False],
 
         # EMA Ribbon Settings
@@ -59,8 +59,8 @@ class UTBotHeikin(Strategy):
 
         # RSI Settings
         "rsi_enabled": [True, False],
-        "rsi_length": [10, 14, 20],
-        "rsi_lookback": [3, 5, 7, 10],
+        "rsi_length": [10, 15, 20], # Standardized to uniform step 5
+        "rsi_lookback": [3, 5, 7, 9], # Standardized to uniform step 2
         "rsi_long_level": [30, 35, 40, 45],
         "rsi_short_level": [55, 60, 65, 70],
 
@@ -70,7 +70,7 @@ class UTBotHeikin(Strategy):
         "ema200_lookback_check": [True, False],
 
         # Position Management
-        "stop_loss_lookback": [3, 5, 7, 10],
+        "stop_loss_lookback": [3, 5, 7, 9], # Standardized to uniform step 2
         "tp_partial_ratio": [1.5, 2.0, 2.5, 3.0],
         "tp_partial_pct": [0.3, 0.5, 0.7],
     }

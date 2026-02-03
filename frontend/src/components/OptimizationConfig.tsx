@@ -630,17 +630,23 @@ export function OptimizationConfig({
                                                     {/* Header Row: Name + Toggle + Count */}
                                                     <div className="flex items-center justify-between">
                                                         <div className="flex items-center gap-3">
-                                                            <label className="flex items-center space-x-2 cursor-pointer group">
+                                                            <div
+                                                                className="flex items-center space-x-2 cursor-pointer group"
+                                                                onClick={(e) => {
+                                                                    e.preventDefault();
+                                                                    toggleParam(param.name);
+                                                                }}
+                                                            >
                                                                 <input
                                                                     type="checkbox"
                                                                     checked={param.enabled}
-                                                                    onChange={() => toggleParam(param.name)}
+                                                                    readOnly={true} // prevent manual change, controlled by div click
                                                                     className="sr-only peer"
                                                                 />
                                                                 <div className={`w-10 h-5 rounded-full p-1 transition-all ${param.enabled ? 'bg-purple-600' : 'bg-gray-700'}`}>
                                                                     <div className={`w-3 h-3 bg-white rounded-full shadow-sm transform transition-transform ${param.enabled ? 'translate-x-5' : 'translate-x-0'}`} />
                                                                 </div>
-                                                            </label>
+                                                            </div>
                                                             <span className={`text-sm font-mono font-medium ${param.enabled ? 'text-purple-300' : 'text-gray-400'}`}>
                                                                 {param.name}
                                                             </span>
