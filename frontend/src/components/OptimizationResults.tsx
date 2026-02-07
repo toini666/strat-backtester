@@ -167,7 +167,7 @@ export function OptimizationResults({
                 <div className="glass-panel rounded-xl p-4">
                     <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Best Max DD</div>
                     <div className="text-2xl font-bold font-mono text-purple-400">
-                        {Math.max(...results.map(r => r.max_drawdown)).toFixed(2)}%
+                        {Math.min(...results.map(r => r.max_drawdown)).toFixed(2)}%
                     </div>
                 </div>
             </div>

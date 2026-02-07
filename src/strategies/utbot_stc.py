@@ -279,8 +279,12 @@ class UTBotSTC(Strategy):
         # ===========================================
         # 6. Combined Entry Signals
         # ===========================================
-        long_signal = utbot_long & stc_valid_long
-        short_signal = utbot_short & stc_valid_short
+        # Candle Color Filter
+        green_candle = real_close > real_open
+        red_candle = real_close < real_open
+
+        long_signal = utbot_long & stc_valid_long & green_candle
+        short_signal = utbot_short & stc_valid_short & red_candle
 
         # ===========================================
         # 7. Position Management (Fixed SL/TP)

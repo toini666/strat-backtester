@@ -109,6 +109,8 @@ function App() {
     startDate?: string;
     endDate?: string;
     topstepLiveMode?: boolean;
+    maxDrawdownLimit?: number;
+    minWinRate?: number;
   } | null>(null);
 
   useEffect(() => {
@@ -276,6 +278,8 @@ function App() {
     startDate?: string;
     endDate?: string;
     topstepLiveMode?: boolean;
+    maxDrawdownLimit?: number;
+    minWinRate?: number;
   }) => {
     setOptimizationLoading(true);
     setError('');
@@ -424,7 +428,9 @@ function App() {
       blockMarketOpen: true,
       startDate: run.start_date,
       endDate: run.end_date,
-      topstepLiveMode: liveMode
+      topstepLiveMode: liveMode,
+      maxDrawdownLimit: run.max_drawdown_limit,
+      minWinRate: run.min_win_rate,
     });
 
     setOptimizationResult(null);

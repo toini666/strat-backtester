@@ -34,6 +34,8 @@ interface OptimizationConfigProps {
         startDate?: string;
         endDate?: string;
         topstepLiveMode?: boolean;
+        maxDrawdownLimit?: number;
+        minWinRate?: number;
     }) => void;
     loading: boolean;
     onContractsNeeded?: () => void;
@@ -53,6 +55,8 @@ interface OptimizationConfigProps {
         startDate?: string;
         endDate?: string;
         topstepLiveMode?: boolean;
+        maxDrawdownLimit?: number;
+        minWinRate?: number;
     } | null;
 }
 
@@ -95,6 +99,10 @@ export function OptimizationConfig({
     // Trade filters
     const [maxContracts, setMaxContracts] = useState(50);
     const [blockMarketOpen, setBlockMarketOpen] = useState(true);
+
+    // Result filters
+    const [maxDrawdownLimit, setMaxDrawdownLimit] = useState<number | null>(null);
+    const [minWinRate, setMinWinRate] = useState<number | null>(null);
 
     // Sessions
     const [selectedSessions, setSelectedSessions] = useState<string[]>(['Asia', 'UK', 'US']);
@@ -258,6 +266,8 @@ export function OptimizationConfig({
             setMaxContracts(initialConfig.maxContracts);
             setBlockMarketOpen(initialConfig.blockMarketOpen);
             setSelectedSessions(initialConfig.sessions);
+            setMaxDrawdownLimit(initialConfig.maxDrawdownLimit ?? null);
+            setMinWinRate(initialConfig.minWinRate ?? null);
 
             // Map parameters
             setParamConfigs(prev => prev.map(p => {
@@ -386,9 +396,11 @@ export function OptimizationConfig({
             blockMarketOpen,
             startDate,
             endDate,
-            topstepLiveMode
+            topstepLiveMode,
+            ...(maxDrawdownLimit !== null && { maxDrawdownLimit }),
+            ...(minWinRate !== null && { minWinRate }),
         });
-    }, [selectedStrategy, paramConfigs, ticker, dataSource, selectedContract, manualContractId, interval, days, selectedSessions, initialEquity, riskPerTrade, maxContracts, blockMarketOpen, startDate, endDate, topstepLiveMode, onRunOptimization]);
+    }, [selectedStrategy, paramConfigs, ticker, dataSource, selectedContract, manualContractId, interval, days, selectedSessions, initialEquity, riskPerTrade, maxContracts, blockMarketOpen, startDate, endDate, topstepLiveMode, maxDrawdownLimit, minWinRate, onRunOptimization]);
 
     const canRun = selectedStrategy &&
         selectedSessions.length > 0 &&
@@ -592,6 +604,77 @@ export function OptimizationConfig({
                 <p className="text-xs text-gray-500">
                     {blockMarketOpen && 'Blocks: 0h00-0h05, 9h00-9h05, 15h30-15h35 (Paris time)'}
                 </p>
+            </div>
+
+            {/* Result Filters */}
+            <div className="space-y-3">
+                <label className="text-sm text-gray-400 font-medium">Result Filters</label>
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                        <label className="text-xs text-gray-500">Max Drawdown Limit (%)</label>
+                        <div className="flex items-center gap-2">
+                            <label className="flex items-center cursor-pointer group">
+                                <input
+                                    type="checkbox"
+                                    checked={maxDrawdownLimit !== null}
+                                    onChange={() => setMaxDrawdownLimit(maxDrawdownLimit !== null ? null : 10)}
+                                    className="sr-only peer"
+                                />
+                                <div className="w-5 h-5 border-2 border-gray-600 rounded bg-gray-900 group-hover:border-gray-500 peer-checked:bg-purple-600 peer-checked:border-purple-600 transition-all flex items-center justify-center">
+                                    {maxDrawdownLimit !== null && (
+                                        <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                        </svg>
+                                    )}
+                                </div>
+                            </label>
+                            <input
+                                type="number"
+                                value={maxDrawdownLimit ?? ''}
+                                onChange={(e) => setMaxDrawdownLimit(e.target.value ? parseFloat(e.target.value) : null)}
+                                disabled={maxDrawdownLimit === null}
+                                placeholder="e.g. 10"
+                                min={0}
+                                max={100}
+                                step={0.5}
+                                className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm disabled:opacity-40"
+                            />
+                        </div>
+                        <p className="text-xs text-gray-500">Only keep results with DD below this %</p>
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-xs text-gray-500">Min Win Rate (%)</label>
+                        <div className="flex items-center gap-2">
+                            <label className="flex items-center cursor-pointer group">
+                                <input
+                                    type="checkbox"
+                                    checked={minWinRate !== null}
+                                    onChange={() => setMinWinRate(minWinRate !== null ? null : 50)}
+                                    className="sr-only peer"
+                                />
+                                <div className="w-5 h-5 border-2 border-gray-600 rounded bg-gray-900 group-hover:border-gray-500 peer-checked:bg-purple-600 peer-checked:border-purple-600 transition-all flex items-center justify-center">
+                                    {minWinRate !== null && (
+                                        <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                        </svg>
+                                    )}
+                                </div>
+                            </label>
+                            <input
+                                type="number"
+                                value={minWinRate ?? ''}
+                                onChange={(e) => setMinWinRate(e.target.value ? parseFloat(e.target.value) : null)}
+                                disabled={minWinRate === null}
+                                placeholder="e.g. 50"
+                                min={0}
+                                max={100}
+                                step={1}
+                                className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm disabled:opacity-40"
+                            />
+                        </div>
+                        <p className="text-xs text-gray-500">Only keep results with win rate above this %</p>
+                    </div>
+                </div>
             </div>
 
             {/* Sessions Selection */}

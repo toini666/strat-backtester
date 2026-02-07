@@ -347,23 +347,52 @@ class DeltaDiv(Strategy):
             # DIVERGENCE AFTER CIRCLE -> SETUP READY
             # ----------------------------------------
 
-            # CRITICAL: Match PineScript exactly - reset deltaHasBeenOn to false on divergence
-            # Then delta tracking will set it to true if delta is currently ON
+            # CRITICAL: Match PineScript exactly - Check Delta and MFI immediately on Divergence
             if circle_detected and div_bullish and circle_long and not in_pos:
                 bars_since_circle = i - circle_bar_idx
                 if bars_since_circle <= max_bars_circle:
-                    setup_ready = True
-                    setup_long = True
-                    delta_has_been_on = False  # Reset like PineScript line 276
-                    debug(f"{data.index[i]} | SETUP LONG READY | bars_since_circle={bars_since_circle}")
+                    # LONG setup requires: SHORT delta ON (osc<0, mfi<0) AND MFI negative
+                    delta_ok = curr_delta_short_on
+                    mfi_ok = np_mfi[i] < 0 if not np.isnan(np_mfi[i]) else False
+                    
+                    if delta_ok and mfi_ok:
+                        setup_ready = True
+                        setup_long = True
+                        delta_has_been_on = True  # User change: Delta is already on, mark it as seen
+                        debug(f"{data.index[i]} | SETUP LONG READY | bars_since_circle={bars_since_circle} | Delta ON & MFI OK")
+                    else:
+                        # Conditions not met - cancel setup
+                        circle_detected = False
+                        circle_bar_idx = -1
+                        setup_ready = False
+                        delta_has_been_on = False
+                        div_n = np.nan
+                        div_src = np.nan
+                        div_p = np.nan
+                        debug(f"{data.index[i]} | CANCEL LONG setup | Delta/MFI conditions not met")
                     
             if circle_detected and div_bearish and not circle_long and not in_pos:
                 bars_since_circle = i - circle_bar_idx
                 if bars_since_circle <= max_bars_circle:
-                    setup_ready = True
-                    setup_long = False
-                    delta_has_been_on = False  # Reset like PineScript line 285
-                    debug(f"{data.index[i]} | SETUP SHORT READY | bars_since_circle={bars_since_circle}")
+                    # SHORT setup requires: LONG delta ON (osc>0, mfi>0) AND MFI positive
+                    delta_ok = curr_delta_long_on
+                    mfi_ok = np_mfi[i] > 0 if not np.isnan(np_mfi[i]) else False
+                    
+                    if delta_ok and mfi_ok:
+                        setup_ready = True
+                        setup_long = False
+                        delta_has_been_on = True  # User change: Delta is already on, mark it as seen
+                        debug(f"{data.index[i]} | SETUP SHORT READY | bars_since_circle={bars_since_circle} | Delta ON & MFI OK")
+                    else:
+                        # Conditions not met - cancel setup
+                        circle_detected = False
+                        circle_bar_idx = -1
+                        setup_ready = False
+                        delta_has_been_on = False
+                        div_n = np.nan
+                        div_src = np.nan
+                        div_p = np.nan
+                        debug(f"{data.index[i]} | CANCEL SHORT setup | Delta/MFI conditions not met")
             
             # ----------------------------------------
             # DELTA TRACKING AND INVALIDATION

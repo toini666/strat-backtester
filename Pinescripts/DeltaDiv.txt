@@ -1,5 +1,5 @@
 //@version=6
-indicator("Delta-div", shorttitle="Delta-Div", overlay=true, max_lines_count=500)
+indicator("Delta Div Setup", shorttitle="DDS", overlay=true, max_lines_count=500)
 
 // ============================================
 // PARAMÈTRES INPUT
@@ -266,23 +266,56 @@ if circleBearish and not inPosition and not setupReady
 
 // Track divergence after circle
 // Check that circle is not too old (max X bars since circle)
+// NEW: Also verify deltas are ON and MFI is in correct zone at div confirmation
 if circleDetected and divBullish and circleLong and not inPosition
     int barsSinceCircle = bar_index - circleBarIndex
     if barsSinceCircle <= maxBarsSinceCircle
-        divDetected := true
-        divLong := true
-        setupReady := true
-        setupLong := true
-        deltaHasBeenOn := false  // Reset tracking
+        // LONG setup requires: SHORT delta ON (osc<0, mfi<0) AND MFI negative
+        bool deltaOK = deltaShortOn  // Delta must be lit
+        bool mfiOK = mf.mfi < 0      // MFI must be in green zone (bottom)
+        
+        if deltaOK and mfiOK
+            // Setup is valid
+            divDetected := true
+            divLong := true
+            setupReady := true
+            setupLong := true
+            deltaHasBeenOn := true  // Delta is already on, mark it as seen
+        else
+            // Conditions not met - cancel setup
+            circleDetected := false
+            circleBarIndex := na
+            divDetected := false
+            setupReady := false
+            deltaHasBeenOn := false
+            div.n := na
+            div.src := na
+            div.p := na
     
 if circleDetected and divBearish and not circleLong and not inPosition
     int barsSinceCircle = bar_index - circleBarIndex
     if barsSinceCircle <= maxBarsSinceCircle
-        divDetected := true
-        divLong := false
-        setupReady := true
-        setupLong := false
-        deltaHasBeenOn := false  // Reset tracking
+        // SHORT setup requires: LONG delta ON (osc>0, mfi>0) AND MFI positive
+        bool deltaOK = deltaLongOn   // Delta must be lit
+        bool mfiOK = mf.mfi > 0      // MFI must be in red zone (top)
+        
+        if deltaOK and mfiOK
+            // Setup is valid
+            divDetected := true
+            divLong := false
+            setupReady := true
+            setupLong := false
+            deltaHasBeenOn := true  // Delta is already on, mark it as seen
+        else
+            // Conditions not met - cancel setup
+            circleDetected := false
+            circleBarIndex := na
+            divDetected := false
+            setupReady := false
+            deltaHasBeenOn := false
+            div.n := na
+            div.src := na
+            div.p := na
 
 // Continuous tracking: mark deltas as "seen" if they turn ON while setup is ready
 // IMPORTANT: Delta logic is INVERTED!
@@ -364,7 +397,7 @@ if enterLong and not inPosition
     deltaHasBeenOn := false
     
     // Send SIGNAL alert
-    alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopLoss) + ',"tp":' + str.tostring(takeProfit) + ',"strat":"4KingsSetup-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+    alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopLoss) + ',"strat":"DeltaDiv-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
 
 if enterShort and not inPosition
     inPosition := true
@@ -389,7 +422,7 @@ if enterShort and not inPosition
     deltaHasBeenOn := false
     
     // Send SIGNAL alert
-    alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopLoss) + ',"tp":' + str.tostring(takeProfit) + ',"strat":"4KingsSetup-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+    alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopLoss) + ',"strat":"DeltaDiv-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
 
 // Exit logic
 bool hitStopLoss = false
@@ -405,7 +438,7 @@ if inPosition and isLong and bar_index > entryBar
     // Check take profit (only after entry bar)
     if not tpPartialHit and high >= takeProfit
         tpPartialHit := true
-        alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopLoss) + ',"tp":' + str.tostring(takeProfit) + ',"strat":"4KingsSetup-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
+        alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(takeProfit) + ',"strat":"DeltaDiv-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
     
     // Check breakeven after TP partial (only after entry bar)
     if tpPartialHit and low <= entryPrice
@@ -423,7 +456,7 @@ if inPosition and not isLong and bar_index > entryBar
     // Check take profit (only after entry bar)
     if not tpPartialHit and low <= takeProfit
         tpPartialHit := true
-        alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopLoss) + ',"tp":' + str.tostring(takeProfit) + ',"strat":"4KingsSetup-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
+        alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(takeProfit) + ',"strat":"DeltaDiv-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
     
     // Check breakeven after TP partial (only after entry bar)
     if tpPartialHit and high >= entryPrice
@@ -455,7 +488,7 @@ if inPosition and closePosition
     else
         wasInProfit := close < entryPrice
     
-    alert('{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + (isLong ? "BUY" : "SELL") + '","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopLoss) + ',"tp":' + str.tostring(takeProfit) + ',"strat":"4KingsSetup-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
+    alert('{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + (isLong ? "SELL" : "BUY") + '","entry":' + str.tostring(close) + ',"strat":"DeltaDiv-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
     
     inPosition := false
     isLong := false
@@ -548,7 +581,7 @@ if not inPosition
 // STATUS TABLE
 // ============================================
 
-var table statusTable = table.new(position.top_right, 2, 8, 
+var table statusTable = table.new(position.top_right, 2, 10, 
      border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
 if barstate.islast
@@ -556,29 +589,40 @@ if barstate.islast
     table.cell(statusTable, 0, 0, "Condition", text_color=color.white, bgcolor=color.new(color.gray, 70))
     table.cell(statusTable, 1, 0, "Status", text_color=color.white, bgcolor=color.new(color.gray, 70))
     
+    // Debug values
+    string debugValues = "Osc:" + str.tostring(osc.sig, "#.#") + " MFI:" + str.tostring(mf.mfi, "#.#")
+    table.cell(statusTable, 0, 1, "Debug", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 1, debugValues, text_color=color.white, bgcolor=color.new(color.gray, 80))
+    
+    // MFI Zone
+    string mfiZone = mf.mfi > 0 ? "BEARISH (>0)" : "BULLISH (<0)"
+    color mfiZoneColor = mf.mfi > 0 ? shortColor : longColor
+    table.cell(statusTable, 0, 2, "MFI Zone", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 2, mfiZone, text_color=color.white, bgcolor=color.new(mfiZoneColor, 70))
+    
     // Circle detection
     string circleStatus = circleDetected ? (circleLong ? "✓ LONG" : "✓ SHORT") : "✗"
     color circleColor = circleDetected ? (circleLong ? longColor : shortColor) : color.gray
-    table.cell(statusTable, 0, 1, "Circle", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 1, circleStatus, text_color=color.white, bgcolor=color.new(circleColor, 70))
+    table.cell(statusTable, 0, 3, "Circle", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 3, circleStatus, text_color=color.white, bgcolor=color.new(circleColor, 70))
     
     // Divergence detection
     string divStatus = divDetected ? (divLong ? "✓ LONG" : "✓ SHORT") : "✗"
     color divColor = divDetected ? (divLong ? longColor : shortColor) : color.gray
-    table.cell(statusTable, 0, 2, "Divergence", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 2, divStatus, text_color=color.white, bgcolor=color.new(divColor, 70))
+    table.cell(statusTable, 0, 4, "Divergence", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 4, divStatus, text_color=color.white, bgcolor=color.new(divColor, 70))
     
     // Setup ready
     string setupStatus = setupReady ? (setupLong ? "✓ LONG" : "✓ SHORT") : "✗"
     color setupColor = setupReady ? (setupLong ? longColor : shortColor) : color.gray
-    table.cell(statusTable, 0, 3, "Setup Ready", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 3, setupStatus, text_color=color.white, bgcolor=color.new(setupColor, 70))
+    table.cell(statusTable, 0, 5, "Setup Ready", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 5, setupStatus, text_color=color.white, bgcolor=color.new(setupColor, 70))
     
     // Delta has been seen
     string deltaSeenStatus = deltaHasBeenOn ? "✓ YES" : "✗ NO"
     color deltaSeenColor = deltaHasBeenOn ? color.green : color.gray
-    table.cell(statusTable, 0, 4, "Delta Seen", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 4, deltaSeenStatus, text_color=color.white, bgcolor=color.new(deltaSeenColor, 70))
+    table.cell(statusTable, 0, 6, "Delta Seen", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 6, deltaSeenStatus, text_color=color.white, bgcolor=color.new(deltaSeenColor, 70))
     
     // Delta status (INVERTED LOGIC!)
     // For LONG: we watch SHORT delta (green zone bottom)
@@ -592,17 +636,17 @@ if barstate.islast
         deltaStatus := deltaLongOn ? "LONG ON" : (deltaShortOn ? "SHORT ON" : "OFF")
     
     color deltaColor = deltaLongOn or deltaShortOn ? (setupLong ? longColor : shortColor) : color.gray
-    table.cell(statusTable, 0, 5, "Deltas", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 5, deltaStatus, text_color=color.white, bgcolor=color.new(deltaColor, 70))
+    table.cell(statusTable, 0, 7, "Deltas", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 7, deltaStatus, text_color=color.white, bgcolor=color.new(deltaColor, 70))
     
     // Position status
     string posStatus = inPosition ? (isLong ? "LONG" : "SHORT") : "NONE"
     color posColor = inPosition ? (isLong ? longColor : shortColor) : color.gray
-    table.cell(statusTable, 0, 6, "In Position", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 6, posStatus, text_color=color.white, bgcolor=color.new(posColor, 70))
+    table.cell(statusTable, 0, 8, "In Position", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 8, posStatus, text_color=color.white, bgcolor=color.new(posColor, 70))
     
     // TP Partial status
     string tpStatus = tpPartialHit ? "✓ HIT" : "PENDING"
     color tpStatusColor = tpPartialHit ? tpColor : color.gray
-    table.cell(statusTable, 0, 7, "TP Partial", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 7, tpStatus, text_color=color.white, bgcolor=color.new(tpStatusColor, 70))
+    table.cell(statusTable, 0, 9, "TP Partial", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 9, tpStatus, text_color=color.white, bgcolor=color.new(tpStatusColor, 70))

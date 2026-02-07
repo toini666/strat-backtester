@@ -185,7 +185,9 @@ export const api = {
             block_market_open: request.blockMarketOpen,
             start_date: request.startDate,
             end_date: request.endDate,
-            topstep_live_mode: request.topstepLiveMode
+            topstep_live_mode: request.topstepLiveMode,
+            max_drawdown_limit: request.maxDrawdownLimit,
+            min_win_rate: request.minWinRate
         }, {
             timeout: 600000, // 10 minutes for optimization
         });
@@ -270,6 +272,8 @@ export interface OptimizationRequest {
     startDate?: string;
     endDate?: string;
     topstepLiveMode?: boolean;
+    maxDrawdownLimit?: number;  // Only keep results with max DD below this %
+    minWinRate?: number;        // Only keep results with win rate above this %
 }
 
 export interface OptimizationResultItem {
@@ -327,4 +331,6 @@ export interface OptimizationRunDetail {
     parameters?: ParameterRangeInput[]; // Optional for backward compatibility
     total_combinations: number;
     top_results: OptimizationResultItem[];
+    max_drawdown_limit?: number;
+    min_win_rate?: number;
 }

@@ -17,12 +17,12 @@ stcSlowLength = input.int(50, title="STC Slow Length", group="STC Settings")
 
 // STC Range filters
 stcMinLong = input.float(1, title="STC Min Level for LONG", group="STC Filter")
-stcMaxLong = input.float(75, title="STC Max Level for LONG", group="STC Filter")
-stcMinShort = input.float(25, title="STC Min Level for SHORT", group="STC Filter")
+stcMaxLong = input.float(99, title="STC Max Level for LONG", group="STC Filter")
+stcMinShort = input.float(1, title="STC Min Level for SHORT", group="STC Filter")
 stcMaxShort = input.float(99, title="STC Max Level for SHORT", group="STC Filter")
 
 // --- Position Management ---
-stopTicks = input.int(3, title="Stop Loss (in ticks from signal candle low/high)", group="Position Management")
+stopTicks = input.int(10, title="Stop Loss (in ticks from signal candle low/high)", group="Position Management")
 riskReward = input.float(2.0, title="Risk/Reward Ratio", group="Position Management")
 
 // --- Strategy Name ---
@@ -140,9 +140,13 @@ stcValidForShort = stcValue >= stcMinShort and stcValue <= stcMaxShort and stcFa
 // LOGIQUE DE LA STRATÉGIE
 // ============================================
 
-// Signal conditions
-longSignal = utBotLong and stcValidForLong and not inPosition
-shortSignal = utBotShort and stcValidForShort and not inPosition
+// Condition de couleur de bougie
+bool greenCandle = close > open  // Bougie verte pour LONG
+bool redCandle = close < open    // Bougie rouge pour SHORT
+
+// Signal conditions avec filtre de couleur de bougie
+longSignal = utBotLong and stcValidForLong and not inPosition and greenCandle
+shortSignal = utBotShort and stcValidForShort and not inPosition and redCandle
 
 // Entry immediately at close of signal bar
 if longSignal
@@ -279,15 +283,13 @@ if shortSignal
 if exitByStopLong or exitByStopShort
     string side = positionSide == "LONG" ? "SELL" : "BUY"
     string alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + side + 
-       '","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + 
-       ',"tp":' + str.tostring(stopPrice) + ',"strat":"' + stratFullName + '","timeframe":"' + 
+       '","entry":' + str.tostring(stopPrice) + ',"strat":"' + stratFullName + '","timeframe":"' + 
        tfString + '"}'
     alert(alertMsg, alert.freq_once_per_bar)
 
 if exitByTPLong or exitByTPShort
     string side = positionSide == "LONG" ? "SELL" : "BUY"
     string alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + side + 
-       '","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + 
-       ',"tp":' + str.tostring(tpPrice) + ',"strat":"' + stratFullName + '","timeframe":"' + 
+       '","entry":' + str.tostring(tpPrice) + ',"strat":"' + stratFullName + '","timeframe":"' + 
        tfString + '"}'
     alert(alertMsg, alert.freq_once_per_bar)

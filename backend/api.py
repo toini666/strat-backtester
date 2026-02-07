@@ -1045,6 +1045,10 @@ class OptimizationRequest(BaseModel):
     # Optimization settings
     max_workers: int = Field(default=4, ge=1, le=8)
 
+    # Result filters (optional)
+    max_drawdown_limit: Optional[float] = None  # Only keep results with max DD below this %
+    min_win_rate: Optional[float] = None        # Only keep results with win rate above this %
+
 class OptimizationResultItem(BaseModel):
     """Single optimization result."""
     rank: int
@@ -1698,6 +1702,12 @@ def run_optimization(req: OptimizationRequest):
             errors += len(session_combinations)
             completed += len(session_combinations)
 
+    # Apply optional result filters
+    if req.max_drawdown_limit is not None:
+        all_results = [r for r in all_results if r["max_drawdown"] <= req.max_drawdown_limit]
+    if req.min_win_rate is not None:
+        all_results = [r for r in all_results if r["win_rate"] >= req.min_win_rate]
+
     # Sort by total_return descending and get top 20
     all_results.sort(key=lambda x: x["total_return"], reverse=True)
     top_20 = all_results[:20]
@@ -1736,7 +1746,9 @@ def run_optimization(req: OptimizationRequest):
         "sessions_tested": req.sessions,
         "parameters": [p.dict() for p in req.parameters],
         "total_combinations": total_combinations,
-        "top_results": [r.model_dump() for r in top_results]
+        "top_results": [r.model_dump() for r in top_results],
+        "max_drawdown_limit": req.max_drawdown_limit,
+        "min_win_rate": req.min_win_rate,
     }
     save_optimization_result(history_entry)
 
