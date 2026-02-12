@@ -396,8 +396,8 @@ function App() {
       contractId: run.contract_id,
       interval: run.interval,
       days: run.days,
-      initialEquity: 50000, // Default values since history doesn't store these
-      riskPerTrade: 0.01,
+      initialEquity: run.initial_equity || 50000,
+      riskPerTrade: run.risk_per_trade !== undefined ? run.risk_per_trade : 0.01,
       maxContracts: 50,
       blockMarketOpen: true,
       startDate: run.start_date,
