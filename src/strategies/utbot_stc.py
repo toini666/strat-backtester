@@ -43,7 +43,10 @@ class UTBotSTC(Strategy):
 
         # Position Management
         "stop_ticks": 3,
-        "risk_reward": 2.0,
+        "partial_rr": 2.0,        # R:R for partial TP level
+        "partial_pct": 0.5,       # Fraction to close at partial TP (0.0-1.0)
+        "breakeven_rr": 1.0,      # R:R to trigger breakeven
+        "ema_length": 9,          # EMA length for final TP exit
         "tick_size": 0.25
     }
 
@@ -67,7 +70,10 @@ class UTBotSTC(Strategy):
 
         # Position Management
         "stop_ticks": [2, 3, 4, 5],
-        "risk_reward": [1.5, 2.0, 2.5, 3.0],
+        "partial_rr": [1.5, 2.0, 2.5, 3.0],
+        "partial_pct": [0.3, 0.5, 0.7],
+        "breakeven_rr": [0.5, 1.0, 1.5],
+        "ema_length": [5, 9, 13, 21],
     }
 
     def generate_signals(
@@ -78,14 +84,13 @@ class UTBotSTC(Strategy):
         p = self.get_params(params)
 
         # Ensure we have enough data
-        min_len = max(p['stc_slow_length'], p['atr_period']) + p['stc_length'] + 10
+        min_len = max(p['stc_slow_length'], p['atr_period'], p['ema_length']) + p['stc_length'] + 10
         if len(data) < min_len:
             empty = pd.Series(False, index=data.index)
             zeros = pd.Series(0.0, index=data.index)
             nans = pd.Series(np.nan, index=data.index)
             return empty, empty, empty, empty, zeros, nans, nans
 
-        # REAL prices - always used for ATR, STC, and execution
         # REAL prices - always used for execution and structural levels (SL/TP)
         real_close = data['Close']
         real_open = data['Open']
@@ -93,7 +98,7 @@ class UTBotSTC(Strategy):
         real_low = data['Low']
 
         # ===========================================
-        # 2. Select Candle Source for Strategy Logic (Signals)
+        # 1. Select Candle Source for Strategy Logic (Signals)
         # ===========================================
         # HYBRID LOGIC:
         # - ATR and STC always use REAL prices (Standard Chart).
@@ -138,8 +143,6 @@ class UTBotSTC(Strategy):
         np_nLoss = nLoss.values
         np_trail = np.zeros(len(data))
 
-        # Pine initialization: var float xATRTrailingStop = na
-        # On first valid bar, it becomes src - nLoss or src + nLoss
         np_trail[0] = 0.0  # Pine uses nz(..., 0)
 
         for i in range(1, len(data)):
@@ -147,13 +150,6 @@ class UTBotSTC(Strategy):
             curr_src = np_src[i]
             prev_src = np_src[i-1]
             curr_nLoss = np_nLoss[i] if not np.isnan(np_nLoss[i]) else 0
-
-            # Pine logic:
-            # xATRTrailingStop := src > nz(xATRTrailingStop[1], 0) and src[1] > nz(xATRTrailingStop[1], 0) ?
-            #    math.max(nz(xATRTrailingStop[1]), src - nLoss) :
-            #    src < nz(xATRTrailingStop[1], 0) and src[1] < nz(xATRTrailingStop[1], 0) ?
-            #    math.min(nz(xATRTrailingStop[1]), src + nLoss) :
-            #    src > nz(xATRTrailingStop[1], 0) ? src - nLoss : src + nLoss
 
             if (curr_src > prev_trail) and (prev_src > prev_trail):
                 np_trail[i] = max(prev_trail, curr_src - curr_nLoss)
@@ -169,13 +165,6 @@ class UTBotSTC(Strategy):
         # ===========================================
         # 3. UTBot Signal Generation
         # ===========================================
-        # Pine:
-        # ema = ta.ema(src, 1)  -> effectively just src
-        # above = ta.crossover(ema, xATRTrailingStop)
-        # below = ta.crossover(xATRTrailingStop, ema)
-        # utBotLong = src > xATRTrailingStop and above
-        # utBotShort = src < xATRTrailingStop and below
-
         prev_src = src.shift(1)
         prev_trail = xATRTrailingStop.shift(1)
 
@@ -187,29 +176,22 @@ class UTBotSTC(Strategy):
         utbot_short = (src < xATRTrailingStop) & below
 
         # ===========================================
-        # 4. STC Calculation (uses chart prices - HA when enabled)
+        # 4. STC Calculation
         # ===========================================
-        # Pine: macdVal = calcMACD(close, fastLen, slowLen)
-        # When TradingView displays HA chart, 'close' is the HA close
-
         stc_len = p['stc_length']
         fast_len = p['stc_fast_length']
         slow_len = p['stc_slow_length']
 
-        # MACD on calc_close (HA when enabled, real otherwise)
         fast_ma = ta.ema(calc_close, length=fast_len)
         slow_ma = ta.ema(calc_close, length=slow_len)
         macd_val = fast_ma - slow_ma
 
-        # Convert to numpy for loop
         np_macd = macd_val.fillna(0).values
 
-        # Rolling min/max for MACD
         macd_s = pd.Series(np_macd)
         low_macd = macd_s.rolling(window=stc_len, min_periods=stc_len).min().bfill().values
         high_macd = macd_s.rolling(window=stc_len, min_periods=stc_len).max().bfill().values
 
-        # Step 1: %K of MACD -> smoothed to PF
         pf_series = np.zeros(len(data))
         pff_prev = 0.0
         pf_prev = 0.0
@@ -221,21 +203,16 @@ class UTBotSTC(Strategy):
             h_val = high_macd[i]
             rng1 = h_val - l_val
 
-            # pff := range1 > 0 ? (macdVal - lowest) / range1 * 100 : nz(pff[1])
             if rng1 > 0:
                 pff = (m_val - l_val) / rng1 * 100
             else:
                 pff = pff_prev
 
             pff_prev = pff
-
-            # pf := na(pf[1]) ? pff : pf[1] + factor * (pff - pf[1])
-            # First iteration: pf_prev is 0, so pf = 0 + 0.5 * (pff - 0) = 0.5 * pff
             pf = pf_prev + factor * (pff - pf_prev)
             pf_prev = pf
             pf_series[i] = pf
 
-        # Step 2: %K of PF -> smoothed to PFF2 (final STC)
         pf_s = pd.Series(pf_series)
         low_pf = pf_s.rolling(window=stc_len, min_periods=stc_len).min().bfill().values
         high_pf = pf_s.rolling(window=stc_len, min_periods=stc_len).max().bfill().values
@@ -250,15 +227,12 @@ class UTBotSTC(Strategy):
             h_val = high_pf[i]
             rng2 = h_val - l_val
 
-            # pfff := range2 > 0 ? (pf - lowest2) / range2 * 100 : nz(pfff[1])
             if rng2 > 0:
                 pfff = (val - l_val) / rng2 * 100
             else:
                 pfff = pfff_prev
 
             pfff_prev = pfff
-
-            # pff2 := na(pff2[1]) ? pfff : pff2[1] + factor * (pfff - pff2[1])
             pff2 = pff2_prev + factor * (pfff - pff2_prev)
             pff2_prev = pff2
             stc_final[i] = pff2
@@ -279,7 +253,6 @@ class UTBotSTC(Strategy):
         # ===========================================
         # 6. Combined Entry Signals
         # ===========================================
-        # Candle Color Filter
         green_candle = real_close > real_open
         red_candle = real_close < real_open
 
@@ -287,14 +260,26 @@ class UTBotSTC(Strategy):
         short_signal = utbot_short & stc_valid_short & red_candle
 
         # ===========================================
-        # 7. Position Management (Fixed SL/TP)
+        # 7. EMA for Final TP Exit
         # ===========================================
+        ema_final = ta.ema(real_close, length=p['ema_length'])
+        np_ema_final = ema_final.ffill().bfill().values
+
+        # ===========================================
+        # 8. Position Management — State Machine
+        # ===========================================
+        # Matching PineScript logic exactly:
+        #   - Entry: close price, SL from candle low/high + ticks
+        #   - Breakeven trigger at breakeven_rr
+        #   - Partial TP at partial_rr (close partial_pct of position)
+        #   - Final exit via EMA cross (only after partial taken)
+        #   - SL exit at any time
+
+        n = len(data)
         long_entries = pd.Series(False, index=data.index)
         long_exits = pd.Series(False, index=data.index)
         short_entries = pd.Series(False, index=data.index)
         short_exits = pd.Series(False, index=data.index)
-
-        # Initialize exec_prices with REAL Close
         exec_prices = real_close.copy()
         sl_dists = pd.Series(np.nan, index=data.index)
         exit_ratios = pd.Series(1.0, index=data.index)
@@ -304,126 +289,196 @@ class UTBotSTC(Strategy):
         def round_to_tick(price):
             return round(price / tick_sz) * tick_sz
 
-        # Loop variables
-        in_pos = False
-        pos_side = 0  # 1 = Long, -1 = Short
-        entry_price = 0.0
-        stop_price = 0.0
-        tp_price = 0.0
-        entry_idx = -1  # Track entry bar index for exit protection
+        # Parameters
         stop_ticks = p['stop_ticks']
-        rr = p['risk_reward']
+        partial_rr = p['partial_rr']
+        partial_pct = p['partial_pct']
+        breakeven_rr = p['breakeven_rr']
 
         np_long_sig = long_signal.values
         np_short_sig = short_signal.values
 
-        # Pre-convert to numpy for speed
-        # Use REAL prices to detect SL/TP hits and execution
-        # FIX: Forward fill NaNs to prevent "Zombie Positions" where SL/TP logic always returns False
-        # If Low is NaN, use previous valid Low. If Entry Bar Low is NaN, use Close?
-        # Robust approach: ffill then bfill to ensure no NaNs exist to break logic.
+        # Pre-convert to numpy for speed (ffill+bfill to prevent NaN zombie positions)
         np_real_close = real_close.ffill().bfill().values
         np_real_high = real_high.ffill().bfill().values
         np_real_low = real_low.ffill().bfill().values
-        
-        # Use REAL prices to determine SL location for entry (Structure)
-        # Since TradingView chart is Normal, we use High/Low of Normal candles for SL placement logic?
-        # User Request: "Mais dans ce cas-là, il utilise ces bougies-là pour déclencher le signal, mais exécute au prix réel."
-        # And usually SL placement is structural based on "Signal Candle".
-        # If chart is Normal, "Signal Candle" High/Low is Normal High/Low.
-        # So we use REAL High/Low for structure too.
 
-        for i in range(1, len(data)):
-            # Track if we exited on this bar to prevent re-entry on same bar
-            exited_this_bar = False
+        # State variables (matching PineScript var declarations)
+        in_pos = False
+        pos_side = ""          # "LONG" or "SHORT"
+        entry_price = 0.0
+        stop_price = 0.0
+        partial_tp_price = 0.0
+        be_level_price = 0.0
+        partial_taken = False
+        breakeven_activated = False
+        signal_bar = -1
+
+        for i in range(1, n):
+            # ===========================================
+            # EVENT FLAGS (reset each bar, like PineScript)
+            # ===========================================
+            hit_partial_tp = False
+            hit_stop = False
+            hit_stop_be = False
+            hit_final_tp_ema = False
+
+            ev_entry_long = False
+            ev_entry_short = False
+            ev_partial_price = np.nan
+            ev_close_price = np.nan
 
             # ===========================================
-            # Check Exits FIRST (but NOT on entry bar)
-            # ===========================================
+            # EXIT LOGIC (only after entry bar)
             # Pine: if inPosition and bar_index > signalBar
-            # Use REAL prices to detect SL/TP hits
-            if in_pos and i > entry_idx:
-                curr_low = np_real_low[i]
-                curr_high = np_real_high[i]
+            # ===========================================
+            if in_pos and i > signal_bar:
 
-                if pos_side == 1:  # Long position
-                    # Check SL first (priority over TP in same bar)
+                if pos_side == "LONG":
+                    curr_high = np_real_high[i]
+                    curr_low = np_real_low[i]
+                    curr_close = np_real_close[i]
+
+                    # 1. Partial TP (once only)
+                    if not partial_taken and curr_high >= partial_tp_price:
+                        hit_partial_tp = True
+                        partial_taken = True
+                        ev_partial_price = partial_tp_price
+
+                    # 2. Breakeven activation
+                    if not breakeven_activated and curr_high >= be_level_price:
+                        breakeven_activated = True
+                        stop_price = entry_price  # Move SL to entry
+
+                    # 3. Stop loss hit
                     if curr_low <= stop_price:
-                        long_exits.iloc[i] = True
-                        exec_prices.iloc[i] = round_to_tick(stop_price)
-                        in_pos = False
-                        pos_side = 0
-                        entry_idx = -1
-                        exited_this_bar = True
-                    elif curr_high >= tp_price:
-                        long_exits.iloc[i] = True
-                        exec_prices.iloc[i] = round_to_tick(tp_price)
-                        in_pos = False
-                        pos_side = 0
-                        entry_idx = -1
-                        exited_this_bar = True
+                        if breakeven_activated:
+                            hit_stop_be = True
+                        else:
+                            hit_stop = True
+                        ev_close_price = stop_price
 
-                elif pos_side == -1:  # Short position
-                    # Check SL first
+                    # 4. Final TP via EMA (only after partial taken)
+                    if partial_taken and curr_close < np_ema_final[i]:
+                        hit_final_tp_ema = True
+                        ev_close_price = round_to_tick(curr_close)
+
+                    # Close position if any exit condition
+                    if hit_stop or hit_stop_be or hit_final_tp_ema:
+                        in_pos = False
+                        signal_bar = -1
+
+                elif pos_side == "SHORT":
+                    curr_high = np_real_high[i]
+                    curr_low = np_real_low[i]
+                    curr_close = np_real_close[i]
+
+                    # 1. Partial TP (once only)
+                    if not partial_taken and curr_low <= partial_tp_price:
+                        hit_partial_tp = True
+                        partial_taken = True
+                        ev_partial_price = partial_tp_price
+
+                    # 2. Breakeven activation
+                    if not breakeven_activated and curr_low <= be_level_price:
+                        breakeven_activated = True
+                        stop_price = entry_price  # Move SL to entry
+
+                    # 3. Stop loss hit
                     if curr_high >= stop_price:
-                        short_exits.iloc[i] = True
-                        exec_prices.iloc[i] = round_to_tick(stop_price)
+                        if breakeven_activated:
+                            hit_stop_be = True
+                        else:
+                            hit_stop = True
+                        ev_close_price = stop_price
+
+                    # 4. Final TP via EMA (only after partial taken)
+                    if partial_taken and curr_close > np_ema_final[i]:
+                        hit_final_tp_ema = True
+                        ev_close_price = round_to_tick(curr_close)
+
+                    # Close position if any exit condition
+                    if hit_stop or hit_stop_be or hit_final_tp_ema:
                         in_pos = False
-                        pos_side = 0
-                        entry_idx = -1
-                        exited_this_bar = True
-                    elif curr_low <= tp_price:
-                        short_exits.iloc[i] = True
-                        exec_prices.iloc[i] = round_to_tick(tp_price)
-                        in_pos = False
-                        pos_side = 0
-                        entry_idx = -1
-                        exited_this_bar = True
+                        signal_bar = -1
 
             # ===========================================
-            # Check Entries (only if not in position AND didn't exit this bar)
+            # ENTRY LOGIC (only if not in position)
             # ===========================================
-            if not in_pos and not exited_this_bar:
+            if not in_pos:
                 if np_long_sig[i]:
-                    # Entry at REAL Close
                     entry_p = round_to_tick(np_real_close[i])
-
-                    # SL/TP based on SIGNAL CANDLE's REAL LOW (Structure)
                     sig_low = np_real_low[i]
                     stop_p = round_to_tick(sig_low - stop_ticks * tick_sz)
                     risk_amt = entry_p - stop_p
-                    tp_p = round_to_tick(entry_p + risk_amt * rr)
 
                     if risk_amt > 0:
-                        long_entries.iloc[i] = True
-                        exec_prices.iloc[i] = entry_p
+                        ev_entry_long = True
                         in_pos = True
-                        pos_side = 1
-                        entry_idx = i  # Store entry bar index
+                        pos_side = "LONG"
+                        signal_bar = i
                         entry_price = entry_p
                         stop_price = stop_p
-                        tp_price = tp_p
-                        sl_dists.iloc[i] = risk_amt
+                        partial_tp_price = round_to_tick(entry_p + risk_amt * partial_rr)
+                        be_level_price = round_to_tick(entry_p + risk_amt * breakeven_rr)
+                        partial_taken = False
+                        breakeven_activated = False
 
                 elif np_short_sig[i]:
-                    # Entry at REAL Close
                     entry_p = round_to_tick(np_real_close[i])
-
-                    # SL/TP based on SIGNAL CANDLE's REAL HIGH (Structure)
                     sig_high = np_real_high[i]
                     stop_p = round_to_tick(sig_high + stop_ticks * tick_sz)
                     risk_amt = stop_p - entry_p
-                    tp_p = round_to_tick(entry_p - risk_amt * rr)
 
                     if risk_amt > 0:
-                        short_entries.iloc[i] = True
-                        exec_prices.iloc[i] = entry_p
+                        ev_entry_short = True
                         in_pos = True
-                        pos_side = -1
-                        entry_idx = i  # Store entry bar index
+                        pos_side = "SHORT"
+                        signal_bar = i
                         entry_price = entry_p
                         stop_price = stop_p
-                        tp_price = tp_p
-                        sl_dists.iloc[i] = risk_amt
+                        partial_tp_price = round_to_tick(entry_p - risk_amt * partial_rr)
+                        be_level_price = round_to_tick(entry_p - risk_amt * breakeven_rr)
+                        partial_taken = False
+                        breakeven_activated = False
+
+            # ===========================================
+            # RECORD SIGNALS
+            # ===========================================
+
+            # ENTRIES
+            if ev_entry_long:
+                long_entries.iloc[i] = True
+                exec_prices.iloc[i] = entry_price
+                sl_dists.iloc[i] = entry_price - stop_price
+
+            if ev_entry_short:
+                short_entries.iloc[i] = True
+                exec_prices.iloc[i] = entry_price
+                sl_dists.iloc[i] = stop_price - entry_price
+
+            # PARTIAL EXITS (TP1)
+            if hit_partial_tp and pos_side == "LONG":
+                long_exits.iloc[i] = True
+                exec_prices.iloc[i] = ev_partial_price
+                exit_ratios.iloc[i] = partial_pct
+
+            if hit_partial_tp and pos_side == "SHORT":
+                short_exits.iloc[i] = True
+                exec_prices.iloc[i] = ev_partial_price
+                exit_ratios.iloc[i] = partial_pct
+
+            # FULL EXITS (SL, BE, EMA)
+            if hit_stop or hit_stop_be or hit_final_tp_ema:
+                if not np.isnan(ev_close_price):
+                    # pos_side is still the side of the closed trade
+                    if pos_side == "LONG":
+                        long_exits.iloc[i] = True
+                        exec_prices.iloc[i] = ev_close_price
+                        exit_ratios.iloc[i] = 1.0
+                    elif pos_side == "SHORT":
+                        short_exits.iloc[i] = True
+                        exec_prices.iloc[i] = ev_close_price
+                        exit_ratios.iloc[i] = 1.0
 
         return long_entries, long_exits, short_entries, short_exits, exec_prices, sl_dists, exit_ratios

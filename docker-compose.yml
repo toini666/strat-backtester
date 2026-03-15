@@ -13,7 +13,7 @@ services:
     environment:
       - LOG_LEVEL=INFO
       - ENV=production
-      - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+      - ALLOWED_ORIGINS=http://localhost:3001
       - TOPSTEP_USERNAME=${TOPSTEP_USERNAME:-}
       - TOPSTEPX_TOKEN=${TOPSTEPX_TOKEN:-}
     volumes:

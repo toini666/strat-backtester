@@ -12,9 +12,9 @@ NC='\033[0m' # No Color
 # --- 3. Start Application ---
 echo -e "${GREEN}🚀 Starting Nebular Apollo Platform...${NC}"
 
-# Kill any existing processes on ports 8001 and 3000 (optional safety)
+# Kill any existing processes on ports 8001 and 3001 (optional safety)
 lsof -ti:8001 | xargs kill -9 2>/dev/null
-lsof -ti:3000 | xargs kill -9 2>/dev/null
+lsof -ti:3001 | xargs kill -9 2>/dev/null
 
 # Start Backend
 echo -e "${BLUE}🔹 Starting Backend API...${NC}"
@@ -25,17 +25,17 @@ BACKEND_PID=$!
 # Start Frontend
 echo -e "${BLUE}🔹 Starting Frontend Dashboard...${NC}"
 cd frontend
-npm run dev -- --port 3000 --host &
+npm run dev -- --port 3001 --host &
 FRONTEND_PID=$!
 cd ..
 
 echo -e "${GREEN}✅ System Online!${NC}"
 echo -e "   - Backend: http://localhost:8001"
-echo -e "   - Frontend: http://localhost:3000"
+echo -e "   - Frontend: http://localhost:3001"
 
 # Open Browser
 sleep 5
-open http://localhost:3000
+open http://localhost:3001
 
 # Cleanup on exit
 trap "kill $BACKEND_PID $FRONTEND_PID; exit" SIGINT SIGTERM

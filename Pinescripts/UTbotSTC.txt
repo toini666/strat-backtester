@@ -6,91 +6,93 @@ indicator("UTBot-STC Strategy", overlay=true)
 // ============================================
 
 // --- UTBot Parameters ---
-keyValue = input.float(1, title="UTBot Key Value (Sensitivity)", group="UTBot Settings")
-atrPeriod = input.int(10, title="ATR Period", group="UTBot Settings")
-useHeikinAshi = input.bool(false, title="Use Heikin Ashi Candles", group="UTBot Settings")
+keyValue    = input.float(1,     "UTBot Key Value (Sensitivity)",              group="UTBot Settings")
+atrPeriod   = input.int(10,      "ATR Period",                                  group="UTBot Settings")
+useHeikinAshi = input.bool(false, "Use Heikin Ashi Candles",                    group="UTBot Settings")
 
 // --- STC Parameters ---
-stcLength = input.int(12, title="STC Length", group="STC Settings")
-stcFastLength = input.int(26, title="STC Fast Length", group="STC Settings")
-stcSlowLength = input.int(50, title="STC Slow Length", group="STC Settings")
+stcLength     = input.int(12, "STC Length",       group="STC Settings")
+stcFastLength = input.int(26, "STC Fast Length",  group="STC Settings")
+stcSlowLength = input.int(50, "STC Slow Length",  group="STC Settings")
 
 // STC Range filters
-stcMinLong = input.float(1, title="STC Min Level for LONG", group="STC Filter")
-stcMaxLong = input.float(99, title="STC Max Level for LONG", group="STC Filter")
-stcMinShort = input.float(1, title="STC Min Level for SHORT", group="STC Filter")
-stcMaxShort = input.float(99, title="STC Max Level for SHORT", group="STC Filter")
+stcMinLong  = input.float(1,  "STC Min Level for LONG",  group="STC Filter")
+stcMaxLong  = input.float(99, "STC Max Level for LONG",  group="STC Filter")
+stcMinShort = input.float(1,  "STC Min Level for SHORT", group="STC Filter")
+stcMaxShort = input.float(99, "STC Max Level for SHORT", group="STC Filter")
 
 // --- Position Management ---
-stopTicks = input.int(10, title="Stop Loss (in ticks from signal candle low/high)", group="Position Management")
-riskReward = input.float(2.0, title="Risk/Reward Ratio", group="Position Management")
+stopTicks    = input.int(10,   "Stop Loss (in ticks from signal candle low/high)", group="Position Management")
+partialRR    = input.float(2.0,"Partial TP Risk/Reward Ratio",                     group="Position Management")
+partialPct   = input.float(50.0,"Partial TP Percentage (%)",                        group="Position Management")
+breakevenRR  = input.float(1.0, "Breakeven Trigger R:R",                            group="Position Management")
+emaLength    = input.int(9,     "Final TP EMA Length",                              group="Position Management")
+
+// --- Time-based Exit ---
+enable22hClose = input.bool(true, "Enable 22h Brussels Time Close", group="Time-based Exit")
 
 // --- Strategy Name ---
-strategyName = input.string("UTBot-STC", title="Strategy Name (for alerts)", group="Alert Settings")
+strategyName = input.string("UTBot-STC", "Strategy Name (for alerts)", group="Alert Settings")
 
 // ============================================
 // VARIABLES D'ÉTAT
 // ============================================
 
-var bool inPosition = false
-var float entryPrice = na
-var float stopPrice = na
-var float tpPrice = na
-var string positionSide = na
-var int signalBar = na
+var bool   inPosition        = false
+var float  entryPrice        = na
+var float  stopPrice         = na
+var float  partialTPPrice    = na
+var float  beLevelPrice      = na      // Prix déclenchant le breakeven
+var string positionSide      = na
+var int    signalBar         = na
+var bool   partialTaken      = false
+var bool   breakevenActivated = false
 
 // ============================================
 // FONCTIONS UTILITAIRES
 // ============================================
 
-// Fonction d'arrondissement au min tick
 roundToTick(float price) =>
     math.round(price / syminfo.mintick) * syminfo.mintick
 
-// Format timeframe pour alerts
 getTimeframeString() =>
     string tf = timeframe.period
     string result = ""
-    
     if str.contains(tf, "D")
         result := "D" + str.tostring(timeframe.multiplier)
     else if str.contains(tf, "W")
         result := "W" + str.tostring(timeframe.multiplier)
-    else if str.contains(tf, "M") and not str.contains(tf, "S")
+    else if tf == "M"
         result := "MO" + str.tostring(timeframe.multiplier)
     else if timeframe.multiplier >= 60
-        result := "H" + str.tostring(timeframe.multiplier / 60)
+        result := "H" + str.tostring(math.round(timeframe.multiplier / 60))
     else
         result := "M" + str.tostring(timeframe.multiplier)
-    
     result
 
 // ============================================
 // CALCUL UTBOT
 // ============================================
 
-xATR = ta.atr(atrPeriod)
+xATR  = ta.atr(atrPeriod)
 nLoss = keyValue * xATR
 
-src = useHeikinAshi ? request.security(ticker.heikinashi(syminfo.tickerid), timeframe.period, close, lookahead=barmerge.lookahead_off) : close
+src = useHeikinAshi
+  ? request.security(ticker.heikinashi(syminfo.tickerid), timeframe.period, close, lookahead=barmerge.lookahead_off)
+  : close
 
 var float xATRTrailingStop = na
-xATRTrailingStop := src > nz(xATRTrailingStop[1], 0) and src[1] > nz(xATRTrailingStop[1], 0) ? 
-   math.max(nz(xATRTrailingStop[1]), src - nLoss) :
-   src < nz(xATRTrailingStop[1], 0) and src[1] < nz(xATRTrailingStop[1], 0) ? 
-   math.min(nz(xATRTrailingStop[1]), src + nLoss) : 
-   src > nz(xATRTrailingStop[1], 0) ? src - nLoss : src + nLoss
+float prevTS = nz(xATRTrailingStop[1], 0)
+xATRTrailingStop := src > prevTS and src[1] > prevTS ? math.max(prevTS, src - nLoss) : src < prevTS and src[1] < prevTS ? math.min(prevTS, src + nLoss) : src > prevTS ? src - nLoss : src + nLoss
 
 var int pos = 0
-pos := src[1] < nz(xATRTrailingStop[1], 0) and src > nz(xATRTrailingStop[1], 0) ? 1 :
-   src[1] > nz(xATRTrailingStop[1], 0) and src < nz(xATRTrailingStop[1], 0) ? -1 : 
-   nz(pos[1], 0)
+pos := src[1] < nz(xATRTrailingStop[1], 0) and src > nz(xATRTrailingStop[1], 0) ? 1 : src[1] > nz(xATRTrailingStop[1], 0) and src < nz(xATRTrailingStop[1], 0) ? -1 : nz(pos[1], 0)
 
-ema = ta.ema(src, 1)
-above = ta.crossover(ema, xATRTrailingStop)
-below = ta.crossover(xATRTrailingStop, ema)
+ema1  = ta.ema(src, 1)
+above = ta.crossover(ema1, xATRTrailingStop)
+below = ta.crossover(xATRTrailingStop, ema1)
 
-utBotLong = src > xATRTrailingStop and above
+utBotLong  = src > xATRTrailingStop and above
 utBotShort = src < xATRTrailingStop and below
 
 // ============================================
@@ -98,198 +100,344 @@ utBotShort = src < xATRTrailingStop and below
 // ============================================
 
 calcMACD(float source, int fastLen, int slowLen) =>
-    fastMA = ta.ema(source, fastLen)
-    slowMA = ta.ema(source, slowLen)
-    fastMA - slowMA
+    ta.ema(source, fastLen) - ta.ema(source, slowLen)
 
 calcSTC(int length, int fastLen, int slowLen) =>
-    factor = 0.5
-    var float pff = 0.0
-    var float pf = 0.0
+    float factor = 0.5
+    var float pff  = 0.0
+    var float pf   = 0.0
     var float pfff = 0.0
     var float pff2 = 0.0
-    
-    macdVal = calcMACD(close, fastLen, slowLen)
-    
-    lowest = ta.lowest(macdVal, length)
-    highest = ta.highest(macdVal, length)
-    range1 = highest - lowest
-    
-    pff := range1 > 0 ? (macdVal - lowest) / range1 * 100 : nz(pff[1])
-    pf := na(pf[1]) ? pff : pf[1] + factor * (pff - pf[1])
-    
-    lowest2 = ta.lowest(pf, length)
-    highest2 = ta.highest(pf, length)
-    range2 = highest2 - lowest2
-    
+
+    float macdVal  = calcMACD(close, fastLen, slowLen)
+    float lowest1  = ta.lowest(macdVal, length)
+    float highest1 = ta.highest(macdVal, length)
+    float range1   = highest1 - lowest1
+
+    pff  := range1 > 0 ? (macdVal - lowest1) / range1 * 100 : nz(pff[1])
+    pf   := na(pf[1]) ? pff : pf[1] + factor * (pff - pf[1])
+
+    float lowest2  = ta.lowest(pf, length)
+    float highest2 = ta.highest(pf, length)
+    float range2   = highest2 - lowest2
+
     pfff := range2 > 0 ? (pf - lowest2) / range2 * 100 : nz(pfff[1])
     pff2 := na(pff2[1]) ? pfff : pff2[1] + factor * (pfff - pff2[1])
-    
     pff2
 
 stcValue = calcSTC(stcLength, stcFastLength, stcSlowLength)
-
-// STC conditions
-stcRising = stcValue > stcValue[1]
+stcRising  = stcValue > stcValue[1]
 stcFalling = stcValue < stcValue[1]
 
-stcValidForLong = stcValue >= stcMinLong and stcValue <= stcMaxLong and stcRising
+stcValidForLong  = stcValue >= stcMinLong  and stcValue <= stcMaxLong  and stcRising
 stcValidForShort = stcValue >= stcMinShort and stcValue <= stcMaxShort and stcFalling
 
 // ============================================
-// LOGIQUE DE LA STRATÉGIE
+// CALCUL EMA (TP final)
 // ============================================
 
-// Condition de couleur de bougie
-bool greenCandle = close > open  // Bougie verte pour LONG
-bool redCandle = close < open    // Bougie rouge pour SHORT
+emaFinal = ta.ema(close, emaLength)
 
-// Signal conditions avec filtre de couleur de bougie
-longSignal = utBotLong and stcValidForLong and not inPosition and greenCandle
-shortSignal = utBotShort and stcValidForShort and not inPosition and redCandle
+// ============================================
+// LOGIQUE DE LA STRATÉGIE — ENTRÉES
+// ============================================
 
-// Entry immediately at close of signal bar
+bool greenCandle = close > open
+bool redCandle   = close < open
+
+bool longSignal  = utBotLong  and stcValidForLong  and not inPosition and greenCandle
+bool shortSignal = utBotShort and stcValidForShort and not inPosition and redCandle
+
 if longSignal
-    inPosition := true
-    positionSide := "LONG"
-    signalBar := bar_index
-    entryPrice := roundToTick(close)
-    
-    // Calculate stop and TP based on current signal bar
-    float signalLow = low
-    stopPrice := roundToTick(signalLow - stopTicks * syminfo.mintick)
-    float riskAmount = entryPrice - stopPrice
-    tpPrice := roundToTick(entryPrice + riskAmount * riskReward)
-    
-if shortSignal
-    inPosition := true
-    positionSide := "SHORT"
-    signalBar := bar_index
-    entryPrice := roundToTick(close)
-    
-    // Calculate stop and TP based on current signal bar
-    float signalHigh = high
-    stopPrice := roundToTick(signalHigh + stopTicks * syminfo.mintick)
-    float riskAmount = stopPrice - entryPrice
-    tpPrice := roundToTick(entryPrice - riskAmount * riskReward)
+    inPosition         := true
+    positionSide       := "LONG"
+    signalBar          := bar_index
+    entryPrice         := roundToTick(close)
+    stopPrice          := roundToTick(low  - stopTicks * syminfo.mintick)
+    float risk          = entryPrice - stopPrice
+    partialTPPrice     := roundToTick(entryPrice + risk * partialRR)
+    beLevelPrice       := roundToTick(entryPrice + risk * breakevenRR)
+    partialTaken       := false
+    breakevenActivated := false
 
-// Show entry circle on the bar after signal (to confirm we're in position)
-bool showEntryCircleLong = inPosition and positionSide == "LONG" and bar_index == signalBar + 1
-bool showEntryCircleShort = inPosition and positionSide == "SHORT" and bar_index == signalBar + 1
+if shortSignal
+    inPosition         := true
+    positionSide       := "SHORT"
+    signalBar          := bar_index
+    entryPrice         := roundToTick(close)
+    stopPrice          := roundToTick(high + stopTicks * syminfo.mintick)
+    float risk          = stopPrice - entryPrice
+    partialTPPrice     := roundToTick(entryPrice - risk * partialRR)
+    beLevelPrice       := roundToTick(entryPrice - risk * breakevenRR)
+    partialTaken       := false
+    breakevenActivated := false
 
 // ============================================
 // GESTION DES SORTIES
 // ============================================
 
-bool exitByStopLong = false
-bool exitByTPLong = false
-bool exitByStopShort = false
-bool exitByTPShort = false
+bool hitPartialTP   = false
+bool hitStop        = false
+bool hitStopBE      = false  // SL touché au niveau breakeven (entrée)
+bool hitFinalTPEMA  = false
+bool exitBy22hProfit = false
+bool exitBy22hLoss   = false
 
-// Only check for exits AFTER the signal bar (not on the signal bar itself)
+// Sauvegarde des valeurs de sortie pour les alertes (avant reset de state)
+float exitStopPrice    = stopPrice
+float exitPartialPrice = partialTPPrice
+float exitClosePrice   = na
+
+int   brusselsHour   = hour(time, "Europe/Brussels")
+bool  is22hBrussels  = enable22hClose and brusselsHour == 22 and hour(time[1], "Europe/Brussels") != 22
+
 if inPosition and bar_index > signalBar
+
     if positionSide == "LONG"
-        exitByStopLong := low <= stopPrice
-        exitByTPLong := high >= tpPrice
-        
-        if exitByStopLong or exitByTPLong
+
+        // 1. TP partiel (une seule fois)
+        if not partialTaken and high >= partialTPPrice
+            hitPartialTP := true
+            partialTaken := true
+
+        // 2. Activation du breakeven
+        if not breakevenActivated and high >= beLevelPrice
+            breakevenActivated := true
+            stopPrice          := entryPrice   // Déplacement du SL à l'entrée
+
+        // 3. Stop loss — distinguer SL normal vs retour au breakeven
+        if low <= stopPrice
+            if breakevenActivated
+                hitStopBE      := true   // Retour au BE → croix orange
+            else
+                hitStop        := true   // SL normal → croix rouge
+            exitStopPrice  := stopPrice
+            exitClosePrice := stopPrice
+
+        // 4. TP final via clôture sous l'EMA (uniquement après TP partiel)
+        if partialTaken and close < emaFinal
+            hitFinalTPEMA  := true
+            exitClosePrice := roundToTick(close)
+
+        // 5. Fermeture à 22h
+        if is22hBrussels and not hitStop and not hitFinalTPEMA
+            exitClosePrice := roundToTick(close)
+            if close > entryPrice
+                exitBy22hProfit := true
+            else
+                exitBy22hLoss := true
+
+        if hitStop or hitStopBE or hitFinalTPEMA or exitBy22hProfit or exitBy22hLoss
             inPosition := false
-            signalBar := na
-            
+            signalBar  := na
+
     else if positionSide == "SHORT"
-        exitByStopShort := high >= stopPrice
-        exitByTPShort := low <= tpPrice
-        
-        if exitByStopShort or exitByTPShort
+
+        // 1. TP partiel (une seule fois)
+        if not partialTaken and low <= partialTPPrice
+            hitPartialTP := true
+            partialTaken := true
+
+        // 2. Activation du breakeven
+        if not breakevenActivated and low <= beLevelPrice
+            breakevenActivated := true
+            stopPrice          := entryPrice   // Déplacement du SL à l'entrée
+
+        // 3. Stop loss — distinguer SL normal vs retour au breakeven
+        if high >= stopPrice
+            if breakevenActivated
+                hitStopBE      := true   // Retour au BE → croix orange
+            else
+                hitStop        := true   // SL normal → croix rouge
+            exitStopPrice  := stopPrice
+            exitClosePrice := stopPrice
+
+        // 4. TP final via clôture au-dessus de l'EMA (uniquement après TP partiel)
+        if partialTaken and close > emaFinal
+            hitFinalTPEMA  := true
+            exitClosePrice := roundToTick(close)
+
+        // 5. Fermeture à 22h
+        if is22hBrussels and not hitStop and not hitFinalTPEMA
+            exitClosePrice := roundToTick(close)
+            if close < entryPrice
+                exitBy22hProfit := true
+            else
+                exitBy22hLoss := true
+
+        if hitStop or hitStopBE or hitFinalTPEMA or exitBy22hProfit or exitBy22hLoss
             inPosition := false
-            signalBar := na
+            signalBar  := na
 
 // ============================================
 // VISUALISATION
 // ============================================
 
-// Triangle on signal bar
-plotshape(longSignal, title="Long Signal", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small)
-plotshape(shortSignal, title="Short Signal", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small)
+// Triangles sur la bougie signal
+plotshape(longSignal,  "Long Signal",  shape.triangleup,   location.belowbar, color.green, size=size.small)
+plotshape(shortSignal, "Short Signal", shape.triangledown,  location.abovebar, color.red,   size=size.small)
 
-// Circle on entry bar (shown on bar after signal to confirm position)
-plotshape(showEntryCircleLong, title="Long Entry", style=shape.circle, location=location.belowbar, color=color.green, size=size.tiny)
-plotshape(showEntryCircleShort, title="Short Entry", style=shape.circle, location=location.abovebar, color=color.red, size=size.tiny)
+// Boule d'entrée sur la bougie SUIVANT le signal (on entre à la clôture de la bougie signal)
+bool showEntryCircleLong  = inPosition and positionSide == "LONG"  and bar_index == signalBar + 1
+bool showEntryCircleShort = inPosition and positionSide == "SHORT" and bar_index == signalBar + 1
+plotshape(showEntryCircleLong,  "Long Entry Circle",  shape.circle, location.belowbar, color.green, size=size.tiny)
+plotshape(showEntryCircleShort, "Short Entry Circle", shape.circle, location.abovebar, color.red,   size=size.tiny)
 
-// Exit markers - differentiated by position type
-// LONG exits
-plotshape(exitByTPLong, title="Long TP Hit", style=shape.xcross, location=location.abovebar, color=color.green, size=size.tiny)
-plotshape(exitByStopLong, title="Long SL Hit", style=shape.xcross, location=location.belowbar, color=color.red, size=size.tiny)
+// Croix TP partiel
+plotshape(hitPartialTP and positionSide == "LONG",  "Long Partial TP",  shape.xcross, location.abovebar, color.green, size=size.tiny)
+plotshape(hitPartialTP and positionSide == "SHORT", "Short Partial TP", shape.xcross, location.belowbar, color.green, size=size.tiny)
 
-// SHORT exits
-plotshape(exitByTPShort, title="Short TP Hit", style=shape.xcross, location=location.belowbar, color=color.green, size=size.tiny)
-plotshape(exitByStopShort, title="Short SL Hit", style=shape.xcross, location=location.abovebar, color=color.red, size=size.tiny)
+// Croix TP final (EMA)
+plotshape(hitFinalTPEMA and positionSide == "LONG",  "Long Final TP",  shape.xcross, location.abovebar, color.green, size=size.tiny)
+plotshape(hitFinalTPEMA and positionSide == "SHORT", "Short Final TP", shape.xcross, location.belowbar, color.green, size=size.tiny)
 
-// Position lines (dotted)
-var line entryLine = na
-var line stopLine = na
-var line tpLine = na
+// Croix Stop Loss (SL normal, avant BE) — rouge
+plotshape(hitStop and positionSide == "LONG",  "Long SL Hit",  shape.xcross, location.belowbar, color.red, size=size.tiny)
+plotshape(hitStop and positionSide == "SHORT", "Short SL Hit", shape.xcross, location.abovebar, color.red, size=size.tiny)
+
+// Croix retour au Breakeven — orange
+plotshape(hitStopBE and positionSide == "LONG",  "Long BE Hit",  shape.xcross, location.belowbar, color.orange, size=size.tiny)
+plotshape(hitStopBE and positionSide == "SHORT", "Short BE Hit", shape.xcross, location.abovebar, color.orange, size=size.tiny)
+
+// Croix fermeture 22h
+plotshape(exitBy22hProfit and positionSide == "LONG",  "22h Close Profit Long",  shape.xcross, location.abovebar, color.green, size=size.tiny)
+plotshape(exitBy22hProfit and positionSide == "SHORT", "22h Close Profit Short", shape.xcross, location.belowbar, color.green, size=size.tiny)
+plotshape(exitBy22hLoss   and positionSide == "LONG",  "22h Close Loss Long",    shape.xcross, location.belowbar, color.red,   size=size.tiny)
+plotshape(exitBy22hLoss   and positionSide == "SHORT", "22h Close Loss Short",   shape.xcross, location.abovebar, color.red,   size=size.tiny)
+
+// EMA finale (affichée en orange sur le graphique)
+plot(emaFinal, "Final TP EMA", color=color.orange, linewidth=1)
+
+// --- Lignes pointillées pour le trade actif ---
+var line entryLine    = na
+var line stopLine     = na
+var line partialTPLine = na
+var line beLevelLine  = na
 
 if inPosition
+    // Ligne d'entrée (bleue)
     if na(entryLine)
-        entryLine := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue, style=line.style_dotted, width=1)
+        entryLine := line.new(bar_index, entryPrice, bar_index + 1, entryPrice,
+          color=color.blue, style=line.style_dotted, width=1)
     else
-        line.set_xy1(entryLine, bar_index, entryPrice)
+        line.set_xy1(entryLine, bar_index,     entryPrice)
         line.set_xy2(entryLine, bar_index + 1, entryPrice)
-    
+
+    // Ligne de stop loss — rouge avant BE, orange après activation BE
+    color stopLineColor = breakevenActivated ? color.orange : color.red
     if na(stopLine)
-        stopLine := line.new(bar_index, stopPrice, bar_index + 1, stopPrice, color=color.red, style=line.style_dotted, width=1)
+        stopLine := line.new(bar_index, stopPrice, bar_index + 1, stopPrice,
+          color=stopLineColor, style=line.style_dotted, width=1)
     else
-        line.set_xy1(stopLine, bar_index, stopPrice)
+        line.set_xy1(stopLine, bar_index,     stopPrice)
         line.set_xy2(stopLine, bar_index + 1, stopPrice)
-    
-    if na(tpLine)
-        tpLine := line.new(bar_index, tpPrice, bar_index + 1, tpPrice, color=color.green, style=line.style_dotted, width=1)
+        line.set_color(stopLine, stopLineColor)
+
+    // Ligne TP partiel (verte) — supprimée une fois le partiel pris
+    if not partialTaken
+        if na(partialTPLine)
+            partialTPLine := line.new(bar_index, partialTPPrice, bar_index + 1, partialTPPrice,
+              color=color.green, style=line.style_dotted, width=1)
+        else
+            line.set_xy1(partialTPLine, bar_index,     partialTPPrice)
+            line.set_xy2(partialTPLine, bar_index + 1, partialTPPrice)
     else
-        line.set_xy1(tpLine, bar_index, tpPrice)
-        line.set_xy2(tpLine, bar_index + 1, tpPrice)
+        if not na(partialTPLine)
+            line.delete(partialTPLine)
+            partialTPLine := na
+
+    // Ligne niveau breakeven (orange) — supprimée une fois le BE activé
+    if not breakevenActivated
+        if na(beLevelLine)
+            beLevelLine := line.new(bar_index, beLevelPrice, bar_index + 1, beLevelPrice,
+              color=color.orange, style=line.style_dotted, width=1)
+        else
+            line.set_xy1(beLevelLine, bar_index,     beLevelPrice)
+            line.set_xy2(beLevelLine, bar_index + 1, beLevelPrice)
+    else
+        if not na(beLevelLine)
+            line.delete(beLevelLine)
+            beLevelLine := na
+
 else
+    // Nettoyage de toutes les lignes quand hors position
     if not na(entryLine)
         line.delete(entryLine)
         entryLine := na
     if not na(stopLine)
         line.delete(stopLine)
         stopLine := na
-    if not na(tpLine)
-        line.delete(tpLine)
-        tpLine := na
+    if not na(partialTPLine)
+        line.delete(partialTPLine)
+        partialTPLine := na
+    if not na(beLevelLine)
+        line.delete(beLevelLine)
+        beLevelLine := na
 
 // ============================================
 // ALERTES
 // ============================================
 
-string tfString = getTimeframeString()
+// Détection du moment exact où le breakeven vient d'être activé
+bool justActivatedBE = breakevenActivated and not breakevenActivated[1]
+
+string tfString      = getTimeframeString()
 string stratFullName = strategyName + "-" + syminfo.ticker + "-" + tfString
 
-// Alert SIGNAL on entry (once per bar close to avoid false signals)
+// --- SIGNAL (entrée) — once_per_bar_close pour confirmation ---
+// Note : pas de champ "tp" car stratégie avec TP partiel
 if longSignal
-    string alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":' + 
-       str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + ',"tp":' + 
-       str.tostring(tpPrice) + ',"strat":"' + stratFullName + '","timeframe":"' + tfString + '"}'
-    alert(alertMsg, alert.freq_once_per_bar_close)
+    alert('{"ticker":"' + syminfo.ticker +
+      '","type":"SIGNAL","side":"BUY","entry":'  + str.tostring(entryPrice) +
+      ',"stop":'  + str.tostring(stopPrice) +
+      ',"strat":"' + stratFullName +
+      '","timeframe":"' + tfString + '"}',
+      alert.freq_once_per_bar_close)
 
 if shortSignal
-    string alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":' + 
-       str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + ',"tp":' + 
-       str.tostring(tpPrice) + ',"strat":"' + stratFullName + '","timeframe":"' + tfString + '"}'
-    alert(alertMsg, alert.freq_once_per_bar_close)
+    alert('{"ticker":"' + syminfo.ticker +
+      '","type":"SIGNAL","side":"SELL","entry":' + str.tostring(entryPrice) +
+      ',"stop":'  + str.tostring(stopPrice) +
+      ',"strat":"' + stratFullName +
+      '","timeframe":"' + tfString + '"}',
+      alert.freq_once_per_bar_close)
 
-// Alert CLOSE on exit (once per bar to trigger immediately when level is hit)
-if exitByStopLong or exitByStopShort
-    string side = positionSide == "LONG" ? "SELL" : "BUY"
-    string alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + side + 
-       '","entry":' + str.tostring(stopPrice) + ',"strat":"' + stratFullName + '","timeframe":"' + 
-       tfString + '"}'
-    alert(alertMsg, alert.freq_once_per_bar)
+// --- PARTIAL (TP partiel) — once_per_bar pour réactivité ---
+if hitPartialTP
+    string partialSide = positionSide == "LONG" ? "SELL" : "BUY"
+    alert('{"ticker":"' + syminfo.ticker +
+      '","type":"PARTIAL","side":"' + partialSide +
+      '","entry":' + str.tostring(exitPartialPrice) +
+      ',"strat":"' + stratFullName +
+      '","timeframe":"' + tfString + '"}',
+      alert.freq_once_per_bar)
 
-if exitByTPLong or exitByTPShort
-    string side = positionSide == "LONG" ? "SELL" : "BUY"
-    string alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + side + 
-       '","entry":' + str.tostring(tpPrice) + ',"strat":"' + stratFullName + '","timeframe":"' + 
-       tfString + '"}'
-    alert(alertMsg, alert.freq_once_per_bar)
+// --- MOVEBE — once_per_bar quand le seuil breakeven est atteint ---
+if justActivatedBE
+    string beSide = positionSide == "LONG" ? "BUY" : "SELL"
+    alert('{"ticker":"' + syminfo.ticker +
+      '","type":"MOVEBE","side":"' + beSide +
+      '","entry":' + str.tostring(entryPrice) +
+      ',"strat":"' + stratFullName +
+      '","timeframe":"' + tfString + '"}',
+      alert.freq_once_per_bar)
+
+// --- CLOSE via Stop Loss ou retour BE — once_per_bar pour réactivité immédiate ---
+if hitStop or hitStopBE
+    string slSide = positionSide == "LONG" ? "SELL" : "BUY"
+    alert('{"ticker":"' + syminfo.ticker +
+      '","type":"CLOSE","side":"' + slSide +
+      '","entry":' + str.tostring(exitStopPrice) +
+      ',"strat":"' + stratFullName +
+      '","timeframe":"' + tfString + '"}',
+      alert.freq_once_per_bar)
+
+// --- CLOSE via EMA final — once_per_bar_close (basé sur clôture de bougie) ---
+if hitFinalTPEMA
+    string emaSide = positionSide == "LONG" ? "SELL" : "BUY"
+    alert('{"ticker":"' + syminfo.ticker +
+      '","type":"CLOSE","side":"' + emaSide +
+      '","entry":' + str.tostring(exitClosePrice) +
+      ',"strat":"' + stratFullName +
+      '","timeframe":"' + tfString + '"}',
+      alert.freq_once_per_bar_close)

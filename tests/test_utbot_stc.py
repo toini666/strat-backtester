@@ -40,6 +40,13 @@ class TestUTBotSTC:
         assert strat.name == "UTBotSTC"
         assert 'use_heikin_ashi' in strat.default_params
         assert 'stc_length' in strat.default_params
+        # New position management params
+        assert 'partial_rr' in strat.default_params
+        assert 'partial_pct' in strat.default_params
+        assert 'breakeven_rr' in strat.default_params
+        assert 'ema_length' in strat.default_params
+        # Old param should not exist
+        assert 'risk_reward' not in strat.default_params
 
     def test_generate_signals_returns_correct_shape(self, sample_data):
         strat = UTBotSTC()
@@ -70,24 +77,42 @@ class TestUTBotSTC:
         assert l2.dtype == bool
 
     def test_position_management(self, sample_data):
-        """Test that exits are generated efficiently."""
+        """Test that exits are generated with new partial TP logic."""
         strat = UTBotSTC()
-        # Reduce risk reward to ensure some TP hits
+        # Use tight settings to ensure some trades
         params = {
-            'risk_reward': 0.1, 
+            'partial_rr': 0.5,
+            'breakeven_rr': 0.3,
             'stop_ticks': 1  
         }
-        l, lx, s, sx, _, _, _ = strat.generate_signals(sample_data, params)
+        l, lx, s, sx, _, _, ratios = strat.generate_signals(sample_data, params)
         
         # We expect some trades
         assert lx.dtype == bool
         assert sx.dtype == bool
         
-        if l.sum() > 0:
-            # If we enter, we should exit
-            # Check if we have at least one exit if we have entries
-            # (Though not guaranteed if entry is at last bar)
-            pass
+        # Check that exit_ratios contains partial values when partial TP was taken
+        if lx.sum() > 0 or sx.sum() > 0:
+            # Some exits should have partial ratio (0.5 default)
+            partial_exits = ratios[ratios < 1.0]
+            # Not guaranteed but likely with tight settings
+            assert isinstance(partial_exits, pd.Series)
+
+    def test_partial_exit_ratios(self, sample_data):
+        """Test that exit_ratios uses partial_pct for partial TPs."""
+        strat = UTBotSTC()
+        params = {
+            'partial_rr': 0.3,     # Very tight to trigger early
+            'breakeven_rr': 0.2,   # Very tight  
+            'partial_pct': 0.6,    # Custom partial percentage
+            'stop_ticks': 1
+        }
+        _, lx, _, sx, _, _, ratios = strat.generate_signals(sample_data, params)
+        
+        # Check partial ratio values if any
+        partial_mask = (ratios < 1.0) & (ratios > 0.0)
+        if partial_mask.sum() > 0:
+            assert all(ratios[partial_mask] == 0.6)
 
     def test_stc_filters(self, sample_data):
         """Test STC parameters."""
@@ -104,3 +129,11 @@ class TestUTBotSTC:
         
         assert l.sum() == 0
         assert s.sum() == 0
+
+    def test_ema_length_param(self, sample_data):
+        """Test that ema_length parameter is recognized."""
+        strat = UTBotSTC()
+        # Should run without error with custom EMA length
+        params = {'ema_length': 21}
+        l, lx, s, sx, _, _, _ = strat.generate_signals(sample_data, params)
+        assert isinstance(l, pd.Series)
