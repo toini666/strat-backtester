@@ -2,18 +2,89 @@
 indicator("EMA9 Momentum Retest", overlay=true, max_labels_count=500, max_lines_count=500)
 
 // ============================================
-// PARAMÈTRES INPUT
+// PARAMETRES INPUT
 // ============================================
-i_emaLen      = input.int(9, "Longueur EMA", minval=1, group="Indicateur")
-i_nbCandles   = input.int(3, "Nb bougies consécutives pour setup", minval=2, maxval=10, group="Setup")
-i_retestTol   = input.int(3, "Tolérance retest EMA (ticks)", minval=0, maxval=50, group="Setup")
-i_maxBars     = input.int(10, "Expiration setup (nb bougies)", minval=1, maxval=100, group="Setup")
-i_slMargin    = input.int(3, "Marge SL (ticks)", minval=0, group="Position")
-i_rrBE        = input.float(1.0, "R:R pour déplacer SL à breakeven", minval=0.5, step=0.5, group="Position")
-i_rrRatio     = input.float(2.0, "R:R pour TP1 (partiel)", minval=0.5, step=0.5, group="Position")
-i_tpPct       = input.float(50.0, "% clôture partielle TP1", minval=10, maxval=90, step=5, group="Position")
-i_stratName   = input.string("EMA9Retest", "Nom stratégie", group="Alertes")
-i_showSetup   = input.bool(true, "Afficher triangles setup", group="Visuel")
+grp_ind   = "Indicateur"
+grp_setup = "Setup"
+grp_pos   = "Position"
+grp_alert = "Alertes"
+grp_vis   = "Visuel"
+grp_time  = "Auto-Close (Bruxelles)"
+grp_bo    = "Blackout (Bruxelles)"
+
+i_emaLen      = input.int(7, "Longueur EMA", minval=1, group=grp_ind)
+i_nbCandles   = input.int(3, "Nb bougies consecutives pour setup", minval=2, maxval=10, group=grp_setup)
+i_setupBarCanRetest = input.bool(false, "La bougie de setup peut servir de retest", group=grp_setup)
+i_retestTol   = input.int(1, "Tolerance retest EMA (ticks)", minval=0, maxval=50, group=grp_setup)
+i_maxBars     = input.int(10, "Expiration setup (nb bougies)", minval=1, maxval=100, group=grp_setup)
+i_slMargin    = input.int(3, "Marge SL (ticks)", minval=0, group=grp_pos)
+i_maxStopPoints = input.float(60.0, "Distance max stop (points)", minval=1.0, step=1.0, group=grp_pos)
+i_rrBE        = input.float(1.0, "R:R pour deplacer SL a breakeven", minval=0.5, step=0.5, group=grp_pos)
+i_rrRatio     = input.float(2.0, "R:R pour TP1 (partiel)", minval=0.5, step=0.5, group=grp_pos)
+i_tp1Points   = input.float(50.0, "TP1 points fixes (prix absolu)", minval=0.0, step=1.0, group=grp_pos)
+i_tpPct       = input.float(50.0, "TP1 partiel (%)", minval=0.0, maxval=100.0, step=5.0, group=grp_pos)
+i_stratName   = input.string("EMA9Retest", "Nom strategie", group=grp_alert)
+i_showSetup   = input.bool(true, "Afficher triangles setup", group=grp_vis)
+i_showAutoCloseMark = input.bool(true, "Afficher repere auto-close", group=grp_vis)
+
+i_autoCloseH = input.int(21, "Heure auto-close", minval=0, maxval=23, group=grp_time, inline="autoclose", tooltip="Ferme uniquement la position en cours a l'heure configuree.")
+i_autoCloseM = input.int(0, "Minute auto-close", minval=0, maxval=59, group=grp_time, inline="autoclose")
+
+i_bo1On     = input.bool(true, "Blackout 1 actif", group=grp_bo, inline="bo1")
+i_bo1StartH = input.int(8, "Debut H", minval=0, maxval=23, group=grp_bo, inline="bo1")
+i_bo1StartM = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo1")
+i_bo1EndH   = input.int(8, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo1e")
+i_bo1EndM   = input.int(5, "M", minval=0, maxval=59, group=grp_bo, inline="bo1e")
+
+i_bo2On     = input.bool(false, "Blackout 2 actif", group=grp_bo, inline="bo2")
+i_bo2StartH = input.int(11, "Debut H", minval=0, maxval=23, group=grp_bo, inline="bo2")
+i_bo2StartM = input.int(30, "M", minval=0, maxval=59, group=grp_bo, inline="bo2")
+i_bo2EndH   = input.int(13, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo2e")
+i_bo2EndM   = input.int(30, "M", minval=0, maxval=59, group=grp_bo, inline="bo2e")
+
+i_bo3On     = input.bool(true, "Blackout 3 actif", group=grp_bo, inline="bo3")
+i_bo3StartH = input.int(14, "Debut H", minval=0, maxval=23, group=grp_bo, inline="bo3")
+i_bo3StartM = input.int(30, "M", minval=0, maxval=59, group=grp_bo, inline="bo3")
+i_bo3EndH   = input.int(14, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo3e")
+i_bo3EndM   = input.int(35, "M", minval=0, maxval=59, group=grp_bo, inline="bo3e")
+
+i_bo4On     = input.bool(false, "Blackout 4 actif", group=grp_bo, inline="bo4")
+i_bo4StartH = input.int(16, "Debut H", minval=0, maxval=23, group=grp_bo, inline="bo4")
+i_bo4StartM = input.int(30, "M", minval=0, maxval=59, group=grp_bo, inline="bo4")
+i_bo4EndH   = input.int(21, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo4e")
+i_bo4EndM   = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo4e")
+
+i_bo5On     = input.bool(true, "Blackout 5 actif", group=grp_bo, inline="bo5")
+i_bo5StartH = input.int(21, "Debut H", minval=0, maxval=23, group=grp_bo, inline="bo5")
+i_bo5StartM = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo5")
+i_bo5EndH   = input.int(23, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo5e")
+i_bo5EndM   = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo5e")
+
+i_bo6On     = input.bool(true, "Blackout 6 actif", group=grp_bo, inline="bo6")
+i_bo6StartH = input.int(23, "Debut H", minval=0, maxval=23, group=grp_bo, inline="bo6")
+i_bo6StartM = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo6")
+i_bo6EndH   = input.int(23, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo6e")
+i_bo6EndM   = input.int(5, "M", minval=0, maxval=59, group=grp_bo, inline="bo6e")
+
+// ============================================
+// VARIABLES D'ETAT
+// ============================================
+var bool  positionActive = false
+var int   currentSide    = 0
+var int   tradeState     = 0
+var float entryPrice     = na
+var float slPrice        = na
+var float tp1Price       = na
+var float beLevel        = na
+var int   entryBar       = na
+var int   setupBar       = na
+var int   readyBar       = na
+var int   lastActionBar  = -1
+
+var line lineEntry = na
+var line lineSL    = na
+var line lineTP1   = na
+var line lineBE    = na
 
 // ============================================
 // FONCTIONS UTILITAIRES
@@ -35,6 +106,55 @@ getTimeframe() =>
         else
             "M" + str.tostring(int(secs / 60))
 
+isInTimeSlot(int hh, int mm, int startH, int startM, int endH, int endM) =>
+    int curMin = hh * 60 + mm
+    int startMin = startH * 60 + startM
+    int endMin = endH * 60 + endM
+    bool endIsDayLastMinute = endH == 23 and endM == 59
+    if startMin <= endMin
+        curMin >= startMin and (endIsDayLastMinute ? curMin <= endMin : curMin < endMin)
+    else
+        curMin >= startMin or (endIsDayLastMinute ? curMin <= endMin : curMin < endMin)
+
+isBlackoutWindow() =>
+    int hh = hour(time_close, "Europe/Brussels")
+    int mm = minute(time_close, "Europe/Brussels")
+    bool b1 = i_bo1On and isInTimeSlot(hh, mm, i_bo1StartH, i_bo1StartM, i_bo1EndH, i_bo1EndM)
+    bool b2 = i_bo2On and isInTimeSlot(hh, mm, i_bo2StartH, i_bo2StartM, i_bo2EndH, i_bo2EndM)
+    bool b3 = i_bo3On and isInTimeSlot(hh, mm, i_bo3StartH, i_bo3StartM, i_bo3EndH, i_bo3EndM)
+    bool b4 = i_bo4On and isInTimeSlot(hh, mm, i_bo4StartH, i_bo4StartM, i_bo4EndH, i_bo4EndM)
+    bool b5 = i_bo5On and isInTimeSlot(hh, mm, i_bo5StartH, i_bo5StartM, i_bo5EndH, i_bo5EndM)
+    bool b6 = i_bo6On and isInTimeSlot(hh, mm, i_bo6StartH, i_bo6StartM, i_bo6EndH, i_bo6EndM)
+    b1 or b2 or b3 or b4 or b5 or b6
+
+isAutoCloseBar() =>
+    hour(time_close, "Europe/Brussels") == i_autoCloseH and minute(time_close, "Europe/Brussels") == i_autoCloseM
+
+getTradeStateLabel(int state) =>
+    switch state
+        0 => "FLAT"
+        1 => "SETUP L"
+        2 => "READY L"
+        3 => "LONG FULL"
+        4 => "LONG PART"
+        5 => "SETUP S"
+        6 => "READY S"
+        7 => "SHORT FULL"
+        8 => "SHORT PART"
+        9 => "LONG BE"
+        10 => "SHORT BE"
+        => "UNKNOWN"
+
+getTp1Long(float entry, float risk) =>
+    float rrTarget = entry + risk * i_rrRatio
+    float fixedTarget = entry + i_tp1Points
+    roundToTick(i_tp1Points > 0 ? math.min(rrTarget, fixedTarget) : rrTarget)
+
+getTp1Short(float entry, float risk) =>
+    float rrTarget = entry - risk * i_rrRatio
+    float fixedTarget = entry - i_tp1Points
+    roundToTick(i_tp1Points > 0 ? math.max(rrTarget, fixedTarget) : rrTarget)
+
 // ============================================
 // CALCUL EMA
 // ============================================
@@ -42,189 +162,240 @@ float ema9 = ta.ema(close, i_emaLen)
 plot(ema9, "EMA9", color=color.orange, linewidth=2)
 
 float tolPrice = i_retestTol * syminfo.mintick
+bool inBlackout = isBlackoutWindow()
+bool autoCloseBar = isAutoCloseBar()
 
 // ============================================
-// VARIABLES D'ÉTAT
-// ============================================
-// États:
-//   0  = FLAT
-//   1  = SETUP_LONG       5 = SETUP_SHORT
-//   2  = RETEST_LONG_OK   6 = RETEST_SHORT_OK
-//   3  = LONG_FULL         7 = SHORT_FULL        (SL original, pas de sortie EMA)
-//   9  = LONG_BE          10 = SHORT_BE           (SL à BE, pas de sortie EMA)
-//   4  = LONG_PARTIAL      8 = SHORT_PARTIAL      (après TP1, sortie EMA active)
-var int   tradeState = 0
-var float entryPrice = na
-var float slPrice    = na
-var float tp1Price   = na
-var float beLevel    = na
-var int   entryBar   = na
-var int   setupBar   = na
-
-var line lineEntry = na
-var line lineSL    = na
-var line lineTP1   = na
-var line lineBE    = na
-
-// ============================================
-// DÉTECTION SETUP (N bougies consécutives)
+// DETECTION SETUP (N bougies consecutives)
 // ============================================
 bool longSetupOk = true
 for i = 0 to i_nbCandles - 1
     if not (close[i] > open[i] and close[i] > ema9[i])
         longSetupOk := false
         break
+bool longSetupFromFirstTouch = longSetupOk and low[i_nbCandles - 1] <= ema9[i_nbCandles - 1]
+bool longSetupFromConfirmTouch = longSetupOk and i_setupBarCanRetest and low <= ema9 + tolPrice
 if longSetupOk
-    longSetupOk := low[i_nbCandles - 1] <= ema9[i_nbCandles - 1]
+    longSetupOk := longSetupFromFirstTouch or longSetupFromConfirmTouch
 
 bool shortSetupOk = true
 for i = 0 to i_nbCandles - 1
     if not (close[i] < open[i] and close[i] < ema9[i])
         shortSetupOk := false
         break
+bool shortSetupFromFirstTouch = shortSetupOk and high[i_nbCandles - 1] >= ema9[i_nbCandles - 1]
+bool shortSetupFromConfirmTouch = shortSetupOk and i_setupBarCanRetest and high >= ema9 - tolPrice
 if shortSetupOk
-    shortSetupOk := high[i_nbCandles - 1] >= ema9[i_nbCandles - 1]
+    shortSetupOk := shortSetupFromFirstTouch or shortSetupFromConfirmTouch
 
 // ============================================
-// FLAGS D'ÉVÉNEMENTS (recalculés chaque barre)
+// FLAGS D'EVENEMENTS (recalcules chaque barre)
 // ============================================
-bool  evSetupLong     = false
-bool  evSetupShort    = false
-bool  evSignalLong    = false
-bool  evSignalShort   = false
-bool  evMoveBELong    = false
-bool  evMoveBEShort   = false
-bool  evPartialLong   = false
-bool  evPartialShort  = false
-bool  evCloseSLLong   = false
-bool  evCloseSLShort  = false
-bool  evCloseBELong   = false
-bool  evCloseBEShort  = false
-bool  evCloseEmaLong  = false
-bool  evCloseEmaShort = false
-float evPartialPrice  = na
-float evClosePrice    = na
-float evMoveBEPrice   = na
+bool  evSetupLong      = false
+bool  evSetupShort     = false
+bool  evSignalLong     = false
+bool  evSignalShort    = false
+bool  evMoveBELong     = false
+bool  evMoveBEShort    = false
+bool  evPartialLong    = false
+bool  evPartialShort   = false
+bool  evCloseSLLong    = false
+bool  evCloseSLShort   = false
+bool  evCloseBELong    = false
+bool  evCloseBEShort   = false
+bool  evCloseEmaLong   = false
+bool  evCloseEmaShort  = false
+float evPartialPrice   = na
+float evClosePrice     = na
+float evMoveBEPrice    = na
+bool  forceCloseTriggered = false
+bool  forceCloseInProfit = false
+int   forceCloseSide = 0
 
 // ============================================
-// BLOC 1 : SETUP / RETEST / ENTRÉE
+// BLOC 1 : SETUP / RETEST / ENTREE
 // ============================================
 if tradeState == 0
     if longSetupOk
-        tradeState  := 1
-        setupBar    := bar_index
+        bool setupRetestAlreadyDoneLong = longSetupFromConfirmTouch
+        tradeState := setupRetestAlreadyDoneLong ? 2 : 1
+        setupBar := bar_index
+        readyBar := setupRetestAlreadyDoneLong ? bar_index : na
         evSetupLong := true
     else if shortSetupOk
-        tradeState   := 5
-        setupBar     := bar_index
+        bool setupRetestAlreadyDoneShort = shortSetupFromConfirmTouch
+        tradeState := setupRetestAlreadyDoneShort ? 6 : 5
+        setupBar := bar_index
+        readyBar := setupRetestAlreadyDoneShort ? bar_index : na
         evSetupShort := true
 
 else if tradeState == 1
     if bar_index - setupBar >= i_maxBars
         tradeState := 0
+        readyBar := na
     else if low <= ema9 + tolPrice
         if close > ema9
             tradeState := 2
+            readyBar := bar_index
         else
             tradeState := 0
+            readyBar := na
 
 else if tradeState == 2
     if bar_index - setupBar >= i_maxBars
         tradeState := 0
+        readyBar := na
     else if close < ema9
         tradeState := 0
-    else if high > high[1]
-        float tmpEntry = roundToTick(high[1] + syminfo.mintick)
-        float tmpSL    = roundToTick(low[1] - i_slMargin * syminfo.mintick)
-        float risk     = tmpEntry - tmpSL
-        if risk > 0
-            entryPrice   := tmpEntry
-            slPrice      := tmpSL
-            tp1Price     := roundToTick(tmpEntry + risk * i_rrRatio)
-            beLevel      := roundToTick(tmpEntry + risk * i_rrBE)
-            entryBar     := bar_index
-            tradeState   := 3
-            evSignalLong := true
-            lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, style=line.style_dotted, color=color.white, width=1)
-            lineSL    := line.new(bar_index, slPrice, bar_index + 1, slPrice, style=line.style_dotted, color=color.red, width=1)
-            lineTP1   := line.new(bar_index, tp1Price, bar_index + 1, tp1Price, style=line.style_dotted, color=color.green, width=1)
-            lineBE    := line.new(bar_index, beLevel, bar_index + 1, beLevel, style=line.style_dotted, color=color.orange, width=1)
-        else
-            tradeState := 0
+        readyBar := na
 
 else if tradeState == 5
     if bar_index - setupBar >= i_maxBars
         tradeState := 0
+        readyBar := na
     else if high >= ema9 - tolPrice
         if close < ema9
             tradeState := 6
+            readyBar := bar_index
         else
             tradeState := 0
+            readyBar := na
 
 else if tradeState == 6
     if bar_index - setupBar >= i_maxBars
         tradeState := 0
+        readyBar := na
     else if close > ema9
         tradeState := 0
-    else if low < low[1]
-        float tmpEntry = roundToTick(low[1] - syminfo.mintick)
-        float tmpSL    = roundToTick(high[1] + i_slMargin * syminfo.mintick)
-        float risk     = tmpSL - tmpEntry
-        if risk > 0
-            entryPrice    := tmpEntry
-            slPrice       := tmpSL
-            tp1Price      := roundToTick(tmpEntry - risk * i_rrRatio)
-            beLevel       := roundToTick(tmpEntry - risk * i_rrBE)
-            entryBar      := bar_index
-            tradeState    := 7
+        readyBar := na
+
+// ============================================
+// BLOC 2 : ORDRES EN ATTENTE / GESTION POSITION
+// ============================================
+bool canAct = bar_index > lastActionBar
+
+bool canEnterLong = tradeState == 2 and not positionActive and not inBlackout and canAct and (na(readyBar) or bar_index > readyBar)
+if canEnterLong
+    float longBreakTrigger = roundToTick(high[1] + syminfo.mintick)
+    if high >= longBreakTrigger and close >= ema9
+        float actualEntry = roundToTick(close)
+        float rawSl = roundToTick(low[1] - i_slMargin * syminfo.mintick)
+        float rawRisk = actualEntry - rawSl
+        float maxRisk = i_maxStopPoints
+        float actualRisk = math.min(rawRisk, maxRisk)
+        float actualSl = roundToTick(actualEntry - actualRisk)
+        if actualRisk > 0
+            entryPrice := actualEntry
+            slPrice := actualSl
+            tp1Price := getTp1Long(actualEntry, actualRisk)
+            beLevel := roundToTick(actualEntry + actualRisk * i_rrBE)
+            entryBar := bar_index
+            lastActionBar := bar_index
+            tradeState := 3
+            currentSide := 1
+            positionActive := true
+            evSignalLong := true
+            lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, style=line.style_dotted, color=color.white, width=1)
+            lineSL := line.new(bar_index, slPrice, bar_index + 1, slPrice, style=line.style_dotted, color=color.red, width=1)
+            lineTP1 := line.new(bar_index, tp1Price, bar_index + 1, tp1Price, style=line.style_dotted, color=color.green, width=1)
+            lineBE := line.new(bar_index, beLevel, bar_index + 1, beLevel, style=line.style_dotted, color=color.orange, width=1)
+
+bool canEnterShort = tradeState == 6 and not positionActive and not inBlackout and canAct and (na(readyBar) or bar_index > readyBar)
+if canEnterShort
+    float shortBreakTrigger = roundToTick(low[1] - syminfo.mintick)
+    if low <= shortBreakTrigger and close <= ema9
+        float actualEntry = roundToTick(close)
+        float rawSl = roundToTick(high[1] + i_slMargin * syminfo.mintick)
+        float rawRisk = rawSl - actualEntry
+        float maxRisk = i_maxStopPoints
+        float actualRisk = math.min(rawRisk, maxRisk)
+        float actualSl = roundToTick(actualEntry + actualRisk)
+        if actualRisk > 0
+            entryPrice := actualEntry
+            slPrice := actualSl
+            tp1Price := getTp1Short(actualEntry, actualRisk)
+            beLevel := roundToTick(actualEntry - actualRisk * i_rrBE)
+            entryBar := bar_index
+            lastActionBar := bar_index
+            tradeState := 7
+            currentSide := -1
+            positionActive := true
             evSignalShort := true
             lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, style=line.style_dotted, color=color.white, width=1)
-            lineSL    := line.new(bar_index, slPrice, bar_index + 1, slPrice, style=line.style_dotted, color=color.red, width=1)
-            lineTP1   := line.new(bar_index, tp1Price, bar_index + 1, tp1Price, style=line.style_dotted, color=color.green, width=1)
-            lineBE    := line.new(bar_index, beLevel, bar_index + 1, beLevel, style=line.style_dotted, color=color.orange, width=1)
-        else
-            tradeState := 0
+            lineSL := line.new(bar_index, slPrice, bar_index + 1, slPrice, style=line.style_dotted, color=color.red, width=1)
+            lineTP1 := line.new(bar_index, tp1Price, bar_index + 1, tp1Price, style=line.style_dotted, color=color.green, width=1)
+            lineBE := line.new(bar_index, beLevel, bar_index + 1, beLevel, style=line.style_dotted, color=color.orange, width=1)
 
-// ============================================
-// BLOC 2 : GESTION DE POSITION
-// ============================================
-
-// Détection conflit entrée/SL sur la barre d'entrée :
-// LONG : bougie haussière (close>open) → chemin Open→Low→High→Close
-//        → le SL (en bas) a été touché AVANT le breakout → ignorer le SL
-// SHORT : bougie baissière (close<open) → chemin Open→High→Low→Close
-//         → le SL (en haut) a été touché AVANT le breakout → ignorer le SL
-bool isEntryBar      = bar_index == entryBar
-bool ignoreSLLong    = isEntryBar and close > open   // Bougie haussière : low touché avant high
-bool ignoreSLShort   = isEntryBar and close < open   // Bougie baissière : high touché avant low
-
-// --- LONG_FULL (état 3) ---
-if tradeState == 3
-    bool slHit = low <= slPrice and not ignoreSLLong
-    if slHit
-        evClosePrice  := slPrice
-        evCloseSLLong := true
-        tradeState    := 0
+if positionActive and autoCloseBar and canAct
+    forceCloseTriggered := true
+    forceCloseSide := currentSide
+    forceCloseInProfit := currentSide == 1 ? close > entryPrice : close < entryPrice
+    evClosePrice := roundToTick(close)
+    positionActive := false
+    currentSide := 0
+    tradeState := 0
+    lastActionBar := bar_index
+    if not na(lineEntry)
         line.delete(lineEntry)
+        lineEntry := na
+    if not na(lineSL)
         line.delete(lineSL)
+        lineSL := na
+    if not na(lineTP1)
         line.delete(lineTP1)
+        lineTP1 := na
+    if not na(lineBE)
         line.delete(lineBE)
+        lineBE := na
+
+if tradeState == 3 and bar_index > lastActionBar
+    bool slHit = low <= slPrice
+    if slHit
+        evClosePrice := slPrice
+        evCloseSLLong := true
+        positionActive := false
+        currentSide := 0
+        tradeState := 0
+        lastActionBar := bar_index
+        if not na(lineEntry)
+            line.delete(lineEntry)
+            lineEntry := na
+        if not na(lineSL)
+            line.delete(lineSL)
+            lineSL := na
+        if not na(lineTP1)
+            line.delete(lineTP1)
+            lineTP1 := na
+        if not na(lineBE)
+            line.delete(lineBE)
+            lineBE := na
+    else if high >= tp1Price
+        evPartialPrice := roundToTick(close)
+        evPartialLong := true
+        slPrice := entryPrice
+        tradeState := 4
+        if not na(lineBE)
+            line.delete(lineBE)
+            lineBE := na
+        if not na(lineTP1)
+            line.delete(lineTP1)
+            lineTP1 := na
+        line.set_y1(lineSL, slPrice)
+        line.set_y2(lineSL, slPrice)
+        line.set_color(lineSL, color.orange)
+        line.set_x2(lineEntry, bar_index + 1)
+        line.set_x2(lineSL, bar_index + 1)
     else if high >= beLevel
-        evMoveBEPrice  := beLevel
-        evMoveBELong   := true
+        evMoveBEPrice := beLevel
+        evMoveBELong := true
         slPrice := entryPrice
         tradeState := 9
-        line.delete(lineBE)
-        lineBE := na
+        if not na(lineBE)
+            line.delete(lineBE)
+            lineBE := na
         line.set_y1(lineSL, slPrice)
         line.set_y2(lineSL, slPrice)
         line.set_color(lineSL, color.orange)
-        if high >= tp1Price
-            evPartialPrice := tp1Price
-            evPartialLong  := true
-            tradeState     := 4
-            line.delete(lineTP1)
-            lineTP1 := na
         line.set_x2(lineEntry, bar_index + 1)
         line.set_x2(lineSL, bar_index + 1)
         if not na(lineTP1)
@@ -235,21 +406,33 @@ if tradeState == 3
         line.set_x2(lineTP1, bar_index + 1)
         line.set_x2(lineBE, bar_index + 1)
 
-// --- LONG_BE (état 9) ---
-else if tradeState == 9
+else if tradeState == 9 and bar_index > lastActionBar
     if low <= slPrice
-        evClosePrice  := slPrice
+        evClosePrice := slPrice
         evCloseBELong := true
-        tradeState    := 0
-        line.delete(lineEntry)
-        line.delete(lineSL)
-        line.delete(lineTP1)
+        positionActive := false
+        currentSide := 0
+        tradeState := 0
+        lastActionBar := bar_index
+        if not na(lineEntry)
+            line.delete(lineEntry)
+            lineEntry := na
+        if not na(lineSL)
+            line.delete(lineSL)
+            lineSL := na
+        if not na(lineTP1)
+            line.delete(lineTP1)
+            lineTP1 := na
+        if not na(lineBE)
+            line.delete(lineBE)
+            lineBE := na
     else if high >= tp1Price
-        evPartialPrice := tp1Price
-        evPartialLong  := true
-        tradeState     := 4
-        line.delete(lineTP1)
-        lineTP1 := na
+        evPartialPrice := roundToTick(close)
+        evPartialLong := true
+        tradeState := 4
+        if not na(lineTP1)
+            line.delete(lineTP1)
+            lineTP1 := na
         line.set_x2(lineEntry, bar_index + 1)
         line.set_x2(lineSL, bar_index + 1)
     else
@@ -257,51 +440,97 @@ else if tradeState == 9
         line.set_x2(lineSL, bar_index + 1)
         line.set_x2(lineTP1, bar_index + 1)
 
-// --- LONG_PARTIAL (état 4) ---
-else if tradeState == 4
+else if tradeState == 4 and bar_index > lastActionBar
     if low <= slPrice
-        evClosePrice  := slPrice
+        evClosePrice := slPrice
         evCloseBELong := true
-        tradeState    := 0
-        line.delete(lineEntry)
-        line.delete(lineSL)
+        positionActive := false
+        currentSide := 0
+        tradeState := 0
+        lastActionBar := bar_index
+        if not na(lineEntry)
+            line.delete(lineEntry)
+            lineEntry := na
+        if not na(lineSL)
+            line.delete(lineSL)
+            lineSL := na
+        if not na(lineTP1)
+            line.delete(lineTP1)
+            lineTP1 := na
+        if not na(lineBE)
+            line.delete(lineBE)
+            lineBE := na
     else if close < ema9
-        evClosePrice   := roundToTick(close)
+        evClosePrice := roundToTick(close)
         evCloseEmaLong := true
-        tradeState     := 0
-        line.delete(lineEntry)
-        line.delete(lineSL)
+        positionActive := false
+        currentSide := 0
+        tradeState := 0
+        lastActionBar := bar_index
+        if not na(lineEntry)
+            line.delete(lineEntry)
+            lineEntry := na
+        if not na(lineSL)
+            line.delete(lineSL)
+            lineSL := na
+        if not na(lineTP1)
+            line.delete(lineTP1)
+            lineTP1 := na
+        if not na(lineBE)
+            line.delete(lineBE)
+            lineBE := na
     else
         line.set_x2(lineEntry, bar_index + 1)
         line.set_x2(lineSL, bar_index + 1)
 
-// --- SHORT_FULL (état 7) ---
-else if tradeState == 7
-    bool slHit = high >= slPrice and not ignoreSLShort
+else if tradeState == 7 and bar_index > lastActionBar
+    bool slHit = high >= slPrice
     if slHit
-        evClosePrice   := slPrice
+        evClosePrice := slPrice
         evCloseSLShort := true
-        tradeState     := 0
-        line.delete(lineEntry)
-        line.delete(lineSL)
-        line.delete(lineTP1)
-        line.delete(lineBE)
+        positionActive := false
+        currentSide := 0
+        tradeState := 0
+        lastActionBar := bar_index
+        if not na(lineEntry)
+            line.delete(lineEntry)
+            lineEntry := na
+        if not na(lineSL)
+            line.delete(lineSL)
+            lineSL := na
+        if not na(lineTP1)
+            line.delete(lineTP1)
+            lineTP1 := na
+        if not na(lineBE)
+            line.delete(lineBE)
+            lineBE := na
+    else if low <= tp1Price
+        evPartialPrice := roundToTick(close)
+        evPartialShort := true
+        slPrice := entryPrice
+        tradeState := 8
+        if not na(lineBE)
+            line.delete(lineBE)
+            lineBE := na
+        if not na(lineTP1)
+            line.delete(lineTP1)
+            lineTP1 := na
+        line.set_y1(lineSL, slPrice)
+        line.set_y2(lineSL, slPrice)
+        line.set_color(lineSL, color.orange)
+        line.set_x2(lineEntry, bar_index + 1)
+        line.set_x2(lineSL, bar_index + 1)
     else if low <= beLevel
-        evMoveBEPrice  := beLevel
-        evMoveBEShort  := true
+        evMoveBEPrice := beLevel
+        evMoveBEShort := true
         slPrice := entryPrice
         tradeState := 10
-        line.delete(lineBE)
-        lineBE := na
+        if not na(lineBE)
+            line.delete(lineBE)
+            lineBE := na
         line.set_y1(lineSL, slPrice)
         line.set_y2(lineSL, slPrice)
         line.set_color(lineSL, color.orange)
-        if low <= tp1Price
-            evPartialPrice := tp1Price
-            evPartialShort := true
-            tradeState     := 8
-            line.delete(lineTP1)
-            lineTP1 := na
         line.set_x2(lineEntry, bar_index + 1)
         line.set_x2(lineSL, bar_index + 1)
         if not na(lineTP1)
@@ -312,21 +541,33 @@ else if tradeState == 7
         line.set_x2(lineTP1, bar_index + 1)
         line.set_x2(lineBE, bar_index + 1)
 
-// --- SHORT_BE (état 10) ---
-else if tradeState == 10
+else if tradeState == 10 and bar_index > lastActionBar
     if high >= slPrice
-        evClosePrice   := slPrice
+        evClosePrice := slPrice
         evCloseBEShort := true
-        tradeState     := 0
-        line.delete(lineEntry)
-        line.delete(lineSL)
-        line.delete(lineTP1)
+        positionActive := false
+        currentSide := 0
+        tradeState := 0
+        lastActionBar := bar_index
+        if not na(lineEntry)
+            line.delete(lineEntry)
+            lineEntry := na
+        if not na(lineSL)
+            line.delete(lineSL)
+            lineSL := na
+        if not na(lineTP1)
+            line.delete(lineTP1)
+            lineTP1 := na
+        if not na(lineBE)
+            line.delete(lineBE)
+            lineBE := na
     else if low <= tp1Price
-        evPartialPrice := tp1Price
+        evPartialPrice := roundToTick(close)
         evPartialShort := true
-        tradeState     := 8
-        line.delete(lineTP1)
-        lineTP1 := na
+        tradeState := 8
+        if not na(lineTP1)
+            line.delete(lineTP1)
+            lineTP1 := na
         line.set_x2(lineEntry, bar_index + 1)
         line.set_x2(lineSL, bar_index + 1)
     else
@@ -334,20 +575,45 @@ else if tradeState == 10
         line.set_x2(lineSL, bar_index + 1)
         line.set_x2(lineTP1, bar_index + 1)
 
-// --- SHORT_PARTIAL (état 8) ---
-else if tradeState == 8
+else if tradeState == 8 and bar_index > lastActionBar
     if high >= slPrice
-        evClosePrice   := slPrice
+        evClosePrice := slPrice
         evCloseBEShort := true
-        tradeState     := 0
-        line.delete(lineEntry)
-        line.delete(lineSL)
+        positionActive := false
+        currentSide := 0
+        tradeState := 0
+        lastActionBar := bar_index
+        if not na(lineEntry)
+            line.delete(lineEntry)
+            lineEntry := na
+        if not na(lineSL)
+            line.delete(lineSL)
+            lineSL := na
+        if not na(lineTP1)
+            line.delete(lineTP1)
+            lineTP1 := na
+        if not na(lineBE)
+            line.delete(lineBE)
+            lineBE := na
     else if close > ema9
-        evClosePrice    := roundToTick(close)
+        evClosePrice := roundToTick(close)
         evCloseEmaShort := true
-        tradeState      := 0
-        line.delete(lineEntry)
-        line.delete(lineSL)
+        positionActive := false
+        currentSide := 0
+        tradeState := 0
+        lastActionBar := bar_index
+        if not na(lineEntry)
+            line.delete(lineEntry)
+            lineEntry := na
+        if not na(lineSL)
+            line.delete(lineSL)
+            lineSL := na
+        if not na(lineTP1)
+            line.delete(lineTP1)
+            lineTP1 := na
+        if not na(lineBE)
+            line.delete(lineBE)
+            lineBE := na
     else
         line.set_x2(lineEntry, bar_index + 1)
         line.set_x2(lineSL, bar_index + 1)
@@ -355,76 +621,113 @@ else if tradeState == 8
 // ============================================
 // VISUALISATION
 // ============================================
-plotshape(i_showSetup and evSetupLong,  "Setup Long",  shape.triangleup,   location.belowbar, color=color.green, size=size.small)
-plotshape(i_showSetup and evSetupShort, "Setup Short", shape.triangledown, location.abovebar, color=color.red,   size=size.small)
+plotshape(i_showSetup and evSetupLong, "Setup Long", shape.triangleup, location.belowbar, color=color.green, size=size.small)
+plotshape(i_showSetup and evSetupShort, "Setup Short", shape.triangledown, location.abovebar, color=color.red, size=size.small)
 
-plotshape(evSignalLong,  "Entrée Long",  shape.circle, location.belowbar, color=color.green, size=size.tiny)
-plotshape(evSignalShort, "Entrée Short", shape.circle, location.abovebar, color=color.red,   size=size.tiny)
+plotshape(evSignalLong, "Entree Long", shape.circle, location.belowbar, color=color.green, size=size.tiny)
+plotshape(evSignalShort, "Entree Short", shape.circle, location.abovebar, color=color.red, size=size.tiny)
 
-plotshape(evPartialLong,  "TP1 Long",  shape.xcross, location.abovebar, color=color.green, size=size.tiny)
+plotshape(evPartialLong, "TP1 Long", shape.xcross, location.abovebar, color=color.green, size=size.tiny)
 plotshape(evPartialShort, "TP1 Short", shape.xcross, location.belowbar, color=color.green, size=size.tiny)
 
-plotshape(evCloseBELong,  "BE Long",  shape.xcross, location.belowbar, color=color.orange, size=size.tiny)
-plotshape(evCloseBEShort, "BE Short", shape.xcross, location.abovebar, color=color.orange, size=size.tiny)
+plotshape(evCloseBELong, "BE Long", shape.xcross, location.abovebar, color=color.orange, size=size.tiny)
+plotshape(evCloseBEShort, "BE Short", shape.xcross, location.belowbar, color=color.orange, size=size.tiny)
 
-plotshape(evCloseSLLong,  "SL Long",  shape.xcross, location.belowbar, color=color.red, size=size.tiny)
+plotshape(evCloseSLLong, "SL Long", shape.xcross, location.belowbar, color=color.red, size=size.tiny)
 plotshape(evCloseSLShort, "SL Short", shape.xcross, location.abovebar, color=color.red, size=size.tiny)
 
-bool emaLongProfit  = evCloseEmaLong and not na(evClosePrice) and evClosePrice > entryPrice
-bool emaLongLoss    = evCloseEmaLong and not na(evClosePrice) and evClosePrice <= entryPrice
+bool emaLongProfit = evCloseEmaLong and not na(evClosePrice) and evClosePrice > entryPrice
+bool emaLongLoss = evCloseEmaLong and not na(evClosePrice) and evClosePrice <= entryPrice
 plotshape(emaLongProfit, "EMA Close Long Profit", shape.xcross, location.abovebar, color=color.green, size=size.tiny)
-plotshape(emaLongLoss,   "EMA Close Long Loss",   shape.xcross, location.belowbar, color=color.red,   size=size.tiny)
+plotshape(emaLongLoss, "EMA Close Long Loss", shape.xcross, location.belowbar, color=color.red, size=size.tiny)
 
 bool emaShortProfit = evCloseEmaShort and not na(evClosePrice) and evClosePrice < entryPrice
-bool emaShortLoss   = evCloseEmaShort and not na(evClosePrice) and evClosePrice >= entryPrice
+bool emaShortLoss = evCloseEmaShort and not na(evClosePrice) and evClosePrice >= entryPrice
 plotshape(emaShortProfit, "EMA Close Short Profit", shape.xcross, location.belowbar, color=color.green, size=size.tiny)
-plotshape(emaShortLoss,   "EMA Close Short Loss",   shape.xcross, location.abovebar, color=color.red,   size=size.tiny)
+plotshape(emaShortLoss, "EMA Close Short Loss", shape.xcross, location.abovebar, color=color.red, size=size.tiny)
+
+plotshape(forceCloseTriggered and forceCloseSide == 1 ? high : na, title="Force Close L", style=shape.xcross, location=location.abovebar, color=forceCloseInProfit ? color.green : color.orange, size=size.tiny)
+plotshape(forceCloseTriggered and forceCloseSide == -1 ? low : na, title="Force Close S", style=shape.xcross, location=location.belowbar, color=forceCloseInProfit ? color.green : color.orange, size=size.tiny)
+plotshape(i_showAutoCloseMark and autoCloseBar, "Repere Auto-Close", shape.square, location.top, color=color.new(color.gray, 45), size=size.tiny)
 
 // ============================================
 // ALERTES JSON
 // ============================================
-string tf      = getTimeframe()
-string tkr     = syminfo.ticker
+string tf = getTimeframe()
+string tkr = syminfo.ticker
 string stratId = i_stratName + "-" + tkr + "-" + tf
 
-// --- SIGNAL : once_per_bar ---
 if evSignalLong
-    alert('{"ticker":"' + tkr + '","type":"SIGNAL","side":"BUY","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(slPrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar)
+    alert('{"ticker":"' + tkr + '","type":"SIGNAL","side":"BUY","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(slPrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar_close)
 
 if evSignalShort
-    alert('{"ticker":"' + tkr + '","type":"SIGNAL","side":"SELL","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(slPrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar)
+    alert('{"ticker":"' + tkr + '","type":"SIGNAL","side":"SELL","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(slPrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar_close)
 
-// --- MOVEBE : once_per_bar ---
 if evMoveBELong
     alert('{"ticker":"' + tkr + '","type":"MOVEBE","side":"BUY","entry":' + str.tostring(evMoveBEPrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar)
 
 if evMoveBEShort
     alert('{"ticker":"' + tkr + '","type":"MOVEBE","side":"SELL","entry":' + str.tostring(evMoveBEPrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar)
 
-// --- PARTIAL : once_per_bar ---
 if evPartialLong
-    alert('{"ticker":"' + tkr + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(evPartialPrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar)
+    alert('{"ticker":"' + tkr + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(evPartialPrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar_close)
 
 if evPartialShort
-    alert('{"ticker":"' + tkr + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(evPartialPrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar)
+    alert('{"ticker":"' + tkr + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(evPartialPrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar_close)
 
-// --- CLOSE SL original : once_per_bar ---
 if evCloseSLLong
     alert('{"ticker":"' + tkr + '","type":"CLOSE","side":"SELL","entry":' + str.tostring(evClosePrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar)
 
 if evCloseSLShort
     alert('{"ticker":"' + tkr + '","type":"CLOSE","side":"BUY","entry":' + str.tostring(evClosePrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar)
 
-// --- CLOSE BE touché : once_per_bar ---
 if evCloseBELong
     alert('{"ticker":"' + tkr + '","type":"CLOSE","side":"SELL","entry":' + str.tostring(evClosePrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar)
 
 if evCloseBEShort
     alert('{"ticker":"' + tkr + '","type":"CLOSE","side":"BUY","entry":' + str.tostring(evClosePrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar)
 
-// --- CLOSE EMA : once_per_bar_close ---
 if evCloseEmaLong
     alert('{"ticker":"' + tkr + '","type":"CLOSE","side":"SELL","entry":' + str.tostring(evClosePrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar_close)
 
 if evCloseEmaShort
     alert('{"ticker":"' + tkr + '","type":"CLOSE","side":"BUY","entry":' + str.tostring(evClosePrice) + ',"strat":"' + stratId + '","timeframe":"' + tf + '"}', alert.freq_once_per_bar_close)
+
+// ============================================
+// STATUS TABLE
+// ============================================
+var table statusTable = table.new(position.top_right, 2, 6, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+
+if barstate.islastconfirmedhistory or barstate.isrealtime
+    string blackoutStatus = inBlackout ? "BLACKOUT" : "OK"
+    color blackoutColor = inBlackout ? color.red : color.green
+
+    string emaStatus = close > ema9 ? "BULL" : close < ema9 ? "BEAR" : "ON EMA"
+    color emaColor = close > ema9 ? color.green : close < ema9 ? color.red : color.orange
+
+    string stateStatus = getTradeStateLabel(tradeState)
+    color stateColor = tradeState == 0 ? color.gray : ((tradeState == 1 or tradeState == 2 or tradeState == 3 or tradeState == 4 or tradeState == 9) ? color.green : color.red)
+
+    string posStatus = positionActive ? (currentSide == 1 ? "LONG" : "SHORT") : "NONE"
+    color posColor = positionActive ? (currentSide == 1 ? color.green : color.red) : color.gray
+
+    string tpStatus = tradeState == 3 or tradeState == 7 ? "TP1 PENDING" : tradeState == 9 or tradeState == 10 ? "BE ACTIVE" : tradeState == 4 or tradeState == 8 ? "PARTIAL DONE" : "IDLE"
+    color tpColor = tradeState == 3 or tradeState == 7 ? color.green : tradeState == 9 or tradeState == 10 ? color.orange : tradeState == 4 or tradeState == 8 ? color.green : color.gray
+
+    table.cell(statusTable, 0, 0, "Condition", text_color=color.white, bgcolor=color.new(color.gray, 70))
+    table.cell(statusTable, 1, 0, "Status", text_color=color.white, bgcolor=color.new(color.gray, 70))
+
+    table.cell(statusTable, 0, 1, "Blackout", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 1, blackoutStatus, text_color=color.white, bgcolor=color.new(blackoutColor, 70))
+
+    table.cell(statusTable, 0, 2, "EMA", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 2, emaStatus, text_color=color.white, bgcolor=color.new(emaColor, 70))
+
+    table.cell(statusTable, 0, 3, "State", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 3, stateStatus, text_color=color.white, bgcolor=color.new(stateColor, 70))
+
+    table.cell(statusTable, 0, 4, "Position", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 4, posStatus, text_color=color.white, bgcolor=color.new(posColor, 70))
+
+    table.cell(statusTable, 0, 5, "TP1 / BE", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 5, tpStatus, text_color=color.white, bgcolor=color.new(tpColor, 70))

@@ -22,7 +22,6 @@ apiClient.interceptors.response.use(
         if (!error.response) {
             throw new Error('Network error - please check your connection and ensure the backend is running');
         }
-        // Re-throw with better error message
         const detail = (error.response.data as { detail?: string })?.detail;
         if (detail) {
             throw new Error(detail);
@@ -45,9 +44,36 @@ export interface Contract {
     tick_value?: number;
 }
 
+export interface AvailableDataset {
+    symbol: string;
+    contract_id: string;
+    timeframes: string[];
+    start_date: string;
+    end_date: string;
+    bar_count_1m: number;
+    min_start_per_strategy: Record<string, Record<string, string>>;
+}
+
+export interface TradeLeg {
+    entry_time: string;
+    entry_execution_time?: string | null;
+    exit_time: string;
+    exit_execution_time?: string | null;
+    side: string;
+    entry_price: number;
+    exit_price: number;
+    pnl: number;
+    gross_pnl: number;
+    fees: number;
+    size: number;
+    status: string;
+}
+
 export interface Trade {
     entry_time: string;
+    entry_execution_time?: string | null;
     exit_time: string;
+    exit_execution_time?: string | null;
     side: string;
     entry_price: number;
     exit_price: number;
@@ -58,7 +84,48 @@ export interface Trade {
     pnl_pct: number;
     status: string;
     session: string;
+    legs: TradeLeg[];
+    excluded?: boolean;
 }
+
+export interface BlackoutWindowSettings {
+    active: boolean;
+    start_hour: number;
+    start_minute: number;
+    end_hour: number;
+    end_minute: number;
+}
+
+export interface BacktestEngineSettings {
+    auto_close_enabled: boolean;
+    auto_close_hour: number;
+    auto_close_minute: number;
+    blackout_windows: BlackoutWindowSettings[];
+    debug: boolean;
+    daily_win_limit_enabled: boolean;
+    daily_win_limit: number;
+    daily_loss_limit_enabled: boolean;
+    daily_loss_limit: number;
+}
+
+export const DEFAULT_BACKTEST_ENGINE_SETTINGS: BacktestEngineSettings = {
+    auto_close_enabled: true,
+    auto_close_hour: 22,
+    auto_close_minute: 0,
+    blackout_windows: [
+        { active: false, start_hour: 0, start_minute: 0, end_hour: 0, end_minute: 5 },
+        { active: false, start_hour: 9, start_minute: 0, end_hour: 9, end_minute: 5 },
+        { active: true, start_hour: 12, start_minute: 0, end_hour: 14, end_minute: 0 },
+        { active: false, start_hour: 15, start_minute: 30, end_hour: 15, end_minute: 35 },
+        { active: true, start_hour: 16, start_minute: 30, end_hour: 22, end_minute: 0 },
+        { active: true, start_hour: 22, start_minute: 0, end_hour: 23, end_minute: 59 },
+    ],
+    debug: false,
+    daily_win_limit_enabled: false,
+    daily_win_limit: 500,
+    daily_loss_limit_enabled: false,
+    daily_loss_limit: 700,
+};
 
 export interface BacktestMetrics {
     total_return: number;
@@ -77,21 +144,52 @@ export interface BacktestResult {
     metrics: BacktestMetrics;
     trades: Trade[];
     equity_curve: EquityPoint[];
+    daily_limits_hit?: Record<string, string>;  // date -> "win"|"loss"
+    data_source_used?: string | null;
+    debug_file?: string | null;
 }
 
-export interface BacktestParams {
-    strategyName: string;
-    ticker: string;
-    source: 'Yahoo' | 'Topstep';
-    contractId: string | null;
-    interval: string;
-    days: number;
-    startDate?: string;
-    endDate?: string;
-    topstepLiveMode?: boolean;
-    initialEquity: number;
-    riskPerTrade: number;
-    params: Record<string, number | string | boolean>;
+// Market Data Store
+export interface RolloverInfo {
+    from_contract: string;
+    to_contract: string;
+    date: string;
+    next_contract_id: string;
+}
+
+export interface ContractSegment {
+    contract: string;
+    label: string;
+    from: string;
+    to: string;
+}
+
+export interface MarketDataset {
+    id: string;
+    symbol: string;
+    contract_id: string;
+    start_date: string;
+    end_date: string;
+    bar_count_1m: number;
+    total_size_mb: number;
+    timeframes: string[];
+    timezone: string;
+    updated_at: string;
+    missing_hours: number;
+    missing_days: number;
+    days_until_retention_limit: number;
+    retention_warning: boolean;
+    retention_exceeded: boolean;
+    next_rollover: RolloverInfo | null;
+    contract_segments: ContractSegment[];
+}
+
+export interface DownloadStatus {
+    download_id: string;
+    status: 'in_progress' | 'completed' | 'failed';
+    progress: number;
+    bars_downloaded: number;
+    message: string;
 }
 
 export const api = {
@@ -104,10 +202,10 @@ export const api = {
     },
 
     /**
-     * Fetch available Topstep contracts
+     * Fetch available local data (symbols, timeframes, date ranges)
      */
-    getTopstepContracts: async (): Promise<Contract[]> => {
-        const res = await apiClient.get<Contract[]>('/topstep/contracts');
+    getAvailableData: async (): Promise<AvailableDataset[]> => {
+        const res = await apiClient.get<AvailableDataset[]>('/available-data');
         return res.data;
     },
 
@@ -116,35 +214,27 @@ export const api = {
      */
     runBacktest: async (
         strategyName: string,
-        ticker: string,
-        source: string,
-        contractId: string | null,
+        symbol: string,
         interval: string,
-        days: number,
+        startDatetime: string,
+        endDatetime: string,
         initialEquity: number,
         riskPerTrade: number,
         params: Record<string, number | string | boolean>,
         maxContracts: number = 50,
-        blockMarketOpen: boolean = true,
-        startDate?: string,
-        endDate?: string,
-        topstepLiveMode?: boolean
+        engineSettings: BacktestEngineSettings = DEFAULT_BACKTEST_ENGINE_SETTINGS,
     ): Promise<BacktestResult> => {
         const res = await apiClient.post<BacktestResult>('/backtest', {
             strategy_name: strategyName,
-            ticker,
-            source,
-            contract_id: contractId,
+            symbol,
             interval,
-            days,
+            start_datetime: startDatetime,
+            end_datetime: endDatetime,
             initial_equity: initialEquity,
             risk_per_trade: riskPerTrade,
             params,
             max_contracts: maxContracts,
-            block_market_open: blockMarketOpen,
-            start_date: startDate,
-            end_date: endDate,
-            topstep_live_mode: topstepLiveMode
+            engine_settings: engineSettings,
         });
         return res.data;
     },
@@ -229,6 +319,43 @@ export const api = {
     bulkDeleteOptimizationRuns: async (runIds: string[]): Promise<void> => {
         await apiClient.post('/optimization-history/bulk-delete', { run_ids: runIds });
     },
+
+    // --- Market Data Store ---
+
+    /**
+     * List all locally stored datasets
+     */
+    getMarketData: async (): Promise<MarketDataset[]> => {
+        const res = await apiClient.get<MarketDataset[]>('/market-data');
+        return res.data;
+    },
+
+    /**
+     * Start downloading 1-minute bars for a contract
+     */
+    downloadMarketData: async (contractId: string, startDate: string, endDate: string): Promise<{ download_id: string }> => {
+        const res = await apiClient.post<{ download_id: string }>('/market-data/download', {
+            contract_id: contractId,
+            start_date: startDate,
+            end_date: endDate,
+        });
+        return res.data;
+    },
+
+    /**
+     * Poll download progress
+     */
+    getDownloadStatus: async (downloadId: string): Promise<DownloadStatus> => {
+        const res = await apiClient.get<DownloadStatus>(`/market-data/download/${downloadId}/status`);
+        return res.data;
+    },
+
+    /**
+     * Delete a local dataset
+     */
+    deleteMarketData: async (datasetId: string): Promise<void> => {
+        await apiClient.delete(`/market-data/${datasetId}`);
+    },
 };
 
 // Optimization types
@@ -272,8 +399,8 @@ export interface OptimizationRequest {
     startDate?: string;
     endDate?: string;
     topstepLiveMode?: boolean;
-    maxDrawdownLimit?: number;  // Only keep results with max DD below this %
-    minWinRate?: number;        // Only keep results with win rate above this %
+    maxDrawdownLimit?: number;
+    minWinRate?: number;
 }
 
 export interface OptimizationResultItem {
@@ -328,7 +455,7 @@ export interface OptimizationRunDetail {
     max_contracts?: number;
     block_market_open?: boolean;
     sessions_tested: string[];
-    parameters?: ParameterRangeInput[]; // Optional for backward compatibility
+    parameters?: ParameterRangeInput[];
     total_combinations: number;
     top_results: OptimizationResultItem[];
     max_drawdown_limit?: number;

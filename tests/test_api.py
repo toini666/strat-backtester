@@ -61,6 +61,16 @@ class TestStrategiesEndpoint:
             assert "description" in strategy
             assert "default_params" in strategy
 
+    def test_ema_break_strategy_exposes_only_strategy_specific_params(self, client):
+        response = client.get("/strategies")
+        data = response.json()
+        ema_break = next((strategy for strategy in data if strategy["name"] == "EMABreakOsc"), None)
+
+        if ema_break is None:
+            pytest.skip("EMABreakOsc not loaded in this test environment")
+        assert "auto_close_hour" not in ema_break["default_params"]
+        assert "bo1_on" not in ema_break["default_params"]
+
 
 class TestBacktestRequestValidation:
     """Tests for BacktestRequest validation."""
@@ -69,24 +79,26 @@ class TestBacktestRequestValidation:
         """Test that a valid request passes validation."""
         request = BacktestRequest(
             strategy_name="RobReversal",
-            ticker="BTC-USD",
-            source="Yahoo",
+            symbol="MNQ",
             interval="15m",
-            days=14,
+            start_datetime="2024-01-15T09:00",
+            end_datetime="2024-01-15T16:00",
             initial_equity=50000.0,
             risk_per_trade=0.01
         )
         assert request.strategy_name == "RobReversal"
+        assert request.engine_settings.auto_close_enabled is True
+        assert len(request.engine_settings.blackout_windows) == 6
 
-    def test_invalid_source(self):
-        """Test that invalid source raises validation error."""
+    def test_invalid_symbol_too_short(self):
+        """Test that invalid symbol raises validation error."""
         with pytest.raises(ValidationError):
             BacktestRequest(
                 strategy_name="Test",
-                ticker="BTC-USD",
-                source="InvalidSource",  # Invalid
+                symbol="",
                 interval="15m",
-                days=14
+                start_datetime="2024-01-15T09:00",
+                end_datetime="2024-01-15T16:00",
             )
 
     def test_invalid_interval(self):
@@ -94,21 +106,19 @@ class TestBacktestRequestValidation:
         with pytest.raises(ValidationError):
             BacktestRequest(
                 strategy_name="Test",
-                ticker="BTC-USD",
-                source="Yahoo",
-                interval="2m",  # Invalid - not in allowed values
-                days=14
+                symbol="MNQ",
+                interval="4m",
+                start_datetime="2024-01-15T09:00",
+                end_datetime="2024-01-15T16:00",
             )
 
-    def test_days_out_of_range(self):
-        """Test that days outside valid range raises error."""
+    def test_missing_datetimes_raise_error(self):
+        """Test that missing datetimes raise validation error."""
         with pytest.raises(ValidationError):
             BacktestRequest(
                 strategy_name="Test",
-                ticker="BTC-USD",
-                source="Yahoo",
+                symbol="MNQ",
                 interval="15m",
-                days=500  # > 365
             )
 
     def test_initial_equity_too_low(self):
@@ -116,10 +126,10 @@ class TestBacktestRequestValidation:
         with pytest.raises(ValidationError):
             BacktestRequest(
                 strategy_name="Test",
-                ticker="BTC-USD",
-                source="Yahoo",
+                symbol="MNQ",
                 interval="15m",
-                days=14,
+                start_datetime="2024-01-15T09:00",
+                end_datetime="2024-01-15T16:00",
                 initial_equity=100  # < 1000
             )
 
@@ -128,10 +138,10 @@ class TestBacktestRequestValidation:
         with pytest.raises(ValidationError):
             BacktestRequest(
                 strategy_name="Test",
-                ticker="BTC-USD",
-                source="Yahoo",
+                symbol="MNQ",
                 interval="15m",
-                days=14,
+                start_datetime="2024-01-15T09:00",
+                end_datetime="2024-01-15T16:00",
                 risk_per_trade=0.5  # > 0.1 (10%)
             )
 
@@ -140,10 +150,10 @@ class TestBacktestRequestValidation:
         with pytest.raises(ValidationError):
             BacktestRequest(
                 strategy_name="Test",
-                ticker="BTC-USD",
-                source="Yahoo",
+                symbol="MNQ",
                 interval="15m",
-                days=14,
+                start_datetime="2024-01-15T09:00",
+                end_datetime="2024-01-15T16:00",
                 params={"extreme_value": 999999}  # > 10000
             )
 
@@ -168,10 +178,24 @@ class TestSessionFunction:
         assert get_session("2024-01-15 18:00:00") == "US"
         assert get_session("2024-01-15 22:00:00") == "US"
 
-    def test_outside_session(self):
-        """Test Outside session detection (22:01 - 23:59)."""
-        assert get_session("2024-01-15 22:30:00") == "Outside"
-        assert get_session("2024-01-15 23:59:00") == "Outside"
+    def test_late_hours_map_to_us(self):
+        """Late hours (22:01+) now map to US instead of Outside."""
+        assert get_session("2024-01-15 22:30:00") == "US"
+        assert get_session("2024-01-15 23:59:00") == "US"
+
+    def test_dst_shifted_sessions(self):
+        """During US-DST / EU-standard misalignment, sessions shift -1h.
+
+        2024-03-15 is after US DST (Mar 10) but before EU DST (Mar 31).
+        Brussels-ET diff = 5h → offset = -1.
+        Asia starts at 23:00, UK at 08:00, US at 14:30 (Brussels wall-clock).
+        """
+        # 23:00 Brussels → ref 00:00 → Asia
+        assert get_session("2024-03-15 23:00:00") == "Asia"
+        # 08:00 Brussels → ref 09:00 → UK
+        assert get_session("2024-03-15 08:00:00") == "UK"
+        # 14:30 Brussels → ref 15:30 → US
+        assert get_session("2024-03-15 14:30:00") == "US"
 
     def test_invalid_timestamp(self):
         """Test that invalid timestamp returns Unknown."""
@@ -186,17 +210,17 @@ class TestBacktestEndpoint:
         """Test that requesting non-existent strategy returns 404."""
         response = client.post("/backtest", json={
             "strategy_name": "NonExistentStrategy",
-            "ticker": "BTC-USD",
-            "source": "Yahoo",
+            "symbol": "MNQ",
             "interval": "15m",
-            "days": 7
+            "start_datetime": "2024-01-15T09:00",
+            "end_datetime": "2024-01-15T16:00",
         })
         assert response.status_code == 404
 
     def test_backtest_missing_required_fields(self, client):
         """Test that missing required fields return 422."""
         response = client.post("/backtest", json={
-            "ticker": "BTC-USD"
+            "symbol": "MNQ"
             # Missing strategy_name
         })
         assert response.status_code == 422

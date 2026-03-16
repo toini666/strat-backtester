@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { TrendingUp, Activity, Clock, DollarSign } from 'lucide-react';
 import { KpiCard } from './KpiCard';
 import { EquityChart } from './EquityChart';
+import { DailyPnlCalendar } from './DailyPnlCalendar';
 import { TradesTable } from './TradesTable';
 import { type BacktestResult, type BacktestMetrics } from '../api';
 
@@ -23,7 +25,7 @@ export function Dashboard({
     toggleSession,
     dataSource,
     initialEquity,
-    sessionStats
+    sessionStats,
 }: DashboardProps) {
 
     if (!filteredResult) {
@@ -36,7 +38,7 @@ export function Dashboard({
                 <Activity className="w-20 h-20 mb-6 opacity-10 animate-pulse" aria-hidden="true" />
                 <p className="text-2xl font-light text-gray-400">Ready to Simulate</p>
                 <p className="text-sm mt-3 opacity-60 max-w-md text-center">
-                    Configure your strategy settings in the sidebar and press "Run Backtest" to see results.
+                    Configure the backtest blocks above and press "Run Backtest" to see results.
                 </p>
                 <div className="mt-8 flex gap-4 text-xs font-mono opacity-50">
                     <span className="bg-gray-800 px-3 py-1 rounded border border-gray-700">Source: {dataSource}</span>
@@ -47,6 +49,7 @@ export function Dashboard({
     }
 
     const { metrics, equity_curve, trades } = filteredResult;
+    const [chartView, setChartView] = useState<'equity' | 'calendar'>('equity');
 
     return (
         <div className="space-y-6 animate-fadeIn pb-10" role="main" aria-label="Backtest results">
@@ -82,10 +85,29 @@ export function Dashboard({
                         </label>
                     ))}
                 </fieldset>
-                <div className="text-gray-500 text-xs font-mono bg-gray-800/50 px-3 py-1.5 rounded-full border border-gray-800" aria-live="polite">
-                    Showing {trades.length} trades
+                <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono px-2.5 py-1 rounded-full border bg-emerald-900/30 border-emerald-700/50 text-emerald-400">
+                        {filteredResult.data_source_used || dataSource}
+                    </span>
+                    <div className="text-gray-500 text-xs font-mono bg-gray-800/50 px-3 py-1.5 rounded-full border border-gray-800" aria-live="polite">
+                        Showing {trades.length} trades
+                        {trades.some(t => t.excluded) && (
+                            <span className="text-yellow-500 ml-1">
+                                ({trades.filter(t => t.excluded).length} excluded)
+                            </span>
+                        )}
+                    </div>
                 </div>
             </div>
+
+            {filteredResult.debug_file && (
+                <div className="glass-panel rounded-xl p-4 border border-cyan-800/40">
+                    <div className="text-xs uppercase tracking-wider text-cyan-400 font-semibold mb-1">Debug Export</div>
+                    <div className="text-sm text-gray-300">
+                        <span className="font-mono break-all">{filteredResult.debug_file}</span>
+                    </div>
+                </div>
+            )}
 
             {/* KPI Cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4" role="region" aria-label="Key performance indicators">
@@ -94,6 +116,8 @@ export function Dashboard({
                     value={`${metrics.total_return.toFixed(2)}%`}
                     icon={TrendingUp}
                     color={metrics.total_return >= 0 ? "text-green-400" : "text-red-400"}
+                    subValue={`${metrics.total_return >= 0 ? '+' : '-'}$${Math.abs(metrics.total_return / 100 * (initialEquity || 50000)).toFixed(2)}`}
+                    subColor={metrics.total_return >= 0 ? "text-green-400" : "text-red-400"}
                 />
                 <KpiCard
                     label="Win Rate"
@@ -112,20 +136,52 @@ export function Dashboard({
                     value={`${metrics.max_drawdown.toFixed(2)}%`}
                     icon={DollarSign}
                     color="text-red-400"
+                    subValue={`-$${(metrics.max_drawdown / 100 * (initialEquity || 50000)).toFixed(2)}`}
+                    subColor="text-red-400"
                 />
             </div>
 
-            {/* Chart */}
-            <EquityChart data={equity_curve} />
+            {/* Chart / Calendar toggle */}
+            <div>
+                <div className="flex items-center gap-1 mb-3">
+                    <div className="inline-flex rounded-lg bg-gray-800/50 p-0.5 border border-gray-700/50">
+                        <button
+                            onClick={() => setChartView('equity')}
+                            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                                chartView === 'equity'
+                                    ? 'bg-blue-600 text-white shadow'
+                                    : 'text-gray-400 hover:text-gray-300'
+                            }`}
+                        >
+                            Equity Curve
+                        </button>
+                        <button
+                            onClick={() => setChartView('calendar')}
+                            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                                chartView === 'calendar'
+                                    ? 'bg-blue-600 text-white shadow'
+                                    : 'text-gray-400 hover:text-gray-300'
+                            }`}
+                        >
+                            Daily PnL Summary
+                        </button>
+                    </div>
+                </div>
+                {chartView === 'equity' ? (
+                    <EquityChart data={equity_curve} />
+                ) : (
+                    <DailyPnlCalendar trades={trades} dailyLimitsHit={filteredResult.daily_limits_hit} />
+                )}
+            </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
                 {/* Trades Table */}
-                <div className="lg:col-span-2 h-[400px]">
+                <div className="xl:col-span-9 h-[460px]">
                     <TradesTable trades={trades} />
                 </div>
 
                 {/* Session Summary Table */}
-                <div className="glass-panel rounded-xl overflow-hidden flex flex-col h-[400px]">
+                <div className="glass-panel rounded-xl overflow-hidden flex flex-col xl:col-span-3 h-[460px]">
                     <div className="p-5 border-b border-gray-700/50 bg-gray-800/30">
                         <h3 className="text-gray-400 text-sm uppercase tracking-wider font-semibold" id="session-analytics-heading">
                             Session Analytics

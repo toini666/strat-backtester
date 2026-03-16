@@ -3,14 +3,18 @@ import sys
 import os
 import inspect
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 import pandas as pd
 import numpy as np
-import vectorbt as vbt
-import yfinance as yf
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
+
+try:
+    import vectorbt as vbt
+except ModuleNotFoundError:  # pragma: no cover - optional for simulator-only test runs
+    vbt = None
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -18,33 +22,49 @@ logger = logging.getLogger(__name__)
 # Add src to path to import strategies
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.strategies.base import Strategy
-# from src.strategies.rob_reversal import RobReversal # Dynamically loaded now
-from src.data.topstep import TopstepClient
+from src.data.market_store import MarketDataStore
+from src.engine.simulator import BlackoutWindow, SimulatorConfig, simulate as simulate_strategy
 
 router = APIRouter()
-topstep = TopstepClient()
+market_store = MarketDataStore()
 
 # --- Cache ---
-TOPSTEP_CACHE = {
-    "params": None, # (contract_id, interval, days)
+DATA_CACHE = {
+    "params": None,
     "data": None,
     "original_start_date": None
 }
+
+# --- Strategy warmup bars ---
+# Bars required for FULL indicator convergence (not just first value).
+# Formula: max(chain_depth) + 4 × max(EMA/rolling period) + safety margin.
+# EMA(n) converges to 99% accuracy after ~4n bars from first valid value.
+STRATEGY_WARMUP_BARS = {
+    "EMA9Retest": 80,       # EMA(9): 9+36=45, + margin
+    "RobReversal": 60,      # Short lookbacks
+    "DeltaDiv": 200,        # MFI(35)+cloud(35)+EMA(30)=100, convergence ~200
+    "UTBotSTC": 220,        # STC uses EMA(50)+convergence
+    "UTBotOCC": 200,        # EMA(200/50) based
+    "UTBotHeikin": 500,     # EMA(200): 200+4*200=1000 ideal, 500 pragmatic
+    "BullesBollinger": 100, # BB(20)+convergence
+    "Brochettes": 60,       # Short lookbacks
+    "EMABreakOsc": 250,     # EMA(30)→100 + MFI(35)+cloud(35)→112 + margin
+    "VwapEmaStrategy": 80,  # VWAP resets daily, EMA short
+    "MACrossover": 500,     # MA(200): needs ~400+ bars convergence
+    "RSIReversal": 100,     # RSI(14)+convergence
+}
+DEFAULT_WARMUP_BARS = 200
+BACKTEST_TZ = "Europe/Brussels"
 
 # --- Models ---
 
 class BacktestRequest(BaseModel):
     """Request model for backtest with validation."""
     strategy_name: str = Field(..., min_length=1, description="Name of the strategy to run")
-    ticker: str = Field(..., min_length=1, description="Ticker symbol")
-    source: str = Field(default="Yahoo", pattern="^(Yahoo|Topstep)$", description="Data source: Yahoo or Topstep")
-    contract_id: Optional[str] = Field(default=None, description="Contract ID (required for Topstep)")
-    interval: str = Field(default="15m", pattern="^(1m|2m|5m|15m|30m|1h|4h|1d)$", description="Data interval")
-    interval: str = Field(default="15m", pattern="^(1m|2m|3m|5m|7m|15m|30m|1h|4h|1d)$", description="Data interval")
-    days: int = Field(default=14, ge=1, le=365, description="Number of days of historical data")
-    start_date: Optional[str] = Field(default=None, description="Start Date (YYYY-MM-DD)")
-    end_date: Optional[str] = Field(default=None, description="End Date (YYYY-MM-DD)")
-    topstep_live_mode: bool = Field(default=False, description="Use Active Topstep Contract (True) or Legacy (False)")
+    symbol: str = Field(..., min_length=1, description="Symbol (e.g. MNQ, MES)")
+    interval: str = Field(default="15m", pattern="^(1m|2m|3m|5m|7m|15m)$", description="Data interval")
+    start_datetime: str = Field(..., description="Start datetime (ISO format YYYY-MM-DDTHH:mm)")
+    end_datetime: str = Field(..., description="End datetime (ISO format YYYY-MM-DDTHH:mm)")
     params: Dict[str, Any] = Field(default_factory=dict, description="Strategy parameters")
 
     # Risk Management with validation
@@ -53,7 +73,8 @@ class BacktestRequest(BaseModel):
 
     # Trade filters
     max_contracts: int = Field(default=50, ge=1, le=1000, description="Maximum contracts per position")
-    block_market_open: bool = Field(default=True, description="Block trades in first 5 min of each session")
+    block_market_open: bool = Field(default=False, description="Deprecated legacy flag kept for backward compatibility")
+    engine_settings: "BacktestEngineSettings" = Field(default_factory=lambda: BacktestEngineSettings())
 
     @field_validator('params')
     @classmethod
@@ -67,7 +88,9 @@ class BacktestRequest(BaseModel):
 
 class Trade(BaseModel):
     entry_time: str
+    entry_execution_time: Optional[str] = None
     exit_time: str
+    exit_execution_time: Optional[str] = None
     side: str
     entry_price: float
     exit_price: float
@@ -77,51 +100,98 @@ class Trade(BaseModel):
     size: float
     pnl_pct: float
     status: str 
-    session: str # Asia, UK, US, Outside
+    session: str # Asia, UK, US
+    legs: List["TradeLeg"] = Field(default_factory=list)
+    excluded: bool = False  # True if trade was taken after daily limit reached
+
+
+class TradeLeg(BaseModel):
+    entry_time: str
+    entry_execution_time: Optional[str] = None
+    exit_time: str
+    exit_execution_time: Optional[str] = None
+    side: str
+    entry_price: float
+    exit_price: float
+    pnl: float
+    gross_pnl: float
+    fees: float
+    size: float
+    status: str
+
+
+class BlackoutWindowSettings(BaseModel):
+    active: bool = False
+    start_hour: int = Field(default=0, ge=0, le=23)
+    start_minute: int = Field(default=0, ge=0, le=59)
+    end_hour: int = Field(default=0, ge=0, le=23)
+    end_minute: int = Field(default=0, ge=0, le=59)
+
+
+class BacktestEngineSettings(BaseModel):
+    auto_close_enabled: bool = True
+    auto_close_hour: int = Field(default=21, ge=0, le=23)
+    auto_close_minute: int = Field(default=0, ge=0, le=59)
+    blackout_windows: List[BlackoutWindowSettings] = Field(
+        default_factory=lambda: [
+            BlackoutWindowSettings(active=False, start_hour=8, start_minute=0, end_hour=8, end_minute=5),
+            BlackoutWindowSettings(active=True, start_hour=11, start_minute=0, end_hour=13, end_minute=0),
+            BlackoutWindowSettings(active=False, start_hour=14, start_minute=30, end_hour=14, end_minute=35),
+            BlackoutWindowSettings(active=True, start_hour=15, start_minute=30, end_hour=21, end_minute=0),
+            BlackoutWindowSettings(active=True, start_hour=21, start_minute=0, end_hour=23, end_minute=0),
+            BlackoutWindowSettings(active=False, start_hour=23, start_minute=0, end_hour=23, end_minute=5),
+        ]
+    )
+    debug: bool = False
+    daily_win_limit_enabled: bool = False
+    daily_win_limit: float = Field(default=500.0, ge=0)
+    daily_loss_limit_enabled: bool = False
+    daily_loss_limit: float = Field(default=700.0, ge=0)
 
 def get_session(dt_str: str) -> str:
-    # Assuming dt_str is ISO format "YYYY-MM-DD HH:MM:SS"
-    # Convert to Europe/Brussels timezone for session determination
+    """Determine trading session from a timestamp string.
+
+    Session boundaries are defined in *reference* Brussels time (= when
+    Brussels–US/Eastern difference is the standard 6 h).  During the DST
+    misalignment periods (~3 weeks in March, ~1 week in Oct/Nov) the offset
+    is automatically applied so that sessions shift with the market.
+
+    Reference boundaries:
+        Asia  00:00 – 08:59
+        UK    09:00 – 15:29
+        US    15:30 – end of day
+    """
     try:
         dt = pd.to_datetime(dt_str)
-        
-        # Convert to Brussels timezone for consistent session categorization
+        if pd.isna(dt):
+            return "Unknown"
+
         if dt.tzinfo is None:
-            # Assume naive timestamps are UTC (common for market data)
-            dt = dt.tz_localize('UTC')
-        dt_brussels = dt.tz_convert('Europe/Brussels')
-        
-        # User defined sessions (Brussels time, 24h format):
-        # Asia: 00:00 - 08:59
-        # UK: 09:00 - 15:29
-        # US: 15:30 - 22:00
-        # Outside: 22:01 - 23:59
-        
-        h = dt_brussels.hour
-        m = dt_brussels.minute
-        time_val = h * 60 + m
-        
-        # Asia: 0 -> 8:59 (0 -> 539)
-        if 0 <= time_val < 540:
+            dt = dt.tz_localize(BACKTEST_TZ)
+
+        from src.engine.simulator import _to_ref_minutes
+        ref = _to_ref_minutes(dt)
+
+        if ref < 540:
             return "Asia"
-        
-        # UK: 9:00 -> 15:29 (540 -> 929)
-        if 540 <= time_val < 930:
+        if ref < 930:
             return "UK"
-            
-        # US: 15:30 -> 22:00 (930 -> 1320)
-        if 930 <= time_val <= 1320:
-            return "US"
-            
-        return "Outside"
+        return "US"
     except Exception as e:
         logger.warning(f"Failed to parse session from timestamp '{dt_str}': {e}")
-        return "Unknown" 
+        return "Unknown"
 
 class BacktestResult(BaseModel):
     metrics: Dict[str, Any]
     trades: List[Trade]
     equity_curve: List[Dict[str, Any]]
+    daily_limits_hit: Dict[str, str] = Field(default_factory=dict)  # date -> "win"|"loss"
+    data_source_used: Optional[str] = None  # "local", "cache", or "api"
+    debug_file: Optional[str] = None
+
+
+Trade.model_rebuild()
+BacktestRequest.model_rebuild()
 
 class Contract(BaseModel):
     id: str
@@ -186,19 +256,38 @@ def get_strategies():
         })
     return results
 
-@router.get("/topstep/contracts")
-def get_topstep_contracts():
-    try:
-        contracts = topstep.fetch_available_contracts()
-        return [{
-            "id": c["id"], 
-            "name": c["name"], 
-            "description": c.get("description", ""),
-            "tick_size": c.get("tickSize"),
-            "tick_value": c.get("tickValue")
-        } for c in contracts]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@router.get("/available-data")
+def get_available_data():
+    """Return available symbols, timeframes, and date ranges from local data store."""
+    datasets = market_store.list_datasets()
+    result = []
+    for ds in datasets:
+        # Calculate min start datetime per strategy considering warmup buffer
+        min_starts = {}
+        for strat_name in STRATEGIES:
+            warmup_bars = STRATEGY_WARMUP_BARS.get(strat_name, DEFAULT_WARMUP_BARS)
+            min_starts[strat_name] = {}
+            for tf in ds.get("timeframes", []):
+                # Convert warmup bars to calendar time, same formula as /backtest
+                map_min = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "7m": 7, "15m": 15}
+                mpb = map_min.get(tf, 15)
+                trading_mins = warmup_bars * mpb
+                t_days = trading_mins / (23 * 60)
+                cal_days = max(2, int(t_days * 7 / 5) + 3)
+                ds_start = pd.Timestamp(ds["start_date"])
+                min_start = ds_start + timedelta(days=cal_days)
+                min_starts[strat_name][tf] = min_start.isoformat()
+
+        result.append({
+            "symbol": ds["symbol"],
+            "contract_id": ds.get("contract_id"),
+            "timeframes": ds.get("timeframes", []),
+            "start_date": ds["start_date"],
+            "end_date": ds["end_date"],
+            "bar_count_1m": ds.get("bar_count_1m", 0),
+            "min_start_per_strategy": min_starts,
+        })
+    return result
 
 # --- Constants ---
 # Fee Map (Round Turn) based on user input
@@ -214,7 +303,7 @@ FEES_MAP = {
     "GC": 3.24, "MGC": 1.24, # Gold
     "CL": 3.04, "MCL": 1.04, # Crude
     "SI": 3.24, "SIL": 2.04, # Silver
-    "HG": 3.24, "MHG": 1.24, # Copper
+    "HG": 3.24, # Copper
     "6A": 3.24, "M6A": 0.52, # AUD
     "6E": 3.24, "M6E": 0.52, # EUR
     "6B": 3.24, "M6B": 0.52, # GBP
@@ -237,193 +326,349 @@ CONTRACT_SPECS = {
     "MCL": {"tick_size": 0.01, "tick_value": 1.00},
 }
 
-@router.post("/backtest", response_model=BacktestResult)
-def run_backtest(req: BacktestRequest):
-    # Reload strategies to ensure code changes (like rounding/logic fixes) are picked up dynamically
-    load_strategies()
-    
-    if req.strategy_name not in STRATEGIES:
-        raise HTTPException(status_code=404, detail="Strategy not found")
-    
-    # 1. Fetch Data
-    
-    # Parse Dates if provided, else use days
-    if req.start_date and req.end_date:
-        try:
-            # Assuming YYYY-MM-DD from frontend, append time for full day coverage
-            # Start at 00:00:00 of Start Date
-            start_date_parsed = pd.to_datetime(req.start_date).replace(hour=0, minute=0, second=0, microsecond=0)
-            
-            # End at 23:59:59 of End Date OR use current time if it's today? 
-            # User requirement: "minuit et minuit pour les jours de début et de fin définis"
-            # It usually means Start 00:00 to End 23:59 usually effectively covering the full days.
-            # Let's set end_date to 23:59:59 of the requested end day.
-            # Explicitly force microseconds to max to ensure all ticks of that second are included if database has higher precision.
-            end_date_parsed = pd.to_datetime(req.end_date).replace(hour=23, minute=59, second=59, microsecond=999999)
-            
-            end_date = end_date_parsed
-            original_start_date = start_date_parsed
-            
-            # Recalculate 'days' for Cache key purposes roughly
-            req.days = (end_date - original_start_date).days
-            
-        except Exception as e:
-             raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
+
+def _normalize_backtest_datetime(value: str) -> pd.Timestamp:
+    ts = pd.to_datetime(value)
+    if ts.tzinfo is None:
+        return ts.tz_localize(BACKTEST_TZ)
+    return ts.tz_convert(BACKTEST_TZ)
+
+
+def _slice_from_start(data: pd.DataFrame, start_ts: pd.Timestamp) -> tuple[pd.DataFrame, pd.Series]:
+    aligned_start = pd.Timestamp(start_ts)
+    if data.index.tz is not None:
+        if aligned_start.tzinfo is None:
+            aligned_start = aligned_start.tz_localize(data.index.tz)
+        else:
+            aligned_start = aligned_start.tz_convert(data.index.tz)
+    elif aligned_start.tzinfo is not None:
+        aligned_start = aligned_start.tz_localize(None)
+
+    mask = data.index >= aligned_start
+    return data.loc[mask], mask
+
+
+def _build_blackout_windows(engine_settings: BacktestEngineSettings) -> List[BlackoutWindow]:
+    windows: List[BlackoutWindow] = []
+    for window in engine_settings.blackout_windows:
+        windows.append(
+            BlackoutWindow(
+                active=window.active,
+                start_hour=window.start_hour,
+                start_minute=window.start_minute,
+                end_hour=window.end_hour,
+                end_minute=window.end_minute,
+            )
+        )
+    return windows
+
+
+def _contract_backtest_specs(symbol: str) -> Dict[str, float]:
+    tick_size = 0.25
+    tick_value = 12.5
+    point_value = tick_value / tick_size
+    fee_per_trade = 0.0
+
+    if symbol in CONTRACT_SPECS:
+        spec = CONTRACT_SPECS[symbol]
+        tick_size = spec["tick_size"]
+        tick_value = spec["tick_value"]
+        point_value = tick_value / tick_size if tick_size > 0 else 1.0
+
+    if symbol in FEES_MAP:
+        fee_per_trade = FEES_MAP[symbol]
+
+    return {
+        "tick_size": tick_size,
+        "tick_value": tick_value,
+        "point_value": point_value,
+        "fee_per_trade": fee_per_trade,
+    }
+
+
+def _append_debug_event(df: pd.DataFrame, ts_value: str, column: str, event: str) -> None:
+    if column not in df.columns:
+        df[column] = ""
+
+    ts = pd.Timestamp(ts_value)
+    if df.index.tz is not None:
+        if ts.tzinfo is None:
+            ts = ts.tz_localize(df.index.tz)
+        else:
+            ts = ts.tz_convert(df.index.tz)
+    elif ts.tzinfo is not None:
+        ts = ts.tz_localize(None)
+
+    if ts not in df.index:
+        return
+
+    current = df.at[ts, column]
+    if current:
+        df.at[ts, column] = f"{current} | {event}"
     else:
-        # Legacy Mode (Days)
-        # Default end is yesterday ending? Or now?
-        # User said: "Par défaut, le jour de fin doit être la veille du jour d'aujourd'hui."
-        # This implies standard behavior should be changed to yesterday?
-        # Current behavior was datetime.now().
-        # Let's stick to simple "N days back from now" if no dates provided to not break legacy,
-        # OR implement the Yesterday logic if we want to be strict.
-        end_date = datetime.now()
-        original_start_date = end_date - timedelta(days=req.days)
-    
-    
-    # Warmup Logic
-    # Always fetch extra 1000 bars to ensure indicator convergence for all strategies (EMA, RSI, HA, etc)
-    warmup_bars = 1000
-    
-    start_date = original_start_date
-    if warmup_bars > 0:
-        # Approximate Lookback Calculation
-        # We need to subtract N bars from original_start_date
-        # Simple mapping
-        map_min = {
-            "1m": 1, "2m": 2, "3m": 3, "5m": 5, "7m": 7, "15m": 15, "30m": 30, "60m": 60, "1h": 60,
-            "4h": 240, "1d": 1440 
-        }
-        
-        minutes_per_bar = 15 # default
-        if req.interval in map_min:
-            minutes_per_bar = map_min[req.interval]
-        elif req.interval.endswith('m'):
-            try:
-                minutes_per_bar = int(req.interval[:-1])
-            except:
-                pass
-        elif req.interval.endswith('h'):
-             try:
-                minutes_per_bar = int(req.interval[:-1]) * 60
-             except:
-                pass
-        elif req.interval.endswith('d'):
-             try:
-                minutes_per_bar = int(req.interval[:-1]) * 1440
-             except:
-                pass
-                
-        # Add 50% buffer for weekends/holidays if using Minute candles
-        total_minutes = warmup_bars * minutes_per_bar * 1.5
-        warmup_delta = timedelta(minutes=total_minutes)
-        start_date = original_start_date - warmup_delta
-        logger.info(f"Warmup Active: Fetching {warmup_bars} extra bars. Adjusted Start: {start_date}")
+        df.at[ts, column] = event
+
+
+def _write_debug_export(
+    req: "BacktestRequest",
+    debug_frame: Optional[pd.DataFrame],
+    trades: List[Dict[str, Any]],
+    original_start_date: Optional[pd.Timestamp] = None,
+    end_date: Optional[pd.Timestamp] = None,
+) -> Optional[str]:
+    if debug_frame is None or debug_frame.empty:
+        return None
+
+    export = debug_frame.copy()
+    export["used_for_backtest"] = 1
+    export["in_requested_range"] = 1
+
+    if original_start_date is not None:
+        start_ts = pd.Timestamp(original_start_date)
+        if export.index.tz is not None:
+            if start_ts.tzinfo is None:
+                start_ts = start_ts.tz_localize("UTC").tz_convert(export.index.tz)
+            else:
+                start_ts = start_ts.tz_convert(export.index.tz)
+        elif start_ts.tzinfo is not None:
+            start_ts = start_ts.tz_localize(None)
+        export["in_requested_range"] = (export.index >= start_ts).astype(int)
+
+    if end_date is not None:
+        end_ts = pd.Timestamp(end_date)
+        if export.index.tz is not None:
+            if end_ts.tzinfo is None:
+                end_ts = end_ts.tz_localize("UTC").tz_convert(export.index.tz)
+            else:
+                end_ts = end_ts.tz_convert(export.index.tz)
+        elif end_ts.tzinfo is not None:
+            end_ts = end_ts.tz_localize(None)
+        export["in_requested_range"] = (
+            export["in_requested_range"].astype(bool) & (export.index <= end_ts)
+        ).astype(int)
+
+    export["trade_entries"] = ""
+    export["trade_exits"] = ""
+
+    for trade in trades:
+        _append_debug_event(
+            export,
+            trade["entry_time"],
+            "trade_entries",
+            (
+                f"{trade['side']} entry @ {trade['entry_price']:.2f}"
+                f" (exec {trade.get('entry_execution_time') or trade['entry_time']})"
+            ),
+        )
+        for leg in trade.get("legs", []):
+            _append_debug_event(
+                export,
+                leg["exit_time"],
+                "trade_exits",
+                (
+                    f"{leg['status']} size={leg['size']:.0f} exit={leg['exit_price']:.2f}"
+                    f" (exec {leg.get('exit_execution_time') or leg['exit_time']})"
+                ),
+            )
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = Path("debug") / "backtests" / req.strategy_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{req.symbol}_{req.interval}_{stamp}.csv"
+    output_path = output_dir / filename
+    export.to_csv(output_path, index_label="bar_time")
+    return str(output_path)
+
+
+def _run_simulator_backtest(
+    req: "BacktestRequest",
+    contract_id: str,
+    strategy_instance: Strategy,
+    params: Dict[str, Any],
+    data: pd.DataFrame,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    original_start_date: pd.Timestamp,
+) -> Dict[str, Any]:
+    specs = _contract_backtest_specs(req.symbol)
+    params["tick_size"] = specs["tick_size"]
+    engine_settings = req.engine_settings
+    simulator_settings = strategy_instance.get_simulator_settings(params)
 
     try:
-        data = pd.DataFrame()
-        legacy_contract_details = None
-        if req.source == "Topstep":
-            if not req.contract_id:
-                raise HTTPException(status_code=400, detail="Contract ID required for Topstep")
-                
-            logger.info(f"Topstep Fetch: ContractID='{req.contract_id}' (Type: {type(req.contract_id)}), Live={req.topstep_live_mode}")
-                
-            # Check Cache
-            current_params = (req.contract_id, req.interval, req.days, req.topstep_live_mode, str(original_start_date.date()), str(end_date.date()))
-            if TOPSTEP_CACHE["params"] == current_params and TOPSTEP_CACHE["data"] is not None:
-                logger.info(f"Using cached Topstep data for {current_params}")
-                data = TOPSTEP_CACHE["data"].copy()
-                # Restore original_start_date to ensure consistent slicing (same window as first run)
-                if TOPSTEP_CACHE["original_start_date"]:
-                     original_start_date = TOPSTEP_CACHE["original_start_date"]
-            else:
-                # Force live=False for Historical Data to ensure we use Sim/Data Environment 
-                # (Active Contracts are available in Sim). 
-                # live=True causes 500 error if user lacks Live Data permissions.
-                data = topstep.fetch_historical_data(req.contract_id, start_date, end_date, req.interval, live=False)
-                
-                if not data.empty:
-                    pass
-                else:
-                    logger.warning("Topstep Data Fetched: EMPTY")
-
-                # Update Cache
-                TOPSTEP_CACHE["params"] = current_params
-                TOPSTEP_CACHE["data"] = data.copy()
-                TOPSTEP_CACHE["original_start_date"] = original_start_date
-                
-            # --- Fetch Contract Details for Legacy Mode to Ensure Correct PnL ---
-            if req.source == 'Topstep' and not req.topstep_live_mode:
-                 try:
-                     details = topstep.get_contract_details(req.contract_id)
-                     if details:
-                         # Update/Override specs for this specific run
-                         # We can't easily globally override CONTRACT_SPECS key because it's keyed by 'Symbol' (e.g. MGC) 
-                         # and we have 'Contract ID' here.
-                         pass 
-                         # We need to map Contract ID to Symbol or just override based on logic below.
-                         
-                         tick_size = details.get("tickSize")
-                         tick_value = details.get("tickValue")
-                         
-                         if tick_size and tick_value:
-                             logger.info(f"Updated Contract Specs from API: TickSize={tick_size}, TickValue={tick_value}")
-                             # Store details for later use in Sizing/PnL section to ensure consistency
-                             legacy_contract_details = details
-                 except Exception as e:
-                     logger.error(f"Failed to update contract specs: {e}")
-        else:
-            data = yf.download(req.ticker, start=start_date, end=end_date, interval=req.interval, progress=False, auto_adjust=True)
-            if isinstance(data.columns, pd.MultiIndex):
-                data.columns = data.columns.droplevel(1)
-            
-        if data.empty:
-            raise HTTPException(status_code=400, detail=f"No data found for {req.ticker}")
-            
+        signals = strategy_instance.generate_signals(data, params)
+        if not isinstance(signals, dict):
+            raise ValueError("Simulator-backed strategies must return a signal dictionary")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Data fetch error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Strategy execution error: {str(e)}") from e
+
+    sliced_data, mask = _slice_from_start(data, original_start_date)
+    if sliced_data.empty:
+        raise HTTPException(status_code=400, detail="Data empty after warmup slicing. Fetch more history?")
+
+    sliced_signals: Dict[str, Any] = {}
+    for key, value in signals.items():
+        if isinstance(value, pd.Series):
+            sliced_signals[key] = value.loc[mask]
+        elif isinstance(value, pd.DataFrame):
+            sliced_signals[key] = value.loc[mask]
+        else:
+            sliced_signals[key] = value
+
+    data_1m = market_store.load_bars(contract_id, start_date, end_date, "1m")
+    data_1m, _ = _slice_from_start(data_1m, original_start_date)
+
+    config = SimulatorConfig(
+        initial_equity=req.initial_equity,
+        risk_per_trade=req.risk_per_trade,
+        max_contracts=req.max_contracts,
+        tick_size=specs["tick_size"],
+        tick_value=specs["tick_value"],
+        point_value=specs["point_value"],
+        fee_per_trade=specs["fee_per_trade"],
+        auto_close_enabled=engine_settings.auto_close_enabled,
+        auto_close_hour=engine_settings.auto_close_hour,
+        auto_close_minute=engine_settings.auto_close_minute,
+        blackout_windows=_build_blackout_windows(engine_settings),
+        cooldown_bars=int(sliced_signals.get("cooldown_bars", params.get("cooldown_bars", 0))),
+        tp1_execution_mode=str(simulator_settings.get("tp1_execution_mode", "touch")),
+        tp1_partial_pct=float(simulator_settings.get("tp1_partial_pct", 0.25)),
+        tp2_partial_pct=float(simulator_settings.get("tp2_partial_pct", 0.25)),
+        daily_win_limit_enabled=engine_settings.daily_win_limit_enabled,
+        daily_win_limit=engine_settings.daily_win_limit,
+        daily_loss_limit_enabled=engine_settings.daily_loss_limit_enabled,
+        daily_loss_limit=engine_settings.daily_loss_limit,
+    )
+
+    try:
+        result = simulate_strategy(
+            data=sliced_data,
+            data_1m=data_1m,
+            signals=sliced_signals,
+            config=config,
+            ema_main=sliced_signals["ema_main"],
+            ema_secondary=sliced_signals["ema_secondary"],
+        )
+        if engine_settings.debug:
+            # Slice debug_frame to only include bars from backtest start onward
+            # (warmup bars are not useful for debugging — indicators are already converged)
+            full_debug = signals.get("debug_frame")
+            if full_debug is not None and not full_debug.empty:
+                sliced_debug, _ = _slice_from_start(full_debug, original_start_date)
+            else:
+                sliced_debug = full_debug
+            result["debug_file"] = _write_debug_export(
+                req=req,
+                debug_frame=sliced_debug,
+                trades=result["trades"],
+                original_start_date=original_start_date,
+                end_date=end_date,
+            )
+        else:
+            result["debug_file"] = None
+        result["data_source_used"] = "local"
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Simulation error: {str(e)}") from e
+
+@router.post("/backtest", response_model=BacktestResult)
+def run_backtest(req: BacktestRequest):
+    # Reload strategies to ensure code changes are picked up dynamically
+    load_strategies()
+
+    if req.strategy_name not in STRATEGIES:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+
+    # 1. Parse datetimes
+    try:
+        original_start_date = _normalize_backtest_datetime(req.start_datetime)
+        end_date = _normalize_backtest_datetime(req.end_datetime)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid datetime format: {e}")
+
+    # 2. Resolve contract_id from symbol
+    from src.data.market_store import SYMBOL_CONTRACTS
+    contract_id = SYMBOL_CONTRACTS.get(req.symbol)
+    if not contract_id:
+        raise HTTPException(status_code=400, detail=f"Unknown symbol: {req.symbol}")
+
+    # 3. Warmup: load enough bars BEFORE backtest start for full indicator convergence.
+    # Each strategy specifies how many bars it needs in STRATEGY_WARMUP_BARS.
+    # Convert bars to calendar days, accounting for weekends and overnight closes.
+    # Futures trade ~23h/day, 5 days/week → we need 7/5 calendar days per trading day.
+    warmup_bars = STRATEGY_WARMUP_BARS.get(req.strategy_name, DEFAULT_WARMUP_BARS)
+    map_min = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "7m": 7, "15m": 15}
+    minutes_per_bar = map_min.get(req.interval, 15)
+    trading_minutes_needed = warmup_bars * minutes_per_bar
+    # 23h trading per day, 5 days per 7 calendar days, + 3 days buffer for holidays
+    trading_days = trading_minutes_needed / (23 * 60)
+    calendar_days = max(2, int(trading_days * 7 / 5) + 3)
+    start_date = original_start_date - timedelta(days=calendar_days)
+
+    # Clamp to dataset start — don't request data before what's available
+    ds_meta = market_store.get_dataset_by_symbol(req.symbol)
+    if ds_meta:
+        ds_start = pd.Timestamp(ds_meta["start_date"])
+        if ds_start.tzinfo is None:
+            ds_start = ds_start.tz_localize(BACKTEST_TZ)
+        if start_date < ds_start:
+            start_date = ds_start
+    logger.info(f"Warmup: {warmup_bars} bars for {req.strategy_name}. Adjusted start: {start_date}")
+
+    # 4. Load data from local store
+    try:
+        data = pd.DataFrame()
+
+        # Check in-memory cache
+        current_params = (req.symbol, req.interval, str(start_date), str(end_date))
+        if DATA_CACHE["params"] == current_params and DATA_CACHE["data"] is not None:
+            logger.info(f"Using cached data for {current_params}")
+            data = DATA_CACHE["data"].copy()
+        else:
+            # Load from local CSV files
+            ds = market_store.get_dataset_by_symbol(req.symbol)
+            if ds is None:
+                raise HTTPException(status_code=400, detail=f"No local data available for {req.symbol}")
+
+            logger.info(f"Loading local data for {req.symbol}, timeframe={req.interval}, range={start_date} to {end_date}")
+            data = market_store.load_bars(contract_id, start_date, end_date, req.interval)
+
+            # Update cache
+            DATA_CACHE["params"] = current_params
+            DATA_CACHE["data"] = data.copy()
+            DATA_CACHE["original_start_date"] = original_start_date
+
+        if data.empty:
+            raise HTTPException(status_code=400, detail=f"No data found for {req.symbol} in the requested date range")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Data load error: {str(e)}")
 
     # 2. Run Strategy on FULL DATA (including warmup)
     StrategyClass = STRATEGIES[req.strategy_name]
     strategy_instance = StrategyClass()
     params = strategy_instance.default_params.copy()
     params.update(req.params)
-    
-    # ... (Tick Size Logic omitted for brevity, assumed unchanged in context) ...
-    # Auto-inject tick_size logic duplicated here just for context integration if needed,
-    # but practically we should just keep the existing block. 
-    # Since replace_file_content replaces a block, I must include the Tick Size logic or ensure I don't overwrite it bad.
-    # The Block I am replacing ends at "except Exception as e: raise ... strategy execution error" (Line 348).
-    # So I need to include the Tick Size Setup (Lines 264-292) and Simulation (295+).
-    
-    # RE-INSERT TICK SIZE LOGIC (Lines 264-292 from original)
-    current_tick_size = 0.25 
-    
-    # Use Legacy details if available (Highest Priority for Legacy Mode)
-    if legacy_contract_details:
-        current_tick_size = float(legacy_contract_details.get('tickSize', 0.25))
-    elif req.source == "Topstep" and req.contract_id:
-        try:
-            contracts = topstep.fetch_available_contracts()
-            contract = next((c for c in contracts if str(c['id']) == str(req.contract_id)), None)
-            if contract:
-                current_tick_size = float(contract.get('tickSize', 0.25))
-            else:
-                 sorted_spec_keys = sorted(CONTRACT_SPECS.keys(), key=len, reverse=True)
-                 for k in sorted_spec_keys:
-                    if req.ticker and k in req.ticker.upper():
-                         pass
-        except:
-            pass
-    else:
-        sorted_spec_keys = sorted(CONTRACT_SPECS.keys(), key=len, reverse=True)
-        for k in sorted_spec_keys:
-            if k in req.ticker.upper():
-                current_tick_size = CONTRACT_SPECS[k]['tick_size']
-                break
-    
-    params['tick_size'] = current_tick_size
+
+    contract_specs = _contract_backtest_specs(req.symbol)
+    params["tick_size"] = contract_specs["tick_size"]
+
+    if getattr(strategy_instance, "use_simulator", False):
+        return _run_simulator_backtest(
+            req=req,
+            contract_id=contract_id,
+            strategy_instance=strategy_instance,
+            params=params,
+            data=data,
+            start_date=start_date,
+            end_date=end_date,
+            original_start_date=original_start_date,
+        )
+
+    if vbt is None:
+        raise HTTPException(status_code=500, detail="vectorbt is required for legacy backtests in this environment")
     
     # 3. Simulate (VectorBT)
     try:
@@ -479,8 +724,8 @@ def run_backtest(req: BacktestRequest):
             if data.empty:
                  raise HTTPException(status_code=400, detail="Data empty after warmup slicing. Fetch more history?")
 
-        # --- Topstep Time Filter (22:00 - 00:00 Paris Time) ---
-        if req.source == "Topstep":
+        # --- Time Filter (22:00 - 00:00 Paris Time) ---
+        if True:  # Always apply - data is from futures markets
             try:
                 temp_index = data.index
                 if temp_index.tz is None:
@@ -506,7 +751,7 @@ def run_backtest(req: BacktestRequest):
 
         # --- Market Open Filter (block first 5 min of each session) ---
         # Sessions: Asia (0h00-0h05), UK (9h00-9h05), US (15h30-15h35)
-        if req.block_market_open:
+        if False and req.block_market_open:
             try:
                 temp_index = data.index
                 if temp_index.tz is None:
@@ -538,84 +783,26 @@ def run_backtest(req: BacktestRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Strategy execution error: {str(e)}")
 
-    # 4. Position Sizing & Contract Specs
-    # We will build a Size Series for VectorBT
+    # 4. Position Sizing & Contract Specs from local lookup
     size_series = pd.Series(0.0, index=data.index)
-    point_value = 1.0 # Default
-    tick_size = 0.25 # Default
-    tick_value = 12.5 # Default (ES/NQ standard if unknown)
-    
+    point_value = 1.0
+    tick_size = 0.25
+    tick_value = 12.5
     fee_per_trade = 0.0
-    
-    if req.source == "Topstep" and req.contract_id:
-        try:
-            contracts = topstep.fetch_available_contracts()
-            contract = next((c for c in contracts if str(c['id']) == str(req.contract_id)), None)
-            
-            if contract:
-                tick_size = float(contract.get('tickSize', 0.25))
-                tick_value = float(contract.get('tickValue', 5.0))
-                contract_name = contract.get('name', '').upper()
-                
-                # Point Value calculation
-                if tick_size > 0:
-                    point_value = tick_value / tick_size
-                    
-                # Fee Determination
-                # Check for matches in FEES_MAP keys
-                # Sort keys by length desc to match "MNQ" before "NQ" if needed (though "M" prefix usually distinct)
-                sorted_keys = sorted(FEES_MAP.keys(), key=len, reverse=True)
-                for k in sorted_keys:
-                    # Crude check: if key is in name. e.g. "MNQ" in "MNQH6"
-                    if k in contract_name:
-                        fee_per_trade = FEES_MAP[k]
-                        break
 
-            # Override with Hardcoded Specs if available (More reliable)
-            # Check matches in CONTRACT_SPECS
-            sorted_spec_keys = sorted(CONTRACT_SPECS.keys(), key=len, reverse=True)
-            for k in sorted_spec_keys:
-                if contract and k in contract.get('name', '').upper():
-                    spec = CONTRACT_SPECS[k]
-                    tick_size = spec['tick_size']
-                    tick_value = spec['tick_value']
-                    if tick_size > 0:
-                         point_value = tick_value / tick_size
-                    break
-        except Exception as e:
-            logger.warning(f"Contract spec fetch failed: {e}")
+    # Use CONTRACT_SPECS for the symbol
+    if req.symbol in CONTRACT_SPECS:
+        spec = CONTRACT_SPECS[req.symbol]
+        tick_size = spec['tick_size']
+        tick_value = spec['tick_value']
+        if tick_size > 0:
+            point_value = tick_value / tick_size
 
-    # --- Override with Manual Contract Details (Legacy Mode) ---
-    # This takes precedence because it's fetched specifically for the ID provided
-    # --- Override with Manual Contract Details (Legacy Mode) ---
-    # This takes precedence because it's fetched specifically for the ID provided in Legacy Mode
-    if legacy_contract_details:
-         try:
-             tick_size = float(legacy_contract_details.get("tickSize", 0.25))
-             tick_value = float(legacy_contract_details.get("tickValue", 5.0)) # Default to 5.0 matches Optimization
-             contract_name = legacy_contract_details.get("name", "").upper()
-             
-             if tick_size > 0:
-                 point_value = tick_value / tick_size
-             
-             logger.info(f"Legacy Mode Specs Used: {contract_name} | Tick: {tick_size} | Value: {tick_value} | PV: {point_value}")
-         except Exception as e:
-             logger.error(f"Legacy spec override failed: {e}")
-    elif req.source == 'Topstep' and not req.topstep_live_mode:
-         # Fallback re-fetch if not captured earlier (unlikely but safe)
-         try:
-             details = topstep.get_contract_details(req.contract_id)
-             if details:
-                 tick_size = float(details.get("tickSize", 0.25))
-                 tick_value = float(details.get("tickValue", 5.0))
-                 contract_name = details.get("name", "").upper()
-                 
-                 if tick_size > 0:
-                     point_value = tick_value / tick_size
-                 
-                 logger.info(f"Legacy Mode Specs Fetched (Fallback): {contract_name} | Tick: {tick_size} | Value: {tick_value}")
-         except Exception as e:
-             logger.error(f"Legacy spec fetch failed: {e}")
+    # Fee from FEES_MAP
+    if req.symbol in FEES_MAP:
+        fee_per_trade = FEES_MAP[req.symbol]
+
+    logger.info(f"Contract specs for {req.symbol}: tick_size={tick_size}, tick_value={tick_value}, point_value={point_value}, fee={fee_per_trade}")
             
     # Calculate Base Sizing (Entries)
     risk_amount = req.initial_equity * req.risk_per_trade
@@ -988,7 +1175,7 @@ def run_backtest(req: BacktestRequest):
     return {
         "metrics": metrics,
         "trades": trades_list,
-        "equity_curve": equity_curve
+        "equity_curve": equity_curve,
     }
 
 

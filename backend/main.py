@@ -4,13 +4,25 @@ import os
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
+
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+except ModuleNotFoundError:  # pragma: no cover - optional in lightweight test envs
+    Limiter = None
+    RateLimitExceeded = None
+
+    def get_remote_address(_: Request) -> str:
+        return "local-test"
+
+    def _rate_limit_exceeded_handler(*args, **kwargs):
+        return None
 
 load_dotenv()
 
 from .api import router
+from .market_data_routes import market_data_router
 
 # Configure logging
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -22,7 +34,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Rate limiter
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=get_remote_address) if Limiter is not None else None
 
 app = FastAPI(
     title="Nebular Apollo API",
@@ -32,7 +44,8 @@ app = FastAPI(
 
 # Add rate limiter
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+if RateLimitExceeded is not None:
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Configure CORS
 allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000")
@@ -52,6 +65,7 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(market_data_router)
 
 @app.get("/")
 def read_root():

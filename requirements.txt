@@ -14,6 +14,7 @@ llvmlite<0.40.0 # Required by numba
 yfinance<1.0.0
 requests>=2.31.0
 urllib3<2.0.0  # Required for Mac LibreSSL compatibility
+pyarrow>=14.0.0  # Parquet support for local market data store
 
 # Technical Indicators
 -e ./libs/pandas-ta

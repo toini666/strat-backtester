@@ -14,6 +14,8 @@ class Strategy(ABC):
     default_params: Dict[str, Any] = {}
     param_ranges: Dict[str, Any] = {}
     manual_exit: bool = False # If True, API wont pass SL/TP to VBT engine for execution (still used for sizing)
+    use_simulator: bool = False
+    simulator_settings: Dict[str, Any] = {}
     
     def __init__(self):
         # Ensure indicators are loaded
@@ -67,3 +69,8 @@ class Strategy(ABC):
         if params:
             p.update(params)
         return p
+
+    def get_simulator_settings(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Return simulator-specific behavior overrides for this strategy."""
+        settings = self.simulator_settings.copy()
+        return settings

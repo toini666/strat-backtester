@@ -5,11 +5,11 @@ interface KpiCardProps {
     value: string | number;
     icon: LucideIcon;
     color?: string;
-    trend?: number;
+    subValue?: string;
+    subColor?: string;
 }
 
-export function KpiCard({ label, value, icon: Icon, color }: KpiCardProps) {
-    // Extract color class for icon background if needed, or default
+export function KpiCard({ label, value, icon: Icon, color, subValue, subColor }: KpiCardProps) {
     const iconColorClass = color || 'text-gray-400';
 
     return (
@@ -19,8 +19,13 @@ export function KpiCard({ label, value, icon: Icon, color }: KpiCardProps) {
             </div>
             <div>
                 <div className="text-xs text-gray-400 uppercase tracking-wider mb-1 font-medium">{label}</div>
-                <div className={`text-2xl font-bold font-mono text-gray-100`}>
-                    {value}
+                <div className="flex items-baseline gap-2">
+                    <span className="text-2xl font-bold font-mono text-gray-100">{value}</span>
+                    {subValue && (
+                        <span className={`text-sm font-mono font-semibold ${subColor || 'text-gray-400'}`}>
+                            ({subValue})
+                        </span>
+                    )}
                 </div>
             </div>
         </div>

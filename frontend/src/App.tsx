@@ -1,5 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
-import { api, type Strategy, type BacktestResult, type Contract, type Trade, type BacktestMetrics, type OptimizationResponse, type OptimizationResultItem, type ParameterRangeInput, type OptimizationRunDetail } from './api';
+import {
+  api,
+  type Strategy,
+  type BacktestResult,
+  type AvailableDataset,
+  type Trade,
+  type BacktestMetrics,
+  type OptimizationResponse,
+  type OptimizationResultItem,
+  type ParameterRangeInput,
+  type OptimizationRunDetail,
+  type BacktestEngineSettings,
+  DEFAULT_BACKTEST_ENGINE_SETTINGS,
+} from './api';
 import './App.css';
 
 // Components
@@ -9,12 +22,13 @@ import { Dashboard } from './components/Dashboard';
 import { OptimizationConfig } from './components/OptimizationConfig';
 import { OptimizationResults } from './components/OptimizationResults';
 import { OptimizationHistory } from './components/OptimizationHistory';
+import { MarketDataPanel } from './components/MarketDataPanel';
 
 // Type for strategy parameters
 type StrategyParams = Record<string, number | string | boolean>;
 
 // App modes
-type AppMode = 'backtest' | 'optimization';
+type AppMode = 'backtest' | 'optimization' | 'data';
 type OptimizationView = 'config' | 'results';
 
 function App() {
@@ -26,42 +40,26 @@ function App() {
   const [selectedStrategy, setSelectedStrategy] = useState<Strategy | null>(null);
   const [params, setParams] = useState<StrategyParams>({});
 
-  // Data Config
-  const [dataSource, setDataSource] = useState<'Yahoo' | 'Topstep'>('Yahoo');
-  const [ticker, setTicker] = useState('BTC-USD');
-  const [contracts, setContracts] = useState<Contract[]>([]);
-  const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
-  const [interval, setInterval] = useState('15m');
-  const [days, setDays] = useState(14);
-  const [startDate, setStartDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 30); // 30 days before end date (inclusive range = 30 days?)
-    // User wants "30 days full". If End=29, Start=31/12/25.
-    // 29 Jan - 31 Dec = 29 days difference. Inclusive = 30 days.
-    // Today (30 Jan) - 1 = 29 Jan.
-    // Today (30 Jan) - ? = 31 Dec.
-    // 30 Jan - 30 days = 31 Dec?
-    // Jan has 31 days. 30 Jan - 30 days -> 31 Dec?
-    // Jan 1 is 29 days diff.
-    // Dec 31 is 30 days diff.
-    // So 30 is correct.
-    return d.toISOString().split('T')[0];
-  });
-  const [endDate, setEndDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1); // Yesterday
-    return d.toISOString().split('T')[0];
-  });
-  const [topstepLiveMode, setTopstepLiveMode] = useState(true);
-  const [manualContractId, setManualContractId] = useState('');
+  // Available data from local store
+  const [availableData, setAvailableData] = useState<AvailableDataset[]>([]);
+
+  // Data Config - simplified
+  const [selectedSymbol, setSelectedSymbol] = useState('');
+  const [interval, setInterval] = useState('5m');
+  const [startDatetime, setStartDatetime] = useState('');
+  const [endDatetime, setEndDatetime] = useState('');
 
   // Risk Mgmt
   const [initialEquity, setInitialEquity] = useState(50000);
-  const [riskPerTrade, setRiskPerTrade] = useState(1.0); // %
+  const [riskPerTrade, setRiskPerTrade] = useState(0.5); // %
 
   // Trade Filters
   const [maxContracts, setMaxContracts] = useState(50);
-  const [blockMarketOpen, setBlockMarketOpen] = useState(true);
+  const [, setBlockMarketOpen] = useState(true);
+  const [engineSettings, setEngineSettings] = useState<BacktestEngineSettings>({
+    ...DEFAULT_BACKTEST_ENGINE_SETTINGS,
+    blackout_windows: DEFAULT_BACKTEST_ENGINE_SETTINGS.blackout_windows.map((window) => ({ ...window })),
+  });
 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
@@ -76,7 +74,6 @@ function App() {
   // Optimization state
   const [optimizationResult, setOptimizationResult] = useState<OptimizationResponse | null>(null);
   const [optimizationLoading, setOptimizationLoading] = useState(false);
-  // Store optimization config to transfer to backtest
   const [lastOptimizationConfig, setLastOptimizationConfig] = useState<{
     ticker: string;
     source: 'Yahoo' | 'Topstep';
@@ -113,6 +110,7 @@ function App() {
     minWinRate?: number;
   } | null>(null);
 
+  // Load strategies and available data on mount
   useEffect(() => {
     api.getStrategies().then(data => {
       setStrategies(data);
@@ -121,24 +119,41 @@ function App() {
       const message = err instanceof Error ? err.message : String(err);
       setError("Failed to load strategies: " + message);
     });
+
+    api.getAvailableData().then(data => {
+      setAvailableData(data);
+      if (data.length > 0) {
+        setSelectedSymbol(data[0].symbol);
+        // Set default timeframe
+        if (data[0].timeframes.includes('5m')) {
+          setInterval('5m');
+        } else if (data[0].timeframes.length > 0) {
+          setInterval(data[0].timeframes[data[0].timeframes.length - 1]);
+        }
+        // Set default end datetime to dataset end
+        setEndDatetime(data[0].end_date.slice(0, 16)); // trim to YYYY-MM-DDTHH:mm
+      }
+    }).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      setError("Failed to load available data: " + message);
+    });
   }, []);
 
-  // Fetch Topstep contracts when source changes
+  // When symbol or strategy changes, set default start datetime considering buffer
   useEffect(() => {
-    if (dataSource === 'Topstep' && contracts.length === 0) {
-      setLoading(true);
-      api.getTopstepContracts()
-        .then(data => {
-          setContracts(data);
-          if (data.length > 0) setSelectedContract(data[0]);
-        })
-        .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          setError("Topstep Error: " + message);
-        })
-        .finally(() => setLoading(false));
+    if (!selectedSymbol || !selectedStrategy || availableData.length === 0) return;
+    const ds = availableData.find(d => d.symbol === selectedSymbol);
+    if (!ds) return;
+
+    const minStarts = ds.min_start_per_strategy[selectedStrategy.name];
+    if (minStarts && minStarts[interval]) {
+      const minStart = minStarts[interval];
+      // Only update if current startDatetime is before minStart or empty
+      if (!startDatetime || startDatetime < minStart.slice(0, 16)) {
+        setStartDatetime(minStart.slice(0, 16));
+      }
     }
-  }, [dataSource, contracts.length]);
+  }, [selectedSymbol, selectedStrategy, interval, availableData]);
 
   const selectStrategy = useCallback((strat: Strategy) => {
     setSelectedStrategy(strat);
@@ -146,7 +161,7 @@ function App() {
   }, []);
 
   const runBacktest = async () => {
-    if (!selectedStrategy) return;
+    if (!selectedStrategy || !selectedSymbol) return;
     setLoading(true);
     setError('');
     setResult(null);
@@ -154,19 +169,15 @@ function App() {
     try {
       const res = await api.runBacktest(
         selectedStrategy.name,
-        ticker,
-        dataSource,
-        topstepLiveMode ? (selectedContract?.id || null) : manualContractId,
+        selectedSymbol,
         interval,
-        days,
+        startDatetime,
+        endDatetime,
         initialEquity,
         riskPerTrade / 100, // Send as decimal
         params,
         maxContracts,
-        blockMarketOpen,
-        startDate,
-        endDate,
-        topstepLiveMode
+        engineSettings,
       );
       setResult(res);
     } catch (err: unknown) {
@@ -200,7 +211,7 @@ function App() {
       win_rate: trades.length > 0 ? (winCount / trades.length) * 100 : 0,
       total_trades: trades.length,
       max_drawdown: maxDrawdown * 100,
-      sharpe_ratio: 0 // Hard to recalc without timeseries
+      sharpe_ratio: 0
     };
   }, []);
 
@@ -211,19 +222,23 @@ function App() {
     }
 
     const filteredTrades = result.trades.filter(t => selectedSessions.includes(t.session));
-    const newMetrics = calculateMetrics(filteredTrades, initialEquity);
+    const activeTrades = filteredTrades.filter(t => !t.excluded);
+    const newMetrics = calculateMetrics(activeTrades, initialEquity);
 
     let currentEq = initialEquity;
     const newCurve = [{ time: 'Start', value: initialEquity }];
-    filteredTrades.forEach((t, i) => {
+    activeTrades.forEach((t, i) => {
       currentEq += t.pnl;
-      newCurve.push({ time: t.exit_time || String(i), value: currentEq });
+      newCurve.push({ time: t.exit_execution_time || t.exit_time || String(i), value: currentEq });
     });
 
     setFilteredResult({
       metrics: { ...result.metrics, ...newMetrics },
       trades: filteredTrades,
-      equity_curve: newCurve
+      equity_curve: newCurve,
+      daily_limits_hit: result.daily_limits_hit,
+      data_source_used: result.data_source_used,
+      debug_file: result.debug_file,
     });
 
   }, [result, selectedSessions, initialEquity, calculateMetrics]);
@@ -239,27 +254,10 @@ function App() {
   // Calculate session stats for summary table
   const sessionStats = ['Asia', 'UK', 'US'].map(sess => {
     if (!result) return null;
-    const trades = result.trades.filter(t => t.session === sess);
+    const trades = result.trades.filter(t => t.session === sess && !t.excluded);
     const metrics = calculateMetrics(trades, initialEquity);
     return { session: sess, ...metrics };
   }).filter((s): s is NonNullable<typeof s> => Boolean(s));
-
-  // Fetch contracts callback for optimization mode
-  const fetchContractsIfNeeded = useCallback(() => {
-    if (contracts.length === 0) {
-      setLoading(true);
-      api.getTopstepContracts()
-        .then(data => {
-          setContracts(data);
-          if (data.length > 0) setSelectedContract(data[0]);
-        })
-        .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          setError("Topstep Error: " + message);
-        })
-        .finally(() => setLoading(false));
-    }
-  }, [contracts.length]);
 
   // Optimization handlers
   const handleRunOptimization = useCallback(async (config: {
@@ -291,7 +289,6 @@ function App() {
       });
       setOptimizationResult(res);
       setOptimizationView('results');
-      // Store config for transferring to backtest later
       setLastOptimizationConfig({
         ticker: config.ticker,
         source: config.source,
@@ -315,69 +312,37 @@ function App() {
   }, []);
 
   const handleSelectOptimizationResult = useCallback((result: OptimizationResultItem) => {
-    // Find the strategy
     const strat = strategies.find(s => s.name === optimizationResult?.strategy_name);
     if (strat) {
       setSelectedStrategy(strat);
 
-      // Set the parameters from the optimization result
       const newParams = { ...strat.default_params };
       Object.entries(result.parameters).forEach(([key, value]) => {
         newParams[key] = value;
       });
       setParams(newParams);
 
-      // Set sessions
       setSelectedSessions(result.sessions);
 
-      // Transfer ALL config from the optimization run
       if (lastOptimizationConfig) {
-        setTicker(lastOptimizationConfig.ticker);
-        setDataSource(lastOptimizationConfig.source);
         setInterval(lastOptimizationConfig.interval);
-        setDays(lastOptimizationConfig.days);
         setInitialEquity(lastOptimizationConfig.initialEquity);
-        setRiskPerTrade(lastOptimizationConfig.riskPerTrade * 100); // Convert back to percentage
+        setRiskPerTrade(lastOptimizationConfig.riskPerTrade * 100);
         setMaxContracts(lastOptimizationConfig.maxContracts);
         setBlockMarketOpen(lastOptimizationConfig.blockMarketOpen);
-        if (lastOptimizationConfig.startDate) setStartDate(lastOptimizationConfig.startDate);
-        if (lastOptimizationConfig.endDate) setEndDate(lastOptimizationConfig.endDate);
-        if (lastOptimizationConfig.topstepLiveMode !== undefined) setTopstepLiveMode(lastOptimizationConfig.topstepLiveMode);
-
-        // Set the contract if Topstep
-        if (lastOptimizationConfig.source === 'Topstep') {
-          if (lastOptimizationConfig.topstepLiveMode) {
-            setManualContractId(''); // Clear manual
-            if (lastOptimizationConfig.contractId) {
-              const contract = contracts.find(c => c.id === lastOptimizationConfig.contractId);
-              if (contract) {
-                setSelectedContract(contract);
-              }
-            }
-          } else {
-            // Legacy
-            setSelectedContract(null); // Clear active
-            if (lastOptimizationConfig.contractId) {
-              setManualContractId(lastOptimizationConfig.contractId);
-            }
-          }
-        }
       }
 
-      // Switch to backtest mode
       setMode('backtest');
       setResult(null);
       setFilteredResult(null);
     }
-  }, [strategies, optimizationResult, lastOptimizationConfig, contracts]);
+  }, [strategies, optimizationResult, lastOptimizationConfig]);
 
   const handleBackFromResults = useCallback(() => {
     setOptimizationView('config');
   }, []);
 
-  // Handler to load a historical optimization run
   const handleLoadHistoryRun = useCallback((run: OptimizationRunDetail) => {
-    // Convert the run detail to an OptimizationResponse format
     const response: OptimizationResponse = {
       id: run.id,
       strategy_name: run.strategy_name,
@@ -389,7 +354,6 @@ function App() {
     setOptimizationResult(response);
     setOptimizationView('results');
 
-    // Store config for transferring to backtest later
     setLastOptimizationConfig({
       ticker: run.ticker,
       source: run.source as 'Yahoo' | 'Topstep',
@@ -407,10 +371,6 @@ function App() {
   }, []);
 
   const handleReuseHistoryConfig = useCallback((run: OptimizationRunDetail) => {
-    // Create config object from run details
-    // Note: Some fields like initialEquity/risk might be missing if not saved in older runs
-    // We will use defaults for those if missing
-
     const liveMode = run.topstep_live_mode !== undefined ? run.topstep_live_mode : true;
 
     setConfigToReuse({
@@ -420,7 +380,7 @@ function App() {
       contractId: run.contract_id,
       interval: run.interval,
       days: run.days,
-      parameters: run.parameters || [], // If empty/undefined, it will just load default params
+      parameters: run.parameters || [],
       sessions: run.sessions_tested,
       initialEquity: run.initial_equity || 50000,
       riskPerTrade: run.risk_per_trade !== undefined ? run.risk_per_trade : 0.01,
@@ -454,8 +414,6 @@ function App() {
           <button
             onClick={() => {
               setMode('optimization');
-              // Keep the current view (config or results) when switching back
-              // Only reset to config if there's no result yet
               if (!optimizationResult) {
                 setOptimizationView('config');
               }
@@ -466,6 +424,15 @@ function App() {
               }`}
           >
             Optimization
+          </button>
+          <button
+            onClick={() => setMode('data')}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'data'
+              ? 'bg-emerald-600 text-white shadow-lg'
+              : 'text-gray-400 hover:text-gray-300'
+              }`}
+          >
+            Data
           </button>
         </div>
 
@@ -513,35 +480,25 @@ function App() {
 
       {/* Backtest Mode */}
       {mode === 'backtest' && (
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        <div className="space-y-6">
           <Sidebar
-            dataSource={dataSource}
-            setDataSource={(v) => setDataSource(v as 'Yahoo' | 'Topstep')}
-            ticker={ticker}
-            setTicker={setTicker}
-            contracts={contracts}
-            selectedContract={selectedContract}
-            setSelectedContract={setSelectedContract}
+            availableData={availableData}
+            selectedSymbol={selectedSymbol}
+            setSelectedSymbol={setSelectedSymbol}
             interval={interval}
             setInterval={setInterval}
-            days={days}
-            setDays={setDays}
+            startDatetime={startDatetime}
+            setStartDatetime={setStartDatetime}
+            endDatetime={endDatetime}
+            setEndDatetime={setEndDatetime}
             initialEquity={initialEquity}
             setInitialEquity={setInitialEquity}
             riskPerTrade={riskPerTrade}
             setRiskPerTrade={setRiskPerTrade}
             maxContracts={maxContracts}
             setMaxContracts={setMaxContracts}
-            blockMarketOpen={blockMarketOpen}
-            setBlockMarketOpen={setBlockMarketOpen}
-            startDate={startDate}
-            setStartDate={setStartDate}
-            endDate={endDate}
-            setEndDate={setEndDate}
-            topstepLiveMode={topstepLiveMode}
-            setTopstepLiveMode={setTopstepLiveMode}
-            manualContractId={manualContractId}
-            setManualContractId={setManualContractId}
+            engineSettings={engineSettings}
+            setEngineSettings={setEngineSettings}
             strategies={strategies}
             selectedStrategy={selectedStrategy}
             selectStrategy={selectStrategy}
@@ -552,17 +509,20 @@ function App() {
             error={error}
           />
 
-          <div className="lg:col-span-3">
-            <Dashboard
-              filteredResult={filteredResult}
-              selectedSessions={selectedSessions}
-              toggleSession={toggleSession}
-              dataSource={dataSource}
-              initialEquity={initialEquity}
-              sessionStats={sessionStats}
-            />
-          </div>
+          <Dashboard
+            filteredResult={filteredResult}
+            selectedSessions={selectedSessions}
+            toggleSession={toggleSession}
+            dataSource="Local"
+            initialEquity={initialEquity}
+            sessionStats={sessionStats}
+          />
         </div>
+      )}
+
+      {/* Data Management Mode */}
+      {mode === 'data' && (
+        <MarketDataPanel />
       )}
 
       {/* Optimization Mode */}
@@ -572,10 +532,10 @@ function App() {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <OptimizationConfig
                 strategies={strategies}
-                contracts={contracts}
+                contracts={[]}
                 onRunOptimization={handleRunOptimization}
                 loading={optimizationLoading}
-                onContractsNeeded={fetchContractsIfNeeded}
+                onContractsNeeded={() => {}}
                 initialConfig={configToReuse}
               />
 

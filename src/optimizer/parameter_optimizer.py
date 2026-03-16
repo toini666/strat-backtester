@@ -21,11 +21,11 @@ import pandas as pd
 import numpy as np
 
 
-# Session definitions (matching api.py)
+# Session definitions – reference-frame boundaries (matching api.py / simulator.py)
 SESSIONS = {
     "Asia": (0, 540),      # 00:00 - 08:59
     "UK": (540, 930),      # 09:00 - 15:29
-    "US": (930, 1320),     # 15:30 - 22:00
+    "US": (930, 1440),     # 15:30 - end of day
 }
 
 
@@ -165,18 +165,14 @@ class OptimizationRunSummary:
 
 
 def get_session_from_time(dt: pd.Timestamp) -> str:
-    """Determine session from timestamp."""
-    h = dt.hour
-    m = dt.minute
-    time_val = h * 60 + m
-
-    if 0 <= time_val < 540:
+    """Determine session from timestamp (DST-aware)."""
+    from src.engine.simulator import _to_ref_minutes
+    ref = _to_ref_minutes(dt)
+    if ref < 540:
         return "Asia"
-    elif 540 <= time_val < 930:
+    if ref < 930:
         return "UK"
-    elif 930 <= time_val <= 1320:
-        return "US"
-    return "Outside"
+    return "US"
 
 
 def filter_trades_by_sessions(trades: List[Dict], sessions: List[str]) -> List[Dict]:

@@ -1,1 +1,9 @@
-from .backtester import Backtester
+__all__ = ["Backtester"]
+
+
+def __getattr__(name):
+    if name == "Backtester":
+        from .backtester import Backtester
+
+        return Backtester
+    raise AttributeError(name)

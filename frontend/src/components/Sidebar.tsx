@@ -1,350 +1,536 @@
-import { Database, ShieldAlert, Settings, Play } from 'lucide-react';
-import { type Strategy, type Contract } from '../api';
+import { useMemo, type Dispatch, type SetStateAction } from 'react';
+import { Clock3, Database, Play, Settings, ShieldAlert } from 'lucide-react';
+import { type AvailableDataset, type BacktestEngineSettings, type Strategy } from '../api';
 
-// Type for strategy parameters
 type StrategyParamValue = number | string | boolean;
 type StrategyParams = Record<string, StrategyParamValue>;
 
 interface SidebarProps {
-    // Data State
-    dataSource: string;
-    setDataSource: (v: string) => void;
-    ticker: string;
-    setTicker: (v: string) => void;
-    contracts: Contract[];
-    selectedContract: Contract | null;
-    setSelectedContract: (c: Contract) => void;
+    availableData: AvailableDataset[];
+    selectedSymbol: string;
+    setSelectedSymbol: (v: string) => void;
     interval: string;
     setInterval: (v: string) => void;
-    days: number;
-    setDays: (v: number) => void;
-    startDate: string;
-    setStartDate: (v: string) => void;
-    endDate: string;
-    setEndDate: (v: string) => void;
-    topstepLiveMode: boolean;
-    setTopstepLiveMode: (v: boolean) => void;
-    manualContractId: string;
-    setManualContractId: (v: string) => void;
-
-    // Risk State
+    startDatetime: string;
+    setStartDatetime: (v: string) => void;
+    endDatetime: string;
+    setEndDatetime: (v: string) => void;
     initialEquity: number;
     setInitialEquity: (v: number) => void;
     riskPerTrade: number;
     setRiskPerTrade: (v: number) => void;
-
-    // Trade Filters
     maxContracts: number;
     setMaxContracts: (v: number) => void;
-    blockMarketOpen: boolean;
-    setBlockMarketOpen: (v: boolean) => void;
-
-    // Strategy State
+    engineSettings: BacktestEngineSettings;
+    setEngineSettings: Dispatch<SetStateAction<BacktestEngineSettings>>;
     strategies: Strategy[];
     selectedStrategy: Strategy | null;
     selectStrategy: (s: Strategy) => void;
     params: StrategyParams;
-    setParams: (fn: (prev: StrategyParams) => StrategyParams) => void;
-
-    // Actions
+    setParams: Dispatch<SetStateAction<StrategyParams>>;
     runBacktest: () => void;
     loading: boolean;
     error: string;
 }
 
+function formatParamLabel(key: string): string {
+    return key.replace(/_/g, ' ');
+}
+
+function toClockValue(hour: number, minute: number): string {
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function parseClockValue(value: string): { hour: number; minute: number } | null {
+    const [hourStr, minuteStr] = value.split(':');
+    const hour = Number(hourStr);
+    const minute = Number(minuteStr);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+        return null;
+    }
+    return { hour, minute };
+}
+
 export function Sidebar({
-    dataSource, setDataSource,
-    ticker, setTicker,
-    contracts, selectedContract, setSelectedContract,
-    interval, setInterval,
-    // days, setDays, // Removed unused props
-    startDate, setStartDate,
-    endDate, setEndDate,
-    topstepLiveMode, setTopstepLiveMode,
-    manualContractId, setManualContractId,
-    initialEquity, setInitialEquity,
-    riskPerTrade, setRiskPerTrade,
-    maxContracts, setMaxContracts,
-    blockMarketOpen, setBlockMarketOpen,
-    strategies, selectedStrategy, selectStrategy,
-    params, setParams,
-    runBacktest, loading, error
+    availableData,
+    selectedSymbol,
+    setSelectedSymbol,
+    interval,
+    setInterval,
+    startDatetime,
+    setStartDatetime,
+    endDatetime,
+    setEndDatetime,
+    initialEquity,
+    setInitialEquity,
+    riskPerTrade,
+    setRiskPerTrade,
+    maxContracts,
+    setMaxContracts,
+    engineSettings,
+    setEngineSettings,
+    strategies,
+    selectedStrategy,
+    selectStrategy,
+    params,
+    setParams,
+    runBacktest,
+    loading,
+    error,
 }: SidebarProps) {
+    const selectedDataset = useMemo(() => {
+        return availableData.find((dataset) => dataset.symbol === selectedSymbol) || null;
+    }, [availableData, selectedSymbol]);
+
+    const availableTimeframes = useMemo(() => {
+        return selectedDataset?.timeframes || [];
+    }, [selectedDataset]);
+
+    const minStartDatetime = useMemo(() => {
+        if (!selectedDataset || !selectedStrategy) return '';
+        const minStarts = selectedDataset.min_start_per_strategy[selectedStrategy.name];
+        if (minStarts && minStarts[interval]) {
+            return minStarts[interval].slice(0, 16);
+        }
+        return selectedDataset.start_date.slice(0, 16);
+    }, [selectedDataset, selectedStrategy, interval]);
+
+    const maxEndDatetime = useMemo(() => {
+        if (!selectedDataset) return '';
+        return selectedDataset.end_date.slice(0, 16);
+    }, [selectedDataset]);
+
+    const visibleParams = useMemo(() => {
+        return Object.entries(params).filter(([key]) => key !== 'tick_size');
+    }, [params]);
 
     const handleParamChange = (key: string, value: StrategyParamValue) => {
-        setParams(prev => ({ ...prev, [key]: value }));
+        setParams((prev) => ({ ...prev, [key]: value }));
+    };
+
+    const handleBlackoutUpdate = (
+        index: number,
+        updates: Partial<BacktestEngineSettings['blackout_windows'][number]>,
+    ) => {
+        setEngineSettings((prev) => ({
+            ...prev,
+            blackout_windows: prev.blackout_windows.map((window, windowIndex) => (
+                windowIndex === index ? { ...window, ...updates } : window
+            )),
+        }));
+    };
+
+    const renderParamInput = (key: string, value: StrategyParamValue) => {
+        if (typeof value === 'boolean') {
+            return (
+                <select
+                    className="input-base"
+                    value={value ? 'true' : 'false'}
+                    onChange={(event) => handleParamChange(key, event.target.value === 'true')}
+                >
+                    <option value="true">True</option>
+                    <option value="false">False</option>
+                </select>
+            );
+        }
+
+        if (key === 'signal_type') {
+            return (
+                <select
+                    className="input-base"
+                    value={String(value)}
+                    onChange={(event) => handleParamChange(key, event.target.value)}
+                >
+                    <option value="SMA">SMA</option>
+                    <option value="EMA">EMA</option>
+                </select>
+            );
+        }
+
+        if (key === 'filter_method') {
+            return (
+                <select
+                    className="input-base"
+                    value={String(value)}
+                    onChange={(event) => handleParamChange(key, event.target.value)}
+                >
+                    <option value="slope">slope</option>
+                    <option value="spread">spread</option>
+                </select>
+            );
+        }
+
+        if (typeof value === 'string') {
+            return (
+                <input
+                    type="text"
+                    className="input-base"
+                    value={value}
+                    onChange={(event) => handleParamChange(key, event.target.value)}
+                />
+            );
+        }
+
+        return (
+            <input
+                type="number"
+                className="input-base"
+                value={value}
+                step={!Number.isInteger(value) ? '0.1' : '1'}
+                onChange={(event) => handleParamChange(key, Number(event.target.value))}
+            />
+        );
     };
 
     return (
         <div className="space-y-6">
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                <div className="glass-panel rounded-xl p-5">
+                    <div className="flex items-center gap-2 mb-4 text-blue-400 font-semibold">
+                        <Database className="w-5 h-5" />
+                        <h2>Data</h2>
+                    </div>
 
-            {/* 1. Data Source */}
-            <div className="glass-panel rounded-xl p-5">
-                <div className="flex items-center gap-2 mb-4 text-blue-400 font-semibold">
-                    <Database className="w-5 h-5" />
-                    <h2>Data Source</h2>
-                </div>
-
-                <div className="flex bg-gray-900/50 rounded-lg p-1 mb-4 border border-gray-700">
-                    {['Yahoo', 'Topstep'].map(src => (
-                        <button
-                            key={src}
-                            onClick={() => setDataSource(src)}
-                            className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-all ${dataSource === src
-                                ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20'
-                                : 'text-gray-400 hover:text-white hover:bg-white/5'
-                                }`}
-                        >
-                            {src}
-                        </button>
-                    ))}
-                </div>
-
-                <div className="space-y-4">
-                    {dataSource === 'Yahoo' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Ticker</label>
-                            <input
-                                type="text"
-                                className="input-base"
-                                value={ticker}
-                                onChange={e => setTicker(e.target.value)}
-                            />
+                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Symbol</label>
+                            <select
+                                className="input-base appearance-none"
+                                value={selectedSymbol}
+                                onChange={(event) => {
+                                    setSelectedSymbol(event.target.value);
+                                    const nextDataset = availableData.find((dataset) => dataset.symbol === event.target.value);
+                                    if (nextDataset && !nextDataset.timeframes.includes(interval)) {
+                                        setInterval(nextDataset.timeframes[nextDataset.timeframes.length - 1] || '5m');
+                                    }
+                                }}
+                            >
+                                {availableData.length === 0 && <option>Loading...</option>}
+                                {availableData.map((dataset) => (
+                                    <option key={dataset.symbol} value={dataset.symbol}>
+                                        {dataset.symbol}
+                                    </option>
+                                ))}
+                            </select>
                         </div>
-                    )}
-                    {dataSource === 'Topstep' && (
-                        <div>
-                            <div className="flex gap-2 mb-2 p-1 bg-gray-900/40 rounded-lg">
-                                <button
-                                    onClick={() => setTopstepLiveMode(true)}
-                                    className={`flex-1 text-xs py-1 rounded ${topstepLiveMode ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
-                                >
-                                    Active Contract
-                                </button>
-                                <button
-                                    onClick={() => setTopstepLiveMode(false)}
-                                    className={`flex-1 text-xs py-1 rounded ${!topstepLiveMode ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
-                                >
-                                    Legacy/Manual
-                                </button>
-                            </div>
 
-                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">
-                                {topstepLiveMode ? "Active Contract" : "Contract ID"}
-                            </label>
-
-                            {topstepLiveMode ? (
-                                <select
-                                    className="input-base appearance-none"
-                                    value={selectedContract?.id || ''}
-                                    onChange={(e) => {
-                                        const c = contracts.find(c => c.id === e.target.value);
-                                        if (c) setSelectedContract(c);
-                                    }}
-                                >
-                                    {contracts.length === 0 && <option>Loading...</option>}
-                                    {contracts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                </select>
-                            ) : (
-                                <input
-                                    type="text"
-                                    className="input-base"
-                                    placeholder="e.g. CON.F.US.ES.Z23 (Contract ID)"
-                                    value={manualContractId}
-                                    onChange={e => setManualContractId(e.target.value)}
-                                />
-                            )}
-                        </div>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-3">
                         <div>
                             <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Timeframe</label>
                             <select
                                 className="input-base"
                                 value={interval}
-                                onChange={e => setInterval(e.target.value)}
+                                onChange={(event) => setInterval(event.target.value)}
                             >
-                                {['1m', '2m', '3m', '5m', '7m', '15m', '30m', '1h', '4h', '1d'].map(t => <option key={t} value={t}>{t}</option>)}
+                                {availableTimeframes.map((timeframe) => (
+                                    <option key={timeframe} value={timeframe}>
+                                        {timeframe}
+                                    </option>
+                                ))}
                             </select>
                         </div>
-                        {/* Display Duration Helper */}
 
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Start Date</label>
+                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Start Date & Time</label>
                             <input
-                                type="date"
+                                type="datetime-local"
                                 className="input-base"
-                                value={startDate}
-                                onChange={e => setStartDate(e.target.value)}
+                                value={startDatetime}
+                                min={minStartDatetime}
+                                max={endDatetime || maxEndDatetime}
+                                onChange={(event) => setStartDatetime(event.target.value)}
+                            />
+                            {minStartDatetime && (
+                                <p className="text-xs text-gray-600 mt-1">
+                                    Min: {minStartDatetime.replace('T', ' ')} (warmup indicateurs)
+                                </p>
+                            )}
+                        </div>
+
+                        <div>
+                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">End Date & Time</label>
+                            <input
+                                type="datetime-local"
+                                className="input-base"
+                                value={endDatetime}
+                                min={startDatetime || minStartDatetime}
+                                max={maxEndDatetime}
+                                onChange={(event) => setEndDatetime(event.target.value)}
                             />
                         </div>
-                        <div>
-                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">End Date</label>
-                            <input
-                                type="date"
-                                className="input-base"
-                                value={endDate}
-                                onChange={e => setEndDate(e.target.value)}
-                            />
-                        </div>
                     </div>
-                    {startDate && endDate && (
-                        <div className="text-xs text-center text-gray-500 -mt-2">
-                            Duration: {Math.max(0, Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))) + 1} days
+
+                    {startDatetime && endDatetime && (
+                        <div className="mt-4 text-xs text-gray-500">
+                            Duration: {Math.max(0, Math.ceil((new Date(endDatetime).getTime() - new Date(startDatetime).getTime()) / (1000 * 60 * 60 * 24)))} days
                         </div>
                     )}
-                </div>
-            </div>
 
-            {/* 2. Risk Management */}
-            <div className="glass-panel rounded-xl p-5">
-                <div className="flex items-center gap-2 mb-4 text-emerald-400 font-semibold">
-                    <ShieldAlert className="w-5 h-5" />
-                    <h2>Risk Management</h2>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                    <div>
-                        <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Capital ($)</label>
-                        <input
-                            type="number"
-                            className="input-base"
-                            value={initialEquity}
-                            onChange={e => setInitialEquity(Number(e.target.value))}
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Risk %</label>
-                        <input
-                            type="number"
-                            className="input-base"
-                            value={riskPerTrade}
-                            step="0.1"
-                            onChange={e => setRiskPerTrade(Number(e.target.value))}
-                        />
-                    </div>
                 </div>
 
-                {/* Trade Filters */}
-                <div className="mt-4 pt-4 border-t border-gray-700/50">
-                    <label className="block text-xs text-gray-500 mb-3 uppercase tracking-wider font-medium">Trade Filters</label>
-                    <div className="grid grid-cols-2 gap-3">
+                <div className="glass-panel rounded-xl p-5">
+                    <div className="flex items-center gap-2 mb-4 text-emerald-400 font-semibold">
+                        <ShieldAlert className="w-5 h-5" />
+                        <h2>Risk</h2>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs text-gray-400 mb-1">Max Contracts</label>
+                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Capital ($)</label>
                             <input
                                 type="number"
                                 className="input-base"
-                                value={maxContracts}
-                                min={1}
-                                max={1000}
-                                onChange={e => setMaxContracts(Number(e.target.value))}
+                                value={initialEquity}
+                                onChange={(event) => setInitialEquity(Number(event.target.value))}
                             />
                         </div>
-                        <div className="flex items-end">
-                            <label className="flex items-center space-x-2 cursor-pointer group h-[38px]">
+
+                        <div>
+                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Risk %</label>
+                            <input
+                                type="number"
+                                className="input-base"
+                                value={riskPerTrade}
+                                step="0.1"
+                                onChange={(event) => setRiskPerTrade(Number(event.target.value))}
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Max Contracts</label>
+                            <input
+                                type="number"
+                                className="input-base"
+                                min={1}
+                                max={1000}
+                                value={maxContracts}
+                                onChange={(event) => setMaxContracts(Number(event.target.value))}
+                            />
+                        </div>
+
+                        <div>
+                            <label className="flex items-center gap-2 text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium cursor-pointer">
                                 <input
                                     type="checkbox"
-                                    checked={blockMarketOpen}
-                                    onChange={() => setBlockMarketOpen(!blockMarketOpen)}
-                                    className="sr-only peer"
+                                    checked={engineSettings.daily_win_limit_enabled}
+                                    onChange={(event) => setEngineSettings((prev) => ({
+                                        ...prev,
+                                        daily_win_limit_enabled: event.target.checked,
+                                    }))}
+                                    className="rounded border-gray-600 bg-gray-900 text-emerald-500 focus:ring-emerald-500"
                                 />
-                                <div className="w-5 h-5 border-2 border-gray-600 rounded bg-gray-900 group-hover:border-gray-500 peer-checked:bg-emerald-600 peer-checked:border-emerald-600 transition-all flex items-center justify-center">
-                                    {blockMarketOpen && (
-                                        <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                                        </svg>
-                                    )}
-                                </div>
-                                <span className="text-gray-400 text-xs">Block Open</span>
+                                Max Daily Win ($)
                             </label>
+                            <input
+                                type="number"
+                                className="input-base"
+                                min={0}
+                                step={50}
+                                value={engineSettings.daily_win_limit}
+                                disabled={!engineSettings.daily_win_limit_enabled}
+                                onChange={(event) => setEngineSettings((prev) => ({
+                                    ...prev,
+                                    daily_win_limit: Number(event.target.value),
+                                }))}
+                            />
+                        </div>
+
+                        <div>
+                            <label className="flex items-center gap-2 text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={engineSettings.daily_loss_limit_enabled}
+                                    onChange={(event) => setEngineSettings((prev) => ({
+                                        ...prev,
+                                        daily_loss_limit_enabled: event.target.checked,
+                                    }))}
+                                    className="rounded border-gray-600 bg-gray-900 text-red-500 focus:ring-red-500"
+                                />
+                                Max Daily Loss ($)
+                            </label>
+                            <input
+                                type="number"
+                                className="input-base"
+                                min={0}
+                                step={50}
+                                value={engineSettings.daily_loss_limit}
+                                disabled={!engineSettings.daily_loss_limit_enabled}
+                                onChange={(event) => setEngineSettings((prev) => ({
+                                    ...prev,
+                                    daily_loss_limit: Number(event.target.value),
+                                }))}
+                            />
                         </div>
                     </div>
-                    {blockMarketOpen && (
-                        <p className="text-xs text-gray-600 mt-2">
-                            Blocks first 5 min of sessions
-                        </p>
-                    )}
                 </div>
+
             </div>
 
-            {/* 3. Strategy Params */}
-            {selectedStrategy && (
-                <div className="glass-panel rounded-xl p-5">
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+                <div className="glass-panel rounded-xl p-5 xl:col-span-7">
                     <div className="flex items-center gap-2 mb-4 text-purple-400 font-semibold">
                         <Settings className="w-5 h-5" />
-                        <h2>Parameters</h2>
+                        <h2>Strategy Parameters</h2>
                     </div>
 
-                    <div className="mb-4">
-                        <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Strategy</label>
-                        <select
-                            className="input-base"
-                            value={selectedStrategy?.name || ''}
-                            onChange={(e) => {
-                                const s = strategies.find(s => s.name === e.target.value);
-                                if (s) selectStrategy(s);
-                            }}
-                        >
-                            {strategies.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
-                        </select>
-                    </div>
-
-                    <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                        {Object.entries(params)
-                            .filter(([key]) => key !== 'tick_size') // Hide tick_size
-                            .map(([key, value]) => (
-                                <div key={key}>
-                                    <label className="block text-xs text-gray-500 mb-1 uppercase tracking-wider font-medium">{key.replace(/_/g, ' ')}</label>
-                                    {typeof value === 'boolean' ? (
-                                        <select
-                                            className="input-base focus:border-purple-500 focus:ring-purple-500"
-                                            value={value ? 'true' : 'false'}
-                                            onChange={e => handleParamChange(key, e.target.value === 'true')}
-                                        >
-                                            <option value="true">True</option>
-                                            <option value="false">False</option>
-                                        </select>
-                                    ) : key === 'filter_method' ? (
-                                        <select
-                                            className="input-base focus:border-purple-500 focus:ring-purple-500"
-                                            value={String(value)}
-                                            onChange={e => handleParamChange(key, e.target.value)}
-                                        >
-                                            <option value="slope">slope</option>
-                                            <option value="spread">spread</option>
-                                        </select>
-                                    ) : typeof value === 'string' ? (
-                                        <input
-                                            type="text"
-                                            className="input-base focus:border-purple-500 focus:ring-purple-500"
-                                            value={value}
-                                            onChange={e => handleParamChange(key, e.target.value)}
-                                        />
-                                    ) : (
-                                        <input
-                                            type="number"
-                                            className="input-base focus:border-purple-500 focus:ring-purple-500"
-                                            value={value}
-                                            step={typeof value === 'number' && !Number.isInteger(value) ? "0.1" : "1"}
-                                            onChange={e => handleParamChange(key, Number(e.target.value))}
-                                        />
-                                    )}
-                                </div>
-                            ))}
+                    <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-4">
+                        <div>
+                            <label className="block text-xs text-gray-500 mb-1 uppercase tracking-wider font-medium">
+                                Strategy
+                            </label>
+                            <select
+                                className="input-base"
+                                value={selectedStrategy?.name || ''}
+                                onChange={(event) => {
+                                    const strategy = strategies.find((item) => item.name === event.target.value);
+                                    if (strategy) {
+                                        selectStrategy(strategy);
+                                    }
+                                }}
+                            >
+                                {strategies.map((strategy) => (
+                                    <option key={strategy.name} value={strategy.name}>
+                                        {strategy.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        {visibleParams.map(([key, value]) => (
+                            <div key={key}>
+                                <label className="block text-xs text-gray-500 mb-1 uppercase tracking-wider font-medium">
+                                    {formatParamLabel(key)}
+                                </label>
+                                {renderParamInput(key, value)}
+                            </div>
+                        ))}
                     </div>
                 </div>
-            )}
+
+                <div className={`glass-panel rounded-xl p-5 ${selectedStrategy ? 'xl:col-span-5' : 'xl:col-span-12'}`}>
+                    <div className="flex items-center gap-2 mb-4 text-cyan-400 font-semibold">
+                        <Clock3 className="w-5 h-5" />
+                        <h2>Engine</h2>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Auto-Close Enabled</label>
+                            <select
+                                className="input-base"
+                                value={engineSettings.auto_close_enabled ? 'true' : 'false'}
+                                onChange={(event) => setEngineSettings((prev) => ({
+                                    ...prev,
+                                    auto_close_enabled: event.target.value === 'true',
+                                }))}
+                            >
+                                <option value="true">True</option>
+                                <option value="false">False</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Auto-Close Time</label>
+                            <input
+                                type="time"
+                                className="input-base"
+                                value={toClockValue(engineSettings.auto_close_hour, engineSettings.auto_close_minute)}
+                                onChange={(event) => {
+                                    const parsed = parseClockValue(event.target.value);
+                                    if (!parsed) return;
+                                    setEngineSettings((prev) => ({
+                                        ...prev,
+                                        auto_close_hour: parsed.hour,
+                                        auto_close_minute: parsed.minute,
+                                    }));
+                                }}
+                            />
+                        </div>
+
+                        <div className="md:col-span-2">
+                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Debug Export</label>
+                            <select
+                                className="input-base"
+                                value={engineSettings.debug ? 'true' : 'false'}
+                                onChange={(event) => setEngineSettings((prev) => ({
+                                    ...prev,
+                                    debug: event.target.value === 'true',
+                                }))}
+                            >
+                                <option value="false">False</option>
+                                <option value="true">True</option>
+                            </select>
+                            <p className="text-xs text-gray-600 mt-1">
+                                Export CSV bar-par-bar avec les indicateurs et les événements de trade.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="mt-5 pt-5 border-t border-gray-700/50">
+                        <h3 className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-3">Blackout Windows</h3>
+                        <div className="grid grid-cols-1 gap-3">
+                            {engineSettings.blackout_windows.map((window, index) => (
+                                <div key={index} className="rounded-lg border border-gray-700/40 bg-gray-900/20 p-3">
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                                        <div>
+                                            <label className="block text-xs text-gray-500 mb-1 uppercase tracking-wider font-medium">
+                                                Window {index + 1}
+                                            </label>
+                                            <select
+                                                className="input-base"
+                                                value={window.active ? 'true' : 'false'}
+                                                onChange={(event) => handleBlackoutUpdate(index, { active: event.target.value === 'true' })}
+                                            >
+                                                <option value="false">Disabled</option>
+                                                <option value="true">Enabled</option>
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs text-gray-500 mb-1 uppercase tracking-wider font-medium">Start</label>
+                                            <input
+                                                type="time"
+                                                className="input-base"
+                                                value={toClockValue(window.start_hour, window.start_minute)}
+                                                onChange={(event) => {
+                                                    const parsed = parseClockValue(event.target.value);
+                                                    if (!parsed) return;
+                                                    handleBlackoutUpdate(index, {
+                                                        start_hour: parsed.hour,
+                                                        start_minute: parsed.minute,
+                                                    });
+                                                }}
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs text-gray-500 mb-1 uppercase tracking-wider font-medium">End</label>
+                                            <input
+                                                type="time"
+                                                className="input-base"
+                                                value={toClockValue(window.end_hour, window.end_minute)}
+                                                onChange={(event) => {
+                                                    const parsed = parseClockValue(event.target.value);
+                                                    if (!parsed) return;
+                                                    handleBlackoutUpdate(index, {
+                                                        end_hour: parsed.hour,
+                                                        end_minute: parsed.minute,
+                                                    });
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            </div>
 
             <button
                 onClick={runBacktest}
                 disabled={loading}
-                className={`w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 transform transition-all ${loading
-                    ? 'bg-gray-700 cursor-not-allowed text-gray-500'
-                    : 'btn-primary'
-                    }`}
+                className={`w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 transition-all ${
+                    loading ? 'bg-gray-700 cursor-not-allowed text-gray-500' : 'btn-primary'
+                }`}
             >
                 {loading ? (
                     <span className="flex items-center gap-2">
