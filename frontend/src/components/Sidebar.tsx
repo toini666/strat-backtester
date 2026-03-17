@@ -1,6 +1,14 @@
-import { useMemo, type Dispatch, type SetStateAction } from 'react';
-import { Clock3, Database, Play, Settings, ShieldAlert } from 'lucide-react';
-import { type AvailableDataset, type BacktestEngineSettings, type Strategy } from '../api';
+import { useState, useMemo, type Dispatch, type SetStateAction } from 'react';
+import { Clock3, Database, Play, Settings, ShieldAlert, Star, ChevronDown, ChevronUp, Trash2, RotateCcw } from 'lucide-react';
+import {
+    type AvailableDataset,
+    type BacktestEngineSettings,
+    type BacktestPreset,
+    type Strategy,
+    loadPresets,
+    savePreset,
+    deletePreset as deletePresetFromStorage,
+} from '../api';
 
 type StrategyParamValue = number | string | boolean;
 type StrategyParams = Record<string, StrategyParamValue>;
@@ -78,6 +86,11 @@ export function Sidebar({
     loading,
     error,
 }: SidebarProps) {
+    // Favorites state
+    const [presets, setPresets] = useState<BacktestPreset[]>(() => loadPresets());
+    const [favoritesOpen, setFavoritesOpen] = useState(false);
+    const [saveConfirm, setSaveConfirm] = useState(false);
+
     const selectedDataset = useMemo(() => {
         return availableData.find((dataset) => dataset.symbol === selectedSymbol) || null;
     }, [availableData, selectedSymbol]);
@@ -118,6 +131,59 @@ export function Sidebar({
                 windowIndex === index ? { ...window, ...updates } : window
             )),
         }));
+    };
+
+    // --- Favorites handlers ---
+
+    const handleSavePreset = () => {
+        if (!selectedStrategy) return;
+        const preset: BacktestPreset = {
+            id: crypto.randomUUID(),
+            name: `${selectedStrategy.name} - ${selectedSymbol} ${interval}`,
+            createdAt: new Date().toISOString(),
+            symbol: selectedSymbol,
+            interval,
+            startDatetime,
+            endDatetime,
+            initialEquity,
+            riskPerTrade,
+            maxContracts,
+            strategyName: selectedStrategy.name,
+            params: { ...params },
+            engineSettings: JSON.parse(JSON.stringify(engineSettings)),
+        };
+        const updated = savePreset(preset);
+        setPresets(updated);
+        setSaveConfirm(true);
+        setTimeout(() => setSaveConfirm(false), 2000);
+    };
+
+    const handleDeletePreset = (id: string) => {
+        const updated = deletePresetFromStorage(id);
+        setPresets(updated);
+    };
+
+    const handleLoadPreset = (preset: BacktestPreset) => {
+        // Strategy
+        const strategy = strategies.find((s) => s.name === preset.strategyName);
+        if (strategy) {
+            selectStrategy(strategy);
+            // Override params after selectStrategy resets to defaults
+            setTimeout(() => setParams(({ ...preset.params })), 0);
+        }
+        // Data
+        setSelectedSymbol(preset.symbol);
+        setInterval(preset.interval);
+        setStartDatetime(preset.startDatetime);
+        setEndDatetime(preset.endDatetime);
+        // Risk
+        setInitialEquity(preset.initialEquity);
+        setRiskPerTrade(preset.riskPerTrade);
+        setMaxContracts(preset.maxContracts);
+        // Engine
+        setEngineSettings(JSON.parse(JSON.stringify(preset.engineSettings)));
+
+        setFavoritesOpen(false);
     };
 
     const renderParamInput = (key: string, value: StrategyParamValue) => {
@@ -195,7 +261,7 @@ export function Sidebar({
                         <div>
                             <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Symbol</label>
                             <select
-                                className="input-base appearance-none"
+                                className="input-base"
                                 value={selectedSymbol}
                                 onChange={(event) => {
                                     setSelectedSymbol(event.target.value);
@@ -525,28 +591,97 @@ export function Sidebar({
                 </div>
             </div>
 
-            <button
-                onClick={runBacktest}
-                disabled={loading}
-                className={`w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 transition-all ${
-                    loading ? 'bg-gray-700 cursor-not-allowed text-gray-500' : 'btn-primary'
-                }`}
-            >
-                {loading ? (
-                    <span className="flex items-center gap-2">
-                        <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        Processing...
-                    </span>
-                ) : (
-                    <>
-                        <Play className="w-5 h-5 fill-current" />
-                        Run Backtest
-                    </>
-                )}
-            </button>
+            {/* Favorites panel */}
+            {presets.length > 0 && (
+                <div className="glass-panel rounded-xl overflow-hidden">
+                    <button
+                        onClick={() => setFavoritesOpen(!favoritesOpen)}
+                        className="w-full flex items-center justify-between px-5 py-3 text-sm font-medium text-amber-400 hover:bg-gray-800/30 transition-colors"
+                    >
+                        <span className="flex items-center gap-2">
+                            <Star className="w-4 h-4 fill-amber-400" />
+                            Favorites ({presets.length})
+                        </span>
+                        {favoritesOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </button>
+
+                    {favoritesOpen && (
+                        <div className="border-t border-gray-700/50 max-h-64 overflow-y-auto">
+                            {presets.map((preset) => (
+                                <div
+                                    key={preset.id}
+                                    className="flex items-center justify-between px-5 py-3 border-b border-gray-800/50 last:border-b-0 hover:bg-gray-800/20 transition-colors group"
+                                >
+                                    <div className="min-w-0 flex-1">
+                                        <div className="text-sm text-gray-200 font-medium truncate">{preset.name}</div>
+                                        <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-3 flex-wrap">
+                                            <span>${preset.initialEquity.toLocaleString()} / {preset.riskPerTrade}%</span>
+                                            <span>{preset.startDatetime.replace('T', ' ')} - {preset.endDatetime.replace('T', ' ')}</span>
+                                            <span className="text-gray-600">{new Date(preset.createdAt).toLocaleDateString()}</span>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-1 ml-3 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button
+                                            onClick={() => handleLoadPreset(preset)}
+                                            className="p-1.5 rounded-md text-blue-400 hover:bg-blue-500/10 transition-colors"
+                                            title="Load preset"
+                                        >
+                                            <RotateCcw className="w-3.5 h-3.5" />
+                                        </button>
+                                        <button
+                                            onClick={() => handleDeletePreset(preset.id)}
+                                            className="p-1.5 rounded-md text-red-400 hover:bg-red-500/10 transition-colors"
+                                            title="Delete preset"
+                                        >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* Action buttons */}
+            <div className="flex gap-3">
+                <button
+                    onClick={runBacktest}
+                    disabled={loading}
+                    className={`flex-1 py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 transition-all ${
+                        loading ? 'bg-gray-700 cursor-not-allowed text-gray-500' : 'btn-primary'
+                    }`}
+                >
+                    {loading ? (
+                        <span className="flex items-center gap-2">
+                            <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Processing...
+                        </span>
+                    ) : (
+                        <>
+                            <Play className="w-5 h-5 fill-current" />
+                            Run Backtest
+                        </>
+                    )}
+                </button>
+
+                <button
+                    onClick={handleSavePreset}
+                    disabled={!selectedStrategy}
+                    className={`px-5 py-4 rounded-xl font-medium transition-all flex items-center gap-2 ${
+                        saveConfirm
+                            ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
+                            : 'bg-gray-800/60 border border-gray-700 text-gray-400 hover:text-amber-400 hover:border-amber-500/40 hover:bg-amber-500/10'
+                    }`}
+                    title="Save current parameters as favorite"
+                >
+                    <Star className={`w-5 h-5 ${saveConfirm ? 'fill-amber-400 text-amber-400' : ''}`} />
+                    {saveConfirm ? 'Saved!' : 'Save'}
+                </button>
+            </div>
 
             {error && (
                 <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-200 text-sm break-words flex gap-3">

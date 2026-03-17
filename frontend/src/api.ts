@@ -127,6 +127,58 @@ export const DEFAULT_BACKTEST_ENGINE_SETTINGS: BacktestEngineSettings = {
     daily_loss_limit: 700,
 };
 
+// --- Backtest Presets (Favorites) ---
+
+export interface BacktestPreset {
+    id: string;
+    name: string;
+    createdAt: string;
+    // Data
+    symbol: string;
+    interval: string;
+    startDatetime: string;
+    endDatetime: string;
+    // Risk
+    initialEquity: number;
+    riskPerTrade: number;
+    maxContracts: number;
+    // Strategy
+    strategyName: string;
+    params: Record<string, number | string | boolean>;
+    // Engine
+    engineSettings: BacktestEngineSettings;
+}
+
+const PRESETS_STORAGE_KEY = 'nebular_backtest_presets';
+
+export function loadPresets(): BacktestPreset[] {
+    try {
+        const raw = localStorage.getItem(PRESETS_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : [];
+    } catch {
+        return [];
+    }
+}
+
+export function savePreset(preset: BacktestPreset): BacktestPreset[] {
+    const presets = loadPresets();
+    presets.unshift(preset);
+    localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets));
+    return presets;
+}
+
+export function deletePreset(id: string): BacktestPreset[] {
+    const presets = loadPresets().filter((p) => p.id !== id);
+    localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets));
+    return presets;
+}
+
+export function renamePreset(id: string, name: string): BacktestPreset[] {
+    const presets = loadPresets().map((p) => (p.id === id ? { ...p, name } : p));
+    localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets));
+    return presets;
+}
+
 export interface BacktestMetrics {
     total_return: number;
     win_rate: number;

@@ -25,3 +25,9 @@ body {
 .btn-primary {
   @apply bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-medium shadow-lg hover:shadow-blue-500/25 active:scale-95 transition-all;
 }
+
+/* White picker icons for date/time inputs */
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+}
