@@ -408,7 +408,7 @@ def simulate(
             "size": pos.size,
             "pnl_pct": (net_pnl / config.initial_equity) * 100,
             "status": reason,
-            "session": _get_session(pd.Timestamp(pos.entry_bar_time)),
+            "session": _get_session(pd.Timestamp(pos.entry_exec_time or pos.entry_bar_time)),
             "legs": legs,
             "excluded": is_excluded,
         })

@@ -4,28 +4,24 @@ import { KpiCard } from './KpiCard';
 import { EquityChart } from './EquityChart';
 import { DailyPnlCalendar } from './DailyPnlCalendar';
 import { TradesTable } from './TradesTable';
-import { type BacktestResult, type BacktestMetrics } from '../api';
-
-interface SessionStat extends BacktestMetrics {
-    session: string;
-}
+import { TradeAnalytics } from './TradeAnalytics';
+import { SessionAnalytics } from './SessionAnalytics';
+import { type BacktestResult } from '../api';
 
 interface DashboardProps {
     filteredResult: BacktestResult | null;
     selectedSessions: string[];
-    toggleSession: (s: string) => void;
+    onSessionsChange: (sessions: string[]) => void;
     dataSource: string;
     initialEquity?: number;
-    sessionStats: SessionStat[];
 }
 
 export function Dashboard({
     filteredResult,
     selectedSessions,
-    toggleSession,
+    onSessionsChange,
     dataSource,
     initialEquity,
-    sessionStats,
 }: DashboardProps) {
 
     if (!filteredResult) {
@@ -53,52 +49,6 @@ export function Dashboard({
 
     return (
         <div className="space-y-6 animate-fadeIn pb-10" role="main" aria-label="Backtest results">
-            {/* Session Filters */}
-            <div className="flex flex-wrap items-center justify-between gap-4">
-                <fieldset className="flex gap-4">
-                    <legend className="sr-only">Filter trades by session</legend>
-                    {['Asia', 'UK', 'US'].map(sess => (
-                        <label
-                            key={sess}
-                            className="flex items-center space-x-2 text-gray-300 cursor-pointer select-none group"
-                        >
-                            <div className="relative">
-                                <input
-                                    type="checkbox"
-                                    checked={selectedSessions.includes(sess)}
-                                    onChange={() => toggleSession(sess)}
-                                    className="peer sr-only"
-                                    aria-label={`Filter ${sess} session trades`}
-                                />
-                                <div
-                                    className="w-5 h-5 border-2 border-gray-600 rounded bg-gray-900 group-hover:border-gray-500 peer-checked:bg-blue-600 peer-checked:border-blue-600 peer-focus-visible:ring-2 peer-focus-visible:ring-blue-500 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-gray-900 transition-all flex items-center justify-center"
-                                    aria-hidden="true"
-                                >
-                                    {selectedSessions.includes(sess) && (
-                                        <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                                        </svg>
-                                    )}
-                                </div>
-                            </div>
-                            <span className="font-medium">{sess}</span>
-                        </label>
-                    ))}
-                </fieldset>
-                <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono px-2.5 py-1 rounded-full border bg-emerald-900/30 border-emerald-700/50 text-emerald-400">
-                        {filteredResult.data_source_used || dataSource}
-                    </span>
-                    <div className="text-gray-500 text-xs font-mono bg-gray-800/50 px-3 py-1.5 rounded-full border border-gray-800" aria-live="polite">
-                        Showing {trades.length} trades
-                        {trades.some(t => t.excluded) && (
-                            <span className="text-yellow-500 ml-1">
-                                ({trades.filter(t => t.excluded).length} excluded)
-                            </span>
-                        )}
-                    </div>
-                </div>
-            </div>
 
             {filteredResult.debug_file && (
                 <div className="glass-panel rounded-xl p-4 border border-cyan-800/40">
@@ -174,52 +124,18 @@ export function Dashboard({
                 )}
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-                {/* Trades Table */}
-                <div className="xl:col-span-9 h-[460px]">
-                    <TradesTable trades={trades} />
-                </div>
+            {/* Trade History — full width, no fixed height */}
+            <TradesTable
+                trades={trades}
+                selectedSessions={selectedSessions}
+                onSessionsChange={onSessionsChange}
+            />
 
-                {/* Session Summary Table */}
-                <div className="glass-panel rounded-xl overflow-hidden flex flex-col xl:col-span-3 h-[460px]">
-                    <div className="p-5 border-b border-gray-700/50 bg-gray-800/30">
-                        <h3 className="text-gray-400 text-sm uppercase tracking-wider font-semibold" id="session-analytics-heading">
-                            Session Analytics
-                        </h3>
-                    </div>
-                    <div className="overflow-auto flex-1">
-                        <table
-                            className="w-full text-left text-sm"
-                            role="table"
-                            aria-labelledby="session-analytics-heading"
-                        >
-                            <thead className="bg-gray-900/50 text-gray-400">
-                                <tr>
-                                    <th className="p-4 font-medium" scope="col">Session</th>
-                                    <th className="p-4 font-medium text-right" scope="col">Win %</th>
-                                    <th className="p-4 font-medium text-right" scope="col">Return</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-700/30">
-                                {sessionStats.map((stat) => (
-                                    <tr key={stat.session} className="hover:bg-white/5 transition-colors">
-                                        <td className="p-4 font-bold text-gray-300">{stat.session}</td>
-                                        <td className="p-4 text-right">{stat.win_rate.toFixed(0)}%</td>
-                                        <td className={`p-4 text-right font-mono font-bold ${stat.total_return >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                            <span aria-label={`${stat.total_return >= 0 ? 'Profit' : 'Loss'} of ${Math.abs(stat.total_return).toFixed(2)} percent`}>
-                                                {stat.total_return >= 0 ? '+' : ''}{stat.total_return.toFixed(2)}%
-                                            </span>
-                                        </td>
-                                    </tr>
-                                ))}
-                                {sessionStats.length === 0 && (
-                                    <tr><td colSpan={3} className="p-4 text-center text-gray-500">No session data</td></tr>
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
+            {/* Trade Analytics — collapsed by default */}
+            <TradeAnalytics trades={trades} initialEquity={initialEquity} />
+
+            {/* Session Analytics — full width, hourly breakdown */}
+            <SessionAnalytics trades={trades} initialEquity={initialEquity} />
         </div>
     );
 }

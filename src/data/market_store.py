@@ -32,7 +32,7 @@ SYMBOL_CONTRACTS = {
     "MGC": "CON.F.US.MGC.J26",
     "MBT": "CON.F.US.MBT.H26",
     "M2K": "CON.F.US.M2K.H26",
-    "MCL": "CON.F.US.MCLE.J26",
+    "MCL": "CON.F.US.MCLE.K26",
 }
 
 # Timeframes to generate from 1m data
@@ -76,7 +76,7 @@ ROLLOVER_CALENDAR = {
     ],
     # Micro Crude Oil — monthly contracts, roll ~3rd week before expiry
     "MCL": [
-        {"from": "J26", "to": "K26", "date": "2026-03-20", "next_contract": "CON.F.US.MCLE.K26"},
+        {"from": "J26", "to": "K26", "date": "2026-03-17", "next_contract": "CON.F.US.MCLE.K26"},
         {"from": "K26", "to": "M26", "date": "2026-04-20", "next_contract": "CON.F.US.MCLE.M26"},
     ],
 }
@@ -87,7 +87,7 @@ def get_next_rollover(symbol: str) -> Optional[Dict[str, Any]]:
     rolls = ROLLOVER_CALENDAR.get(symbol, [])
     today = datetime.now().strftime("%Y-%m-%d")
     for roll in rolls:
-        if roll["date"] >= today:
+        if roll["date"] > today:
             return roll
     return None
 

@@ -243,21 +243,6 @@ function App() {
 
   }, [result, selectedSessions, initialEquity, calculateMetrics]);
 
-  const toggleSession = useCallback((sess: string) => {
-    setSelectedSessions(prev =>
-      prev.includes(sess)
-        ? prev.filter(s => s !== sess)
-        : [...prev, sess]
-    );
-  }, []);
-
-  // Calculate session stats for summary table
-  const sessionStats = ['Asia', 'UK', 'US'].map(sess => {
-    if (!result) return null;
-    const trades = result.trades.filter(t => t.session === sess && !t.excluded);
-    const metrics = calculateMetrics(trades, initialEquity);
-    return { session: sess, ...metrics };
-  }).filter((s): s is NonNullable<typeof s> => Boolean(s));
 
   // Optimization handlers
   const handleRunOptimization = useCallback(async (config: {
@@ -512,10 +497,9 @@ function App() {
           <Dashboard
             filteredResult={filteredResult}
             selectedSessions={selectedSessions}
-            toggleSession={toggleSession}
+            onSessionsChange={setSelectedSessions}
             dataSource="Local"
             initialEquity={initialEquity}
-            sessionStats={sessionStats}
           />
         </div>
       )}
