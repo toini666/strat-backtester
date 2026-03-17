@@ -53,17 +53,12 @@ def sample_ohlcv_data() -> pd.DataFrame:
 def sample_backtest_request() -> dict:
     """Sample backtest request payload."""
     return {
-        "strategy_name": "RobReversal",
-        "ticker": "BTC-USD",
-        "source": "Yahoo",
-        "contract_id": None,
+        "strategy_name": "EMABreakOsc",
+        "symbol": "MNQ",
         "interval": "15m",
-        "days": 7,
-        "params": {
-            "ema_length": 8,
-            "take_profit": 35.0,
-            "max_stop_loss": 35.0
-        },
+        "start_datetime": "2026-02-01T00:00",
+        "end_datetime": "2026-03-01T00:00",
+        "params": {},
         "initial_equity": 50000.0,
         "risk_per_trade": 0.01
     }

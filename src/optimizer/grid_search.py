@@ -6,7 +6,8 @@ from tqdm.auto import tqdm
 import plotly.express as px
 
 from ..strategies.base import Strategy
-from ..engine.backtester import Backtester, BacktestResult
+# TODO: Refactor to use event-driven simulator instead of legacy VectorBT Backtester
+# from ..engine.backtester import Backtester, BacktestResult
 
 class GridSearchOptimizer:
     """

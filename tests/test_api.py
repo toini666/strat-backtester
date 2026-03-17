@@ -78,7 +78,7 @@ class TestBacktestRequestValidation:
     def test_valid_request(self):
         """Test that a valid request passes validation."""
         request = BacktestRequest(
-            strategy_name="RobReversal",
+            strategy_name="EMABreakOsc",
             symbol="MNQ",
             interval="15m",
             start_datetime="2024-01-15T09:00",
@@ -86,7 +86,7 @@ class TestBacktestRequestValidation:
             initial_equity=50000.0,
             risk_per_trade=0.01
         )
-        assert request.strategy_name == "RobReversal"
+        assert request.strategy_name == "EMABreakOsc"
         assert request.engine_settings.auto_close_enabled is True
         assert len(request.engine_settings.blackout_windows) == 6
 

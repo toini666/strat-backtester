@@ -29,24 +29,16 @@ Frontend (React/Vite :5173) → HTTP → Backend (FastAPI :8001)
                     ┌────────────────────┼────────────────────┐
                     ▼                    ▼                    ▼
             Data Layer           Strategy Engine        Backtest Engine
-         market_store.py         strategies/*.py      ┌──────────────┐
-         recompose.py            base.py (ABC)        │ backtester.py│ (VectorBT, legacy)
-         topstep.py              ema_break_osc.py     │ simulator.py │ (Event-driven, new)
-         yfinance_provider.py    rob_reversal.py      └──────────────┘
-                                 delta_div.py
-                                 utbot_stc.py ...
+         market_store.py         strategies/*.py        simulator.py
+         recompose.py            base.py (ABC)          (Event-driven)
+         topstep.py              ema_break_osc.py
+                                 ema9_scalp.py
+                                 utbot_alligator_st.py
 ```
 
-## Two Backtest Engines
+## Backtest Engine — Event-Driven Simulator (`src/engine/simulator.py`)
 
-### 1. VectorBT Engine (`src/engine/backtester.py`) — Legacy
-Used by most strategies. Vectorized, fast, but limited:
-- No partial take-profit
-- No intra-bar resolution (can't determine which level was hit first within a bar)
-- No breakeven moves after TP1
-
-### 2. Event-Driven Simulator (`src/engine/simulator.py`) — New
-Used by strategies with `use_simulator = True` (currently: EMABreakOsc). Processes bars sequentially with intra-bar 1-minute resolution. The simulator provides building blocks that strategies can use or not:
+All strategies use the event-driven simulator. It processes bars sequentially with intra-bar 1-minute resolution. The simulator provides building blocks that strategies can use or not:
 - **Partial take-profit** (optional): TP1 closes `tp1_partial_pct` of position at a price level. TP2 closes `tp2_partial_pct` on a secondary condition (e.g. EMA cross). Strategies control whether they use 0, 1, or 2 partial TPs, and what conditions trigger them.
 - **Breakeven** (optional): Can move stop loss to entry price after TP1. Strategies can also trigger breakeven on other conditions.
 - **Intra-bar resolution**: When a bar's range spans both SL and TP1, zooms into 1-minute data to determine which was hit first
@@ -57,20 +49,20 @@ Used by strategies with `use_simulator = True` (currently: EMABreakOsc). Process
 
 The exit logic (TP conditions, breakeven rules, EMA crosses) will vary per strategy. The simulator currently has EMABreakOsc-specific exit logic hardcoded. As more strategies are added, this should be refactored into strategy-provided exit callbacks.
 
-### Choosing an Engine
-A strategy opts into the simulator by setting class attributes:
-```python
-class MyStrategy(Strategy):
-    use_simulator = True
-    simulator_settings = {
-        "tp1_execution_mode": "bar_close_if_touched",
-    }
-```
+## Active Strategies
+
+All strategies have corresponding PineScript files in `Pinescripts/`:
+
+| Strategy | File | PineScript | Warmup Bars |
+|----------|------|-----------|-------------|
+| EMABreakOsc | `ema_break_osc.py` | `EMA-Break-Osc.txt` | 250 |
+| EMA9Scalp | `ema9_scalp.py` | `EMA9-scalp.txt` | 80 |
+| UTBotAlligatorST | `utbot_alligator_st.py` | `UTBot-Alligator-ST.txt` | 120 |
 
 ## Data Flow
 
 ### 1. Data Loading
-All data comes from local Parquet/CSV files via `market_store.py`. The store holds 1-minute OHLCV bars per symbol (MNQ, MES, MGC, etc.).
+All data comes from local CSV files via `market_store.py`. The store holds 1-minute OHLCV bars per symbol (MNQ, MES, MGC, etc.).
 
 ### 2. Timeframe Recomposition (`src/data/recompose.py`)
 Higher-timeframe bars (3m, 5m, 7m, 15m, etc.) are recomposed from 1-minute data:
@@ -82,17 +74,16 @@ Higher-timeframe bars (3m, 5m, 7m, 15m, etc.) are recomposed from 1-minute data:
 Indicators need historical data before the backtest start date. The warmup is calculated per-strategy:
 ```python
 STRATEGY_WARMUP_BARS = {
-    "EMABreakOsc": 250,   # EMA(30) needs ~120 bars for 99% convergence + MFI cloud ~112
-    "DeltaDiv": 200,
-    "UTBotSTC": 220,
-    ...
+    "EMABreakOsc": 250,     # EMA(30)→100 + MFI(35)+cloud(35)→112 + margin
+    "EMA9Scalp": 80,        # EMA(7)→28 + setup detection margin
+    "UTBotAlligatorST": 120, # SMMA(13)+offset(8)→~60 + ATR(10) + margin
 }
 ```
 The buffer is converted to calendar days with weekend awareness:
 ```python
 trading_minutes_needed = warmup_bars * minutes_per_bar
 trading_days = trading_minutes_needed / (23 * 60)
-calendar_days = max(7, int(trading_days * 7 / 5) + 3)
+calendar_days = max(2, int(trading_days * 7 / 5) + 3)
 ```
 
 ### 4. Signal Generation
@@ -146,10 +137,11 @@ Configured in `BacktestEngineSettings`. Users see/edit these in the frontend sid
 ### Adding a New Strategy
 
 1. Create `src/strategies/my_strategy.py`
-2. Inherit from `Strategy`
+2. Inherit from `Strategy`, set `use_simulator = True`
 3. Set class attributes and implement `generate_signals()`
 4. The strategy is auto-discovered at startup (no registration needed)
 5. Add warmup value to `STRATEGY_WARMUP_BARS` in `backend/api.py`
+6. Add corresponding PineScript file in `Pinescripts/`
 
 ```python
 from .base import Strategy
@@ -161,7 +153,6 @@ class MyStrategy(Strategy):
     default_params = {"ema_len": 20, "threshold": 0.5}
     param_ranges = {"ema_len": [10, 20, 30], "threshold": [0.3, 0.5, 0.7]}
 
-    # For simulator-based strategies:
     use_simulator = True
     simulator_settings = {
         "tp1_execution_mode": "bar_close_if_touched",
@@ -224,12 +215,13 @@ Example: 9 contracts with 25%/25% → 2 at TP1, 2 at TP2, 5 at final close.
 | `backend/main.py` | App entry, CORS, route mounting |
 | `backend/market_data_routes.py` | Market data CRUD endpoints |
 | `src/engine/simulator.py` | Event-driven simulator with partial TP and intra-bar resolution |
-| `src/engine/backtester.py` | Legacy VectorBT wrapper |
 | `src/data/recompose.py` | Timeframe recomposition from 1m bars |
-| `src/data/market_store.py` | Local market data storage (Parquet/CSV) |
+| `src/data/market_store.py` | Local market data storage (CSV) |
 | `src/strategies/base.py` | Abstract Strategy class |
-| `src/strategies/ema_break_osc.py` | EMA Break + Oscillator strategy (simulator-based) |
-| `src/optimizer/parameter_optimizer.py` | Grid search with session combinations |
+| `src/strategies/ema_break_osc.py` | EMA Break + Oscillator strategy |
+| `src/strategies/ema9_scalp.py` | EMA9 Scalp strategy |
+| `src/strategies/utbot_alligator_st.py` | UTBot Alligator SuperTrend strategy |
+| `src/optimizer/parameter_optimizer.py` | Grid search with session combinations (legacy, to be refactored) |
 | `frontend/src/App.tsx` | React app root, state management |
 | `frontend/src/api.ts` | API client, types, defaults |
 | `frontend/src/components/Sidebar.tsx` | Backtest configuration UI |
@@ -237,15 +229,15 @@ Example: 9 contracts with 25%/25% → 2 at TP1, 2 at TP2, 5 at final close.
 
 ## Contract Specifications
 
-Defined in `FUTURES_SPECS` dict in `backend/api.py`:
+Defined in `CONTRACT_SPECS` and `FEES_MAP` dicts in `backend/api.py`:
 
 | Symbol | Tick Size | Tick Value | Point Value | Fee RT |
 |--------|-----------|------------|-------------|--------|
 | MNQ    | 0.25      | $0.50      | $2.00       | $0.74  |
 | MES    | 0.25      | $1.25      | $5.00       | $0.74  |
+| MYM    | 1.00      | $0.50      | $0.50       | $0.74  |
 | MGC    | 0.10      | $1.00      | $10.00      | $1.24  |
-| MBT    | 5.00      | $1.25      | $0.25       | $1.55  |
-| NQ     | 0.25      | $5.00      | $20.00      | $2.80  |
+| MCL    | 0.01      | $1.00      | $100.00     | $1.04  |
 
 ## Testing
 
@@ -272,3 +264,4 @@ Key test areas:
 4. **Warmup is not backtest data** — warmup bars are loaded before the requested start date and discarded after indicator computation. Debug exports only contain the backtest range.
 5. **Strategy auto-discovery** — any `Strategy` subclass in `src/strategies/` is automatically registered at startup.
 6. **pandas-ta is local** — the library lives in `libs/pandas-ta/`, not installed via pip.
+7. **All strategies use the event-driven simulator** — there is no legacy VectorBT path for backtesting. The optimization module still uses VectorBT and is pending refactoring.

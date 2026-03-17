@@ -48,19 +48,19 @@ ROLLOVER_CALENDAR = {
     # Equity index micros — quarterly (H, M, U, Z)
     # Roll on Thursday before 3rd Friday (expiration) of contract month
     "MNQ": [
-        {"from": "H26", "to": "M26", "date": "2026-03-19", "next_contract": "CON.F.US.MNQ.M26"},
+        {"from": "H26", "to": "M26", "date": "2026-03-16", "next_contract": "CON.F.US.MNQ.M26"},
         {"from": "M26", "to": "U26", "date": "2026-06-18", "next_contract": "CON.F.US.MNQ.U26"},
     ],
     "MES": [
-        {"from": "H26", "to": "M26", "date": "2026-03-19", "next_contract": "CON.F.US.MES.M26"},
+        {"from": "H26", "to": "M26", "date": "2026-03-16", "next_contract": "CON.F.US.MES.M26"},
         {"from": "M26", "to": "U26", "date": "2026-06-18", "next_contract": "CON.F.US.MES.U26"},
     ],
     "MYM": [
-        {"from": "H26", "to": "M26", "date": "2026-03-19", "next_contract": "CON.F.US.MYM.M26"},
+        {"from": "H26", "to": "M26", "date": "2026-03-16", "next_contract": "CON.F.US.MYM.M26"},
         {"from": "M26", "to": "U26", "date": "2026-06-18", "next_contract": "CON.F.US.MYM.U26"},
     ],
     "M2K": [
-        {"from": "H26", "to": "M26", "date": "2026-03-19", "next_contract": "CON.F.US.M2K.M26"},
+        {"from": "H26", "to": "M26", "date": "2026-03-16", "next_contract": "CON.F.US.M2K.M26"},
         {"from": "M26", "to": "U26", "date": "2026-06-18", "next_contract": "CON.F.US.M2K.U26"},
     ],
     # Bitcoin micro — quarterly

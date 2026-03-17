@@ -95,6 +95,26 @@ def _to_brussels_timestamp(value: Any) -> pd.Timestamp:
     return ts.tz_convert(BRUSSELS_TZ)
 
 
+def _extract_contract_label(contract_id: str) -> str:
+    """Extract short label from contract ID (e.g. 'CON.F.US.MNQ.M26' → 'M26')."""
+    parts = contract_id.split(".")
+    return parts[-1] if parts else contract_id
+
+
+def _build_contract_segments(dataset: Dict[str, Any]) -> List[ContractSegment]:
+    """Build contract segments list, generating a fallback if none stored."""
+    raw = dataset.get("contract_segments", [])
+    if raw:
+        return [ContractSegment(**seg) for seg in raw]
+
+    # Fallback: create a single segment from the dataset's contract_id
+    contract_id = dataset.get("contract_id", "")
+    label = _extract_contract_label(contract_id)
+    start = str(_to_brussels_timestamp(dataset["start_date"]).date()) if dataset.get("start_date") else ""
+    end = str(_to_brussels_timestamp(dataset["end_date"]).date()) if dataset.get("end_date") else ""
+    return [ContractSegment(contract=contract_id, label=label, **{"from": start, "to": end})]
+
+
 def _serialize_dataset(dataset: Dict[str, Any]) -> MarketDatasetResponse:
     now = pd.Timestamp.now(tz=BRUSSELS_TZ)
     end_ts = _to_brussels_timestamp(dataset["end_date"])
@@ -130,9 +150,7 @@ def _serialize_dataset(dataset: Dict[str, Any]) -> MarketDatasetResponse:
         retention_warning=0.0 <= days_until_retention_limit <= RETENTION_WARNING_DAYS,
         retention_exceeded=days_until_retention_limit < 0.0,
         next_rollover=rollover_info,
-        contract_segments=[
-            ContractSegment(**seg) for seg in dataset.get("contract_segments", [])
-        ],
+        contract_segments=_build_contract_segments(dataset),
     )
 
 

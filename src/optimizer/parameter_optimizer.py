@@ -311,7 +311,8 @@ def run_single_backtest(args: Tuple) -> Optional[Dict]:
         # Import strategy and run backtest
         # This is a simplified version - in production, you'd call the actual backtest API
         from src.strategies.base import Strategy
-        from src.engine.backtester import Backtester
+        # TODO: Refactor to use event-driven simulator instead of legacy VectorBT Backtester
+        # from src.engine.backtester import Backtester
 
         # Dynamic strategy loading
         strategy_name = config_dict['strategy_name']

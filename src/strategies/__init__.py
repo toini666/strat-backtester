@@ -2,38 +2,23 @@ from .indicators import Indicators
 
 __all__ = [
     "Indicators",
-    "UTBotHeikin",
-    "BullesBollinger",
-    "DeltaDiv",
-    "EMA9Retest",
-    "UTBotSTC",
-    "UTBotOCC",
+    "EMABreakOsc",
+    "EMA9Scalp",
+    "UTBotAlligatorST",
 ]
 
 
 def __getattr__(name):
-    if name == "UTBotHeikin":
-        from .utbot_heikin import UTBotHeikin
+    if name == "EMABreakOsc":
+        from .ema_break_osc import EMABreakOsc
 
-        return UTBotHeikin
-    if name == "BullesBollinger":
-        from .bulles_bollinger import BullesBollinger
+        return EMABreakOsc
+    if name == "EMA9Scalp":
+        from .ema9_scalp import EMA9Scalp
 
-        return BullesBollinger
-    if name == "DeltaDiv":
-        from .delta_div import DeltaDiv
+        return EMA9Scalp
+    if name == "UTBotAlligatorST":
+        from .utbot_alligator_st import UTBotAlligatorST
 
-        return DeltaDiv
-    if name == "EMA9Retest":
-        from .ema9_retest import EMA9Retest
-
-        return EMA9Retest
-    if name == "UTBotSTC":
-        from .utbot_stc import UTBotSTC
-
-        return UTBotSTC
-    if name == "UTBotOCC":
-        from .utbot_occ import UTBotOCC
-
-        return UTBotOCC
+        return UTBotAlligatorST
     raise AttributeError(name)

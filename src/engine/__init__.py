@@ -1,9 +1,9 @@
-__all__ = ["Backtester"]
+__all__ = ["simulate"]
 
 
 def __getattr__(name):
-    if name == "Backtester":
-        from .backtester import Backtester
+    if name == "simulate":
+        from .simulator import simulate
 
-        return Backtester
+        return simulate
     raise AttributeError(name)

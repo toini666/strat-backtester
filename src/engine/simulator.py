@@ -56,6 +56,7 @@ class SimulatorConfig:
     tp1_execution_mode: str = TP1_EXECUTION_TOUCH
     tp1_partial_pct: float = 0.25   # fraction of position to close at TP1
     tp2_partial_pct: float = 0.25   # fraction of position to close at TP2
+    ema_exit_after_tp1_only: bool = False  # if True, EMA cross exit only fires after TP1
 
     daily_win_limit_enabled: bool = False
     daily_win_limit: float = 500.0
@@ -78,10 +79,18 @@ class _Position:
     size: float = 1.0
     tp1_hit: bool = False
     tp2_hit: bool = False
+    be_level: float = float('nan')   # breakeven trigger level (separate from TP1)
+    be_hit: bool = False             # whether be_level was reached
     remaining_size: float = 1.0
     excluded: bool = False  # True if daily limit was reached before entry
     # Partial exit tracking
     partial_exits: List[Dict[str, Any]] = field(default_factory=list)
+    # Supertrend trailing support
+    tp2_price: float = float('nan')  # fixed TP2 price level
+    initial_risk: float = 0.0        # risk distance at entry (for trailing activation)
+    rr_trailing: float = 0.0         # R:R threshold for trailing activation
+    trailing_active: bool = False     # whether trailing SL is active
+    sl_buffer_st: float = 0.0        # buffer for Supertrend trailing SL
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +244,34 @@ def simulate(
     np_sl_short = signals["sl_short"].values
     np_tp1_long = signals["tp1_long"].values
     np_tp1_short = signals["tp1_short"].values
+
+    # Optional breakeven level signals (for strategies with pre-TP1 breakeven)
+    _be_long_s = signals.get("be_long")
+    _be_short_s = signals.get("be_short")
+    np_be_long = _be_long_s.values if _be_long_s is not None else np.full(n, np.nan)
+    np_be_short = _be_short_s.values if _be_short_s is not None else np.full(n, np.nan)
+
+    # Optional custom entry price (for retracement entries)
+    _ep_long_s = signals.get("entry_price_long")
+    _ep_short_s = signals.get("entry_price_short")
+    np_entry_price_long = _ep_long_s.values if _ep_long_s is not None else None
+    np_entry_price_short = _ep_short_s.values if _ep_short_s is not None else None
+
+    # Optional fixed TP2 price (instead of EMA-cross TP2)
+    _tp2_long_s = signals.get("tp2_long")
+    _tp2_short_s = signals.get("tp2_short")
+    np_tp2_long = _tp2_long_s.values if _tp2_long_s is not None else None
+    np_tp2_short = _tp2_short_s.values if _tp2_short_s is not None else None
+    has_fixed_tp2 = np_tp2_long is not None or np_tp2_short is not None
+
+    # Optional Supertrend series (for trailing SL and reversal close)
+    _st_s = signals.get("supertrend")
+    _st_trend_s = signals.get("supertrend_trend")
+    np_supertrend = _st_s.values if _st_s is not None else None
+    np_st_trend = _st_trend_s.values if _st_trend_s is not None else None
+    has_supertrend = np_supertrend is not None and np_st_trend is not None
+    sig_rr_trailing = float(signals.get("rr_trailing", 0.0))
+    sig_sl_buffer = float(signals.get("sl_buffer", 0.0))
 
     np_ema = ema_main.values
     np_ema2 = ema_secondary.values
@@ -482,6 +519,60 @@ def simulate(
         sub = data_1m[(data_1m.index >= start) & (data_1m.index < end)]
         return sub if len(sub) > 0 else None
 
+    def _update_supertrend_trailing(bar_idx: int):
+        """Update position SL based on Supertrend trailing logic.
+
+        Called once per higher-TF bar, before any exit checks.
+        Handles trailing activation and SL ratcheting for strategies
+        that provide a 'supertrend' series.
+        """
+        nonlocal pos
+        if pos is None or not has_supertrend:
+            return
+
+        h = np_high[bar_idx]
+        l = np_low[bar_idx]
+        st_val = np_supertrend[bar_idx]
+        if np.isnan(st_val):
+            return
+
+        st_trend_val = np_st_trend[bar_idx] if np_st_trend is not None else 0
+
+        if pos.side == 1:
+            # Check trailing activation (only when trend matches position side)
+            if not pos.trailing_active and pos.initial_risk > 0:
+                trail_trigger = pos.entry_price + pos.initial_risk * pos.rr_trailing
+                if h >= trail_trigger:
+                    pos.trailing_active = True
+                    if st_trend_val == 1:
+                        pos.stop_price = _round_tick(st_val - pos.sl_buffer_st, ts)
+
+            # Update trailing SL (only ratchets up, only when trend is bullish)
+            if pos.trailing_active and st_trend_val == 1:
+                new_sl = _round_tick(st_val - pos.sl_buffer_st, ts)
+                if pos.tp1_hit:
+                    pos.stop_price = max(pos.stop_price, max(new_sl, pos.entry_price))
+                else:
+                    if new_sl > pos.stop_price:
+                        pos.stop_price = new_sl
+        else:
+            # Check trailing activation (only when trend matches position side)
+            if not pos.trailing_active and pos.initial_risk > 0:
+                trail_trigger = pos.entry_price - pos.initial_risk * pos.rr_trailing
+                if l <= trail_trigger:
+                    pos.trailing_active = True
+                    if st_trend_val == -1:
+                        pos.stop_price = _round_tick(st_val + pos.sl_buffer_st, ts)
+
+            # Update trailing SL (only ratchets down, only when trend is bearish)
+            if pos.trailing_active and st_trend_val == -1:
+                new_sl = _round_tick(st_val + pos.sl_buffer_st, ts)
+                if pos.tp1_hit:
+                    pos.stop_price = min(pos.stop_price, min(new_sl, pos.entry_price))
+                else:
+                    if new_sl < pos.stop_price:
+                        pos.stop_price = new_sl
+
     def _process_touch_exit(
         bar_idx: int,
         h: float,
@@ -489,73 +580,138 @@ def simulate(
         exit_bar_time: str,
         exit_exec_time: str,
         tp1_touched_this_bar: bool,
-    ) -> tuple[bool, bool]:
-        """Process stop / TP1 / BE events on a single price bar."""
+        tp2_touched_this_bar: bool = False,
+    ) -> tuple[bool, bool, bool]:
+        """Process stop / TP1 / TP2 / BE events on a single price bar.
+
+        Priority order matches PineScript: SL > TP1 > TP2 > BE level.
+        Breakeven is active when any of: TP1 hit, TP1 touched this bar,
+        or be_level reached (separate pre-TP1 breakeven trigger).
+        For Supertrend strategies, breakeven is managed by the trailing logic.
+
+        Returns (closed, tp1_touched_this_bar, tp2_touched_this_bar).
+        """
         nonlocal pos
 
         if pos is None:
-            return False, tp1_touched_this_bar
+            return False, tp1_touched_this_bar, tp2_touched_this_bar
 
-        breakeven_active = pos.tp1_hit or tp1_touched_this_bar
+        # For Supertrend strategies, SL is already the effective SL (trailing
+        # or breakeven handled by _update_supertrend_trailing).
+        use_supertrend_sl = has_supertrend and pos.initial_risk > 0
+        breakeven_active = pos.tp1_hit or pos.be_hit or tp1_touched_this_bar
         tp1_deferred_to_bar_close = (
             tp1_execution_mode == TP1_EXECUTION_BAR_CLOSE_IF_TOUCHED
         )
 
         if pos.side == 1:
-            if breakeven_active:
-                if l <= pos.entry_price:
-                    _close_position(pos.entry_price, exit_bar_time, exit_exec_time, "Breakeven")
-                    return True, tp1_touched_this_bar
+            # 1. Check SL (effective price depends on breakeven/trailing state)
+            if use_supertrend_sl:
+                effective_sl = pos.stop_price
+                sl_reason = "Trailing SL" if pos.trailing_active else "Stop Loss"
             else:
-                if l <= pos.stop_price:
-                    _close_position(pos.stop_price, exit_bar_time, exit_exec_time, "Stop Loss")
-                    return True, tp1_touched_this_bar
+                effective_sl = pos.entry_price if breakeven_active else pos.stop_price
+                sl_reason = "Breakeven" if breakeven_active else "Stop Loss"
+            if l <= effective_sl:
+                _close_position(effective_sl, exit_bar_time, exit_exec_time, sl_reason)
+                return True, tp1_touched_this_bar, tp2_touched_this_bar
 
-                if not pos.tp1_hit and not tp1_touched_this_bar and h >= pos.tp1_price:
-                    if tp1_deferred_to_bar_close:
-                        # TP1 level touched — mark for bar-close processing.
-                        # Breakeven activates even if position is too small for partial exit.
-                        tp1_touched_this_bar = True
-                    else:
-                        _partial_exit(
-                            pos.tp1_price,
-                            config.tp1_partial_pct,
-                            "TP1",
-                            exit_bar_time,
-                            exit_exec_time,
-                        )
-                        if pos is not None:
-                            pos.tp1_hit = True
+            # 2. Check TP1 (if not yet hit)
+            if not pos.tp1_hit and not tp1_touched_this_bar and h >= pos.tp1_price:
+                if tp1_deferred_to_bar_close:
+                    tp1_touched_this_bar = True
+                else:
+                    _partial_exit(
+                        pos.tp1_price,
+                        config.tp1_partial_pct,
+                        "TP1",
+                        exit_bar_time,
+                        exit_exec_time,
+                    )
+                    if pos is not None:
+                        pos.tp1_hit = True
+                        if not use_supertrend_sl:
                             pos.stop_price = pos.entry_price
-                        return pos is None, tp1_touched_this_bar
+                    return pos is None, tp1_touched_this_bar, tp2_touched_this_bar
+
+            # 3. Check TP2 at fixed price (if TP1 already hit or touched this bar)
+            if (
+                pos is not None
+                and has_fixed_tp2
+                and (pos.tp1_hit or tp1_touched_this_bar)
+                and not pos.tp2_hit
+                and not tp2_touched_this_bar
+                and not np.isnan(pos.tp2_price)
+                and h >= pos.tp2_price
+            ):
+                tp2_touched_this_bar = True
+
+            # 4. Check BE level (separate pre-TP1 breakeven trigger)
+            if (
+                pos is not None
+                and not use_supertrend_sl
+                and not pos.tp1_hit
+                and not pos.be_hit
+                and not np.isnan(pos.be_level)
+                and h >= pos.be_level
+            ):
+                pos.be_hit = True
+                pos.stop_price = pos.entry_price
         else:
-            if breakeven_active:
-                if h >= pos.entry_price:
-                    _close_position(pos.entry_price, exit_bar_time, exit_exec_time, "Breakeven")
-                    return True, tp1_touched_this_bar
+            # 1. Check SL
+            if use_supertrend_sl:
+                effective_sl = pos.stop_price
+                sl_reason = "Trailing SL" if pos.trailing_active else "Stop Loss"
             else:
-                if h >= pos.stop_price:
-                    _close_position(pos.stop_price, exit_bar_time, exit_exec_time, "Stop Loss")
-                    return True, tp1_touched_this_bar
+                effective_sl = pos.entry_price if breakeven_active else pos.stop_price
+                sl_reason = "Breakeven" if breakeven_active else "Stop Loss"
+            if h >= effective_sl:
+                _close_position(effective_sl, exit_bar_time, exit_exec_time, sl_reason)
+                return True, tp1_touched_this_bar, tp2_touched_this_bar
 
-                if not pos.tp1_hit and not tp1_touched_this_bar and l <= pos.tp1_price:
-                    if tp1_deferred_to_bar_close:
-                        # TP1 level touched — mark for bar-close processing.
-                        tp1_touched_this_bar = True
-                    else:
-                        _partial_exit(
-                            pos.tp1_price,
-                            config.tp1_partial_pct,
-                            "TP1",
-                            exit_bar_time,
-                            exit_exec_time,
-                        )
-                        if pos is not None:
-                            pos.tp1_hit = True
+            # 2. Check TP1
+            if not pos.tp1_hit and not tp1_touched_this_bar and l <= pos.tp1_price:
+                if tp1_deferred_to_bar_close:
+                    tp1_touched_this_bar = True
+                else:
+                    _partial_exit(
+                        pos.tp1_price,
+                        config.tp1_partial_pct,
+                        "TP1",
+                        exit_bar_time,
+                        exit_exec_time,
+                    )
+                    if pos is not None:
+                        pos.tp1_hit = True
+                        if not use_supertrend_sl:
                             pos.stop_price = pos.entry_price
-                        return pos is None, tp1_touched_this_bar
+                    return pos is None, tp1_touched_this_bar, tp2_touched_this_bar
 
-        return False, tp1_touched_this_bar
+            # 3. Check TP2 at fixed price (if TP1 already hit or touched this bar)
+            if (
+                pos is not None
+                and has_fixed_tp2
+                and (pos.tp1_hit or tp1_touched_this_bar)
+                and not pos.tp2_hit
+                and not tp2_touched_this_bar
+                and not np.isnan(pos.tp2_price)
+                and l <= pos.tp2_price
+            ):
+                tp2_touched_this_bar = True
+
+            # 4. Check BE level
+            if (
+                pos is not None
+                and not use_supertrend_sl
+                and not pos.tp1_hit
+                and not pos.be_hit
+                and not np.isnan(pos.be_level)
+                and l <= pos.be_level
+            ):
+                pos.be_hit = True
+                pos.stop_price = pos.entry_price
+
+        return False, tp1_touched_this_bar, tp2_touched_this_bar
 
     def _apply_tp1_at_bar_close(
         close_price: float,
@@ -574,26 +730,52 @@ def simulate(
         _partial_exit(close_price, config.tp1_partial_pct, "TP1", exit_bar_time, exit_exec_time)
         if pos is not None:
             pos.tp1_hit = True
-            pos.stop_price = pos.entry_price
+            use_supertrend_sl = has_supertrend and pos.initial_risk > 0
+            if not use_supertrend_sl:
+                pos.stop_price = pos.entry_price
+            else:
+                # For Supertrend strategies: SL = max/min(current SL, entry)
+                if pos.side == 1:
+                    pos.stop_price = max(pos.stop_price, pos.entry_price)
+                else:
+                    pos.stop_price = min(pos.stop_price, pos.entry_price)
+
+    def _apply_tp2_at_bar_close(
+        close_price: float,
+        exit_bar_time: str,
+        exit_exec_time: str,
+    ):
+        """Apply deferred TP2 at bar close price (like TP1 bar_close_if_touched)."""
+        nonlocal pos
+        if pos is None or pos.tp2_hit:
+            return
+        if not has_fixed_tp2:
+            return
+
+        _partial_exit(close_price, config.tp2_partial_pct, "TP2", exit_bar_time, exit_exec_time)
+        if pos is not None:
+            pos.tp2_hit = True
 
     def _process_sub_bars(
         bar_idx: int,
         bar_time: pd.Timestamp,
         bar_close_time: pd.Timestamp,
         sub_bars: pd.DataFrame,
-    ) -> tuple[bool, bool]:
+    ) -> tuple[bool, bool, bool]:
         """
         Process intrabar stop/TP/BE events and exact auto-close on 1-minute bars.
 
         EMA-based exits stay on the higher timeframe close.
+        Returns (closed, tp1_touched_this_bar, tp2_touched_this_bar).
         """
         nonlocal pos
         exit_bar_time = str(bar_time)
         tp1_touched_this_bar = False
+        tp2_touched_this_bar = False
 
         for sub_i in range(len(sub_bars)):
             if pos is None:
-                return True, tp1_touched_this_bar
+                return True, tp1_touched_this_bar, tp2_touched_this_bar
 
             sub_h = sub_bars["High"].iloc[sub_i]
             sub_l = sub_bars["Low"].iloc[sub_i]
@@ -608,16 +790,17 @@ def simulate(
                 sub_close_time = bar_close_time
             sub_exec_time = str(sub_close_time)
 
-            closed_this_bar, tp1_touched_this_bar = _process_touch_exit(
+            closed_this_bar, tp1_touched_this_bar, tp2_touched_this_bar = _process_touch_exit(
                 bar_idx,
                 sub_h,
                 sub_l,
                 exit_bar_time,
                 sub_exec_time,
                 tp1_touched_this_bar,
+                tp2_touched_this_bar,
             )
             if closed_this_bar:
-                return True, tp1_touched_this_bar
+                return True, tp1_touched_this_bar, tp2_touched_this_bar
 
             if (
                 pos is not None
@@ -631,9 +814,9 @@ def simulate(
                 in_profit = (sub_c > pos.entry_price) if pos.side == 1 else (sub_c < pos.entry_price)
                 reason = "Auto-Close (profit)" if in_profit else "Auto-Close (loss)"
                 _close_position(sub_c, exit_bar_time, sub_exec_time, reason)
-                return True, tp1_touched_this_bar
+                return True, tp1_touched_this_bar, tp2_touched_this_bar
 
-        return pos is None, tp1_touched_this_bar
+        return pos is None, tp1_touched_this_bar, tp2_touched_this_bar
 
     def _process_close_based_exits(
         bar_idx: int,
@@ -647,29 +830,46 @@ def simulate(
         if pos is None:
             return False
 
+        # Supertrend reversal close: only before trailing activation AND before TP1
+        # Matches PineScript states 5 (LONG_FULL) and 8 (SHORT_FULL)
+        if has_supertrend and pos.initial_risk > 0:
+            if not pos.trailing_active and not pos.tp1_hit:
+                if pos.side == 1 and np_st_trend[bar_idx] != 1:
+                    _close_position(close_price, exit_bar_time, exit_exec_time, "Supertrend Reversal")
+                    return True
+                elif pos.side == -1 and np_st_trend[bar_idx] != -1:
+                    _close_position(close_price, exit_bar_time, exit_exec_time, "Supertrend Reversal")
+                    return True
+
         ema_val = np_ema[bar_idx] if bar_idx < len(np_ema) else np.nan
         ema2_val = np_ema2[bar_idx] if bar_idx < len(np_ema2) else np.nan
         prev_close = np_close[bar_idx - 1] if bar_idx > 0 else np.nan
         prev_ema2 = np_ema2[bar_idx - 1] if bar_idx > 0 and bar_idx - 1 < len(np_ema2) else np.nan
 
         if pos.side == 1:
-            ema2_cross = _cross_under(close_price, ema2_val, prev_close, prev_ema2)
-            if pos.tp1_hit and not pos.tp2_hit and ema2_cross and close_price > pos.entry_price:
-                exited_size = _partial_exit(close_price, config.tp2_partial_pct, "TP2_EMA", exit_bar_time, exit_exec_time)
-                if exited_size > 0:
-                    pos.tp2_hit = True
+            # TP2: EMA-cross based (only when no fixed TP2 is provided)
+            if not has_fixed_tp2 and config.tp2_partial_pct > 0:
+                ema2_cross = _cross_under(close_price, ema2_val, prev_close, prev_ema2)
+                if pos.tp1_hit and not pos.tp2_hit and ema2_cross and close_price > pos.entry_price:
+                    exited_size = _partial_exit(close_price, config.tp2_partial_pct, "TP2_EMA", exit_bar_time, exit_exec_time)
+                    if exited_size > 0:
+                        pos.tp2_hit = True
 
-            if pos is not None and not np.isnan(ema_val) and close_price < ema_val:
+            # EMA cross exit (optionally only after TP1; skipped if EMA is NaN)
+            ema_exit_ok = not config.ema_exit_after_tp1_only or pos.tp1_hit
+            if pos is not None and ema_exit_ok and not np.isnan(ema_val) and close_price < ema_val:
                 _close_position(close_price, exit_bar_time, exit_exec_time, "EMA Cross")
                 return True
         else:
-            ema2_cross = _cross_over(close_price, ema2_val, prev_close, prev_ema2)
-            if pos.tp1_hit and not pos.tp2_hit and ema2_cross and close_price < pos.entry_price:
-                exited_size = _partial_exit(close_price, config.tp2_partial_pct, "TP2_EMA", exit_bar_time, exit_exec_time)
-                if exited_size > 0:
-                    pos.tp2_hit = True
+            if not has_fixed_tp2 and config.tp2_partial_pct > 0:
+                ema2_cross = _cross_over(close_price, ema2_val, prev_close, prev_ema2)
+                if pos.tp1_hit and not pos.tp2_hit and ema2_cross and close_price < pos.entry_price:
+                    exited_size = _partial_exit(close_price, config.tp2_partial_pct, "TP2_EMA", exit_bar_time, exit_exec_time)
+                    if exited_size > 0:
+                        pos.tp2_hit = True
 
-            if pos is not None and not np.isnan(ema_val) and close_price > ema_val:
+            ema_exit_ok = not config.ema_exit_after_tp1_only or pos.tp1_hit
+            if pos is not None and ema_exit_ok and not np.isnan(ema_val) and close_price > ema_val:
                 _close_position(close_price, exit_bar_time, exit_exec_time, "EMA Cross")
                 return True
 
@@ -691,16 +891,21 @@ def simulate(
         tp1_touched_this_bar = False
 
         if pos is not None:
+            # Update Supertrend trailing SL before exit checks
+            _update_supertrend_trailing(i)
+
+            tp2_touched_this_bar = False
             sub = _get_sub_bars(bar_time, bar_close_time)
             if sub is not None:
-                closed_this_bar, tp1_touched_this_bar = _process_sub_bars(i, bar_time, bar_close_time, sub)
+                closed_this_bar, tp1_touched_this_bar, tp2_touched_this_bar = _process_sub_bars(i, bar_time, bar_close_time, sub)
             else:
-                closed_this_bar, tp1_touched_this_bar = _process_touch_exit(
+                closed_this_bar, tp1_touched_this_bar, tp2_touched_this_bar = _process_touch_exit(
                     i,
                     h,
                     l,
                     bar_time_str,
                     close_time_str,
+                    False,
                     False,
                 )
 
@@ -723,6 +928,10 @@ def simulate(
             if pos is not None and not closed_this_bar and tp1_touched_this_bar:
                 _apply_tp1_at_bar_close(c, bar_time_str, close_time_str)
 
+            # Apply deferred TP2 at bar close (touched during intra-bar or same bar as TP1)
+            if pos is not None and not closed_this_bar and tp2_touched_this_bar:
+                _apply_tp2_at_bar_close(c, bar_time_str, close_time_str)
+
             if pos is not None:
                 closed_this_bar = (
                     _process_close_based_exits(i, c, bar_time_str, close_time_str) or closed_this_bar
@@ -743,13 +952,19 @@ def simulate(
             entry_excluded = _check_daily_limit(entry_date)
 
             if np_long_entry[i]:
-                entry_price = _round_tick(np_close[i], ts)
+                # Use custom entry price if provided (e.g. retracement level)
+                if np_entry_price_long is not None and not np.isnan(np_entry_price_long[i]):
+                    entry_price = _round_tick(np_entry_price_long[i], ts)
+                else:
+                    entry_price = _round_tick(np_close[i], ts)
                 sl_price = np_sl_long[i]
                 tp1_price = np_tp1_long[i]
                 if np.isnan(sl_price) or np.isnan(tp1_price):
                     continue
 
                 size = _calc_size(entry_price, sl_price)
+                be_val = np_be_long[i]
+                tp2_val = np_tp2_long[i] if np_tp2_long is not None else np.nan
                 pos = _Position(
                     side=1,
                     entry_price=entry_price,
@@ -757,19 +972,29 @@ def simulate(
                     entry_exec_time=close_time_str,
                     stop_price=sl_price,
                     tp1_price=tp1_price,
+                    be_level=be_val if not np.isnan(be_val) else float('nan'),
                     size=size,
                     remaining_size=size,
                     excluded=entry_excluded,
+                    tp2_price=tp2_val if not np.isnan(tp2_val) else float('nan'),
+                    initial_risk=abs(entry_price - sl_price) if has_supertrend else 0.0,
+                    rr_trailing=sig_rr_trailing,
+                    sl_buffer_st=sig_sl_buffer,
                 )
 
             elif np_short_entry[i]:
-                entry_price = _round_tick(np_close[i], ts)
+                if np_entry_price_short is not None and not np.isnan(np_entry_price_short[i]):
+                    entry_price = _round_tick(np_entry_price_short[i], ts)
+                else:
+                    entry_price = _round_tick(np_close[i], ts)
                 sl_price = np_sl_short[i]
                 tp1_price = np_tp1_short[i]
                 if np.isnan(sl_price) or np.isnan(tp1_price):
                     continue
 
                 size = _calc_size(entry_price, sl_price)
+                be_val = np_be_short[i]
+                tp2_val = np_tp2_short[i] if np_tp2_short is not None else np.nan
                 pos = _Position(
                     side=-1,
                     entry_price=entry_price,
@@ -777,9 +1002,14 @@ def simulate(
                     entry_exec_time=close_time_str,
                     stop_price=sl_price,
                     tp1_price=tp1_price,
+                    be_level=be_val if not np.isnan(be_val) else float('nan'),
                     size=size,
                     remaining_size=size,
                     excluded=entry_excluded,
+                    tp2_price=tp2_val if not np.isnan(tp2_val) else float('nan'),
+                    initial_risk=abs(sl_price - entry_price) if has_supertrend else 0.0,
+                    rr_trailing=sig_rr_trailing,
+                    sl_buffer_st=sig_sl_buffer,
                 )
 
     # --- Close any remaining position at end of data ---
