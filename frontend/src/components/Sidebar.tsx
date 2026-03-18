@@ -1,11 +1,12 @@
-import { useState, useMemo, type Dispatch, type SetStateAction } from 'react';
-import { Clock3, Database, Play, Settings, ShieldAlert, Star, ChevronDown, ChevronUp, Trash2, RotateCcw } from 'lucide-react';
+import { useState, useEffect, useMemo, type Dispatch, type SetStateAction } from 'react';
+import { Clock3, Database, Lock, Play, RefreshCw, Settings, ShieldAlert, Star, ChevronDown, ChevronUp, Trash2, RotateCcw } from 'lucide-react';
 import {
     type AvailableDataset,
     type BacktestEngineSettings,
     type BacktestPreset,
     type Strategy,
     loadPresets,
+    loadPresetsLocal,
     savePreset,
     deletePreset as deletePresetFromStorage,
 } from '../api';
@@ -39,6 +40,10 @@ interface SidebarProps {
     runBacktest: () => void;
     loading: boolean;
     error: string;
+    autoUpdate: boolean;
+    setAutoUpdate: (v: boolean) => void;
+    autoUpdateLoading: boolean;
+    hasResult: boolean;
 }
 
 function formatParamLabel(key: string): string {
@@ -85,11 +90,19 @@ export function Sidebar({
     runBacktest,
     loading,
     error,
+    autoUpdate,
+    setAutoUpdate,
+    autoUpdateLoading,
+    hasResult,
 }: SidebarProps) {
-    // Favorites state
-    const [presets, setPresets] = useState<BacktestPreset[]>(() => loadPresets());
+    // Favorites state — load from localStorage instantly, then refresh from backend
+    const [presets, setPresets] = useState<BacktestPreset[]>(() => loadPresetsLocal());
     const [favoritesOpen, setFavoritesOpen] = useState(false);
     const [saveConfirm, setSaveConfirm] = useState(false);
+
+    useEffect(() => {
+        loadPresets().then(setPresets);
+    }, []);
 
     const selectedDataset = useMemo(() => {
         return availableData.find((dataset) => dataset.symbol === selectedSymbol) || null;
@@ -135,7 +148,7 @@ export function Sidebar({
 
     // --- Favorites handlers ---
 
-    const handleSavePreset = () => {
+    const handleSavePreset = async () => {
         if (!selectedStrategy) return;
         const preset: BacktestPreset = {
             id: crypto.randomUUID(),
@@ -152,14 +165,14 @@ export function Sidebar({
             params: { ...params },
             engineSettings: JSON.parse(JSON.stringify(engineSettings)),
         };
-        const updated = savePreset(preset);
+        const updated = await savePreset(preset);
         setPresets(updated);
         setSaveConfirm(true);
         setTimeout(() => setSaveConfirm(false), 2000);
     };
 
-    const handleDeletePreset = (id: string) => {
-        const updated = deletePresetFromStorage(id);
+    const handleDeletePreset = async (id: string) => {
+        const updated = await deletePresetFromStorage(id);
         setPresets(updated);
     };
 
@@ -251,10 +264,11 @@ export function Sidebar({
     return (
         <div className="space-y-6">
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                <div className="glass-panel rounded-xl p-5">
+                <div className={`glass-panel rounded-xl p-5 ${autoUpdate ? 'opacity-60' : ''}`}>
                     <div className="flex items-center gap-2 mb-4 text-blue-400 font-semibold">
                         <Database className="w-5 h-5" />
                         <h2>Data</h2>
+                        {autoUpdate && <Lock className="w-3.5 h-3.5 text-gray-500" />}
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -262,6 +276,7 @@ export function Sidebar({
                             <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Symbol</label>
                             <select
                                 className="input-base"
+                                disabled={autoUpdate}
                                 value={selectedSymbol}
                                 onChange={(event) => {
                                     setSelectedSymbol(event.target.value);
@@ -284,6 +299,7 @@ export function Sidebar({
                             <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Timeframe</label>
                             <select
                                 className="input-base"
+                                disabled={autoUpdate}
                                 value={interval}
                                 onChange={(event) => setInterval(event.target.value)}
                             >
@@ -300,6 +316,7 @@ export function Sidebar({
                             <input
                                 type="datetime-local"
                                 className="input-base"
+                                disabled={autoUpdate}
                                 value={startDatetime}
                                 min={minStartDatetime}
                                 max={endDatetime || maxEndDatetime}
@@ -317,6 +334,7 @@ export function Sidebar({
                             <input
                                 type="datetime-local"
                                 className="input-base"
+                                disabled={autoUpdate}
                                 value={endDatetime}
                                 min={startDatetime || minStartDatetime}
                                 max={maxEndDatetime}
@@ -439,12 +457,13 @@ export function Sidebar({
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-4">
-                        <div>
+                        <div className={autoUpdate ? 'opacity-60' : ''}>
                             <label className="block text-xs text-gray-500 mb-1 uppercase tracking-wider font-medium">
-                                Strategy
+                                Strategy {autoUpdate && <Lock className="w-3 h-3 inline text-gray-600 ml-1" />}
                             </label>
                             <select
                                 className="input-base"
+                                disabled={autoUpdate}
                                 value={selectedStrategy?.name || ''}
                                 onChange={(event) => {
                                     const strategy = strategies.find((item) => item.name === event.target.value);
@@ -511,10 +530,13 @@ export function Sidebar({
                             />
                         </div>
 
-                        <div className="md:col-span-2">
-                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">Debug Export</label>
+                        <div className={`md:col-span-2 ${autoUpdate ? 'opacity-60' : ''}`}>
+                            <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">
+                                Debug Export {autoUpdate && <Lock className="w-3 h-3 inline text-gray-600 ml-1" />}
+                            </label>
                             <select
                                 className="input-base"
+                                disabled={autoUpdate}
                                 value={engineSettings.debug ? 'true' : 'false'}
                                 onChange={(event) => setEngineSettings((prev) => ({
                                     ...prev,
@@ -645,27 +667,64 @@ export function Sidebar({
 
             {/* Action buttons */}
             <div className="flex gap-3">
+                {!autoUpdate && (
+                    <button
+                        onClick={runBacktest}
+                        disabled={loading}
+                        className={`flex-1 py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 transition-all ${
+                            loading ? 'bg-gray-700 cursor-not-allowed text-gray-500' : 'btn-primary'
+                        }`}
+                    >
+                        {loading ? (
+                            <span className="flex items-center gap-2">
+                                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                Processing...
+                            </span>
+                        ) : (
+                            <>
+                                <Play className="w-5 h-5 fill-current" />
+                                Run Backtest
+                            </>
+                        )}
+                    </button>
+                )}
+
+                {autoUpdate && (
+                    <div className="flex-1 py-4 rounded-xl font-medium text-sm flex items-center justify-center gap-2 bg-emerald-600/15 border border-emerald-500/30 text-emerald-300">
+                        {autoUpdateLoading ? (
+                            <>
+                                <RefreshCw className="w-4 h-4 animate-spin" />
+                                Updating...
+                            </>
+                        ) : (
+                            <>
+                                <RefreshCw className="w-4 h-4" />
+                                Auto-Update Active
+                            </>
+                        )}
+                    </div>
+                )}
+
                 <button
-                    onClick={runBacktest}
-                    disabled={loading}
-                    className={`flex-1 py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 transition-all ${
-                        loading ? 'bg-gray-700 cursor-not-allowed text-gray-500' : 'btn-primary'
+                    onClick={() => {
+                        if (!autoUpdate && !hasResult) return;
+                        setAutoUpdate(!autoUpdate);
+                    }}
+                    disabled={!hasResult && !autoUpdate}
+                    className={`group px-5 py-4 rounded-xl font-medium transition-all flex items-center gap-2 ${
+                        autoUpdate
+                            ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 hover:bg-red-500/10 hover:border-red-500/40 hover:text-red-300'
+                            : hasResult
+                                ? 'bg-gray-800/60 border border-gray-700 text-gray-400 hover:text-emerald-400 hover:border-emerald-500/40 hover:bg-emerald-500/10'
+                                : 'bg-gray-800/30 border border-gray-800 text-gray-600 cursor-not-allowed'
                     }`}
+                    title={autoUpdate ? 'Disable auto-update' : hasResult ? 'Enable auto-update' : 'Run a backtest first to enable auto-update'}
                 >
-                    {loading ? (
-                        <span className="flex items-center gap-2">
-                            <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            Processing...
-                        </span>
-                    ) : (
-                        <>
-                            <Play className="w-5 h-5 fill-current" />
-                            Run Backtest
-                        </>
-                    )}
+                    <RefreshCw className={`w-5 h-5 transition-colors ${autoUpdate ? 'text-emerald-400 group-hover:text-red-300' : ''}`} />
+                    {autoUpdate ? 'Stop' : 'Auto'}
                 </button>
 
                 <button

@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { TrendingUp, Activity, Clock, DollarSign } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { TrendingUp, Activity, Clock, DollarSign, RefreshCw } from 'lucide-react';
 import { KpiCard } from './KpiCard';
 import { EquityChart } from './EquityChart';
 import { DailyPnlCalendar } from './DailyPnlCalendar';
@@ -14,6 +15,8 @@ interface DashboardProps {
     onSessionsChange: (sessions: string[]) => void;
     dataSource: string;
     initialEquity?: number;
+    autoUpdate?: boolean;
+    autoUpdateLoading?: boolean;
 }
 
 export function Dashboard({
@@ -22,7 +25,27 @@ export function Dashboard({
     onSessionsChange,
     dataSource,
     initialEquity,
+    autoUpdate = false,
+    autoUpdateLoading = false,
 }: DashboardProps) {
+
+    // All hooks must be called unconditionally (before any early return)
+    const [chartView, setChartView] = useState<'equity' | 'calendar'>('equity');
+    const kpiRef = useRef<HTMLDivElement>(null);
+    const [showStickyMetrics, setShowStickyMetrics] = useState(false);
+
+    useEffect(() => {
+        if (!autoUpdate || !kpiRef.current) {
+            setShowStickyMetrics(false);
+            return;
+        }
+        const observer = new IntersectionObserver(
+            ([entry]) => setShowStickyMetrics(!entry.isIntersecting),
+            { threshold: 0 },
+        );
+        observer.observe(kpiRef.current);
+        return () => observer.disconnect();
+    }, [autoUpdate, filteredResult]);
 
     if (!filteredResult) {
         return (
@@ -45,10 +68,56 @@ export function Dashboard({
     }
 
     const { metrics, equity_curve, trades } = filteredResult;
-    const [chartView, setChartView] = useState<'equity' | 'calendar'>('equity');
 
     return (
         <div className="space-y-6 animate-fadeIn pb-10" role="main" aria-label="Backtest results">
+
+            {/* Sticky metrics bar for auto-update mode — rendered via portal to escape transform containing block */}
+            {autoUpdate && showStickyMetrics && createPortal(
+                <div className="fixed top-0 left-0 right-0 z-50 bg-gray-900/95 backdrop-blur-md border-b border-gray-700/60 shadow-2xl">
+                    <div className="max-w-screen-2xl mx-auto px-8 py-3.5 flex items-center gap-8">
+                        <div className="flex items-center gap-2 text-emerald-400 text-sm font-semibold shrink-0">
+                            <RefreshCw className={`w-4 h-4 ${autoUpdateLoading ? 'animate-spin' : ''}`} />
+                            Auto-Update
+                        </div>
+                        <div className="flex items-baseline gap-10 flex-1 justify-center">
+                            {/* Return */}
+                            <div className="flex items-baseline gap-2">
+                                <TrendingUp className={`w-4 h-4 self-center ${metrics.total_return >= 0 ? 'text-green-400' : 'text-red-400'}`} />
+                                <span className="text-xs text-gray-500 uppercase tracking-wide">Return</span>
+                                <span className={`text-lg font-bold font-mono ${metrics.total_return >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                    {metrics.total_return.toFixed(2)}%
+                                </span>
+                                <span className={`text-xs font-mono ${metrics.total_return >= 0 ? 'text-green-400/50' : 'text-red-400/50'}`}>
+                                    {metrics.total_return >= 0 ? '+' : '-'}${Math.abs(metrics.total_return / 100 * (initialEquity || 50000)).toFixed(2)}
+                                </span>
+                            </div>
+                            {/* Win Rate */}
+                            <div className="flex items-baseline gap-2">
+                                <Activity className="w-4 h-4 self-center text-blue-400" />
+                                <span className="text-xs text-gray-500 uppercase tracking-wide">Win Rate</span>
+                                <span className="text-lg font-bold font-mono text-blue-400">{metrics.win_rate.toFixed(1)}%</span>
+                            </div>
+                            {/* Trades */}
+                            <div className="flex items-baseline gap-2">
+                                <Clock className="w-4 h-4 self-center text-orange-400" />
+                                <span className="text-xs text-gray-500 uppercase tracking-wide">Trades</span>
+                                <span className="text-lg font-bold font-mono text-orange-400">{metrics.total_trades}</span>
+                            </div>
+                            {/* Max DD */}
+                            <div className="flex items-baseline gap-2">
+                                <DollarSign className="w-4 h-4 self-center text-red-400" />
+                                <span className="text-xs text-gray-500 uppercase tracking-wide">Max DD</span>
+                                <span className="text-lg font-bold font-mono text-red-400">{metrics.max_drawdown.toFixed(2)}%</span>
+                                <span className="text-xs font-mono text-red-400/50">
+                                    -${(metrics.max_drawdown / 100 * (initialEquity || 50000)).toFixed(2)}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>,
+                document.body,
+            )}
 
             {filteredResult.debug_file && (
                 <div className="glass-panel rounded-xl p-4 border border-cyan-800/40">
@@ -60,7 +129,7 @@ export function Dashboard({
             )}
 
             {/* KPI Cards */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4" role="region" aria-label="Key performance indicators">
+            <div ref={kpiRef} className="grid grid-cols-2 md:grid-cols-4 gap-4" role="region" aria-label="Key performance indicators">
                 <KpiCard
                     label="Total Return"
                     value={`${metrics.total_return.toFixed(2)}%`}

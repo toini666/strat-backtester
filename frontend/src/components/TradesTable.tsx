@@ -1,5 +1,6 @@
-import { Fragment, useState, useMemo } from 'react';
-import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, Filter } from 'lucide-react';
+import { Fragment, useState, useRef, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import { ArrowDown, ArrowUp, ArrowUpToLine, ChevronDown, ChevronUp, ChevronsUpDown, Filter, Layers } from 'lucide-react';
 import { type Trade, type TradeLeg } from '../api';
 
 type PnlFilter = 'all' | 'positive' | 'negative';
@@ -141,20 +142,71 @@ function LegRow({ leg, excluded }: { leg: TradeLeg; excluded?: boolean }) {
     );
 }
 
+type SortColumn = 'entry_time' | 'pnl' | null;
+type SortDirection = 'asc' | 'desc';
+
 export function TradesTable({ trades, selectedSessions, onSessionsChange }: TradesTableProps) {
     const [expanded, setExpanded] = useState(false);
     const [pnlFilter, setPnlFilter] = useState<PnlFilter>('all');
     const [sideFilter, setSideFilter] = useState<SideFilter>('all');
+    const [sortColumn, setSortColumn] = useState<SortColumn>(null);
+    const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+    const [showLegsDetail, setShowLegsDetail] = useState(true);
+
+    // Scroll-to-top
+    const tableTopRef = useRef<HTMLDivElement>(null);
+    const tableBodyRef = useRef<HTMLDivElement>(null);
+    const [showScrollTop, setShowScrollTop] = useState(false);
+
+    useEffect(() => {
+        if (!expanded || !tableTopRef.current) {
+            setShowScrollTop(false);
+            return;
+        }
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                // Only show when table top has scrolled ABOVE the viewport (user scrolled down past it)
+                // Not when it's below the viewport (user is above the table)
+                setShowScrollTop(!entry.isIntersecting && entry.boundingClientRect.top < 0);
+            },
+            { threshold: 0 },
+        );
+        observer.observe(tableTopRef.current);
+        return () => observer.disconnect();
+    }, [expanded]);
+
+    const handleSort = (col: SortColumn) => {
+        if (sortColumn === col) {
+            if (sortDirection === 'desc') {
+                setSortColumn(null);
+            } else {
+                setSortDirection('desc');
+            }
+        } else {
+            setSortColumn(col);
+            setSortDirection('asc');
+        }
+    };
 
     const filteredTrades = useMemo(() => {
-        return trades.filter(t => {
+        const filtered = trades.filter(t => {
             if (pnlFilter === 'positive' && t.pnl <= 0) return false;
             if (pnlFilter === 'negative' && t.pnl >= 0) return false;
             if (sideFilter === 'long' && t.side !== 'Long') return false;
             if (sideFilter === 'short' && t.side !== 'Short') return false;
             return true;
         });
-    }, [trades, pnlFilter, sideFilter]);
+        if (!sortColumn) return filtered;
+        return [...filtered].sort((a, b) => {
+            let cmp = 0;
+            if (sortColumn === 'entry_time') {
+                cmp = (a.entry_time || '').localeCompare(b.entry_time || '');
+            } else if (sortColumn === 'pnl') {
+                cmp = a.pnl - b.pnl;
+            }
+            return sortDirection === 'asc' ? cmp : -cmp;
+        });
+    }, [trades, pnlFilter, sideFilter, sortColumn, sortDirection]);
 
     const filterCounts = useMemo(() => ({
         all: trades.length,
@@ -242,16 +294,41 @@ export function TradesTable({ trades, selectedSessions, onSessionsChange }: Trad
 
                     {/* Session Multi-Select */}
                     <SessionMultiSelect selected={selectedSessions} onChange={onSessionsChange} />
+
+                    {/* Legs Toggle */}
+                    <button
+                        onClick={() => setShowLegsDetail(!showLegsDetail)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border transition-all ${
+                            showLegsDetail
+                                ? 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30'
+                                : 'bg-gray-800/50 text-gray-500 border-gray-700/50 hover:text-gray-400'
+                        }`}
+                        title={showLegsDetail ? 'Hide trade legs' : 'Show trade legs'}
+                    >
+                        <Layers className="w-3.5 h-3.5" />
+                        Legs
+                    </button>
                 </div>
             </div>
 
             {/* Body */}
             {expanded && (
-                <div id="trade-history-body">
+                <div id="trade-history-body" className="relative">
+                    <div ref={tableTopRef} />
                     <table className="w-full text-left text-sm whitespace-nowrap">
                         <thead className="bg-gray-900/80 backdrop-blur text-gray-400">
                             <tr>
-                                <th className="p-4 font-medium">Entry Bar</th>
+                                <th
+                                    className="p-4 font-medium cursor-pointer select-none hover:text-gray-200 transition-colors"
+                                    onClick={() => handleSort('entry_time')}
+                                >
+                                    <span className="flex items-center gap-1">
+                                        Entry Bar
+                                        {sortColumn === 'entry_time'
+                                            ? sortDirection === 'asc' ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />
+                                            : <ChevronsUpDown className="w-3.5 h-3.5 opacity-30" />}
+                                    </span>
+                                </th>
                                 <th className="p-4 font-medium">Exit Bar</th>
                                 <th className="p-4 font-medium">Session</th>
                                 <th className="p-4 font-medium">Side</th>
@@ -259,7 +336,17 @@ export function TradesTable({ trades, selectedSessions, onSessionsChange }: Trad
                                 <th className="p-4 font-medium text-right">Exit</th>
                                 <th className="p-4 font-medium text-right">Size</th>
                                 <th className="p-4 font-medium">Status</th>
-                                <th className="p-4 font-medium text-right">Net PnL</th>
+                                <th
+                                    className="p-4 font-medium text-right cursor-pointer select-none hover:text-gray-200 transition-colors"
+                                    onClick={() => handleSort('pnl')}
+                                >
+                                    <span className="flex items-center gap-1 justify-end">
+                                        Net PnL
+                                        {sortColumn === 'pnl'
+                                            ? sortDirection === 'asc' ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />
+                                            : <ChevronsUpDown className="w-3.5 h-3.5 opacity-30" />}
+                                    </span>
+                                </th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-700/30">
@@ -297,7 +384,7 @@ export function TradesTable({ trades, selectedSessions, onSessionsChange }: Trad
                                                 {trade.pnl >= 0 ? '+' : ''}{trade.pnl.toFixed(2)}
                                             </td>
                                         </tr>
-                                        {showLegs && legs.map((leg, legIndex) => (
+                                        {showLegsDetail && showLegs && legs.map((leg, legIndex) => (
                                             <LegRow key={`trade-${index}-leg-${legIndex}`} leg={leg} excluded={isExcluded} />
                                         ))}
                                     </Fragment>
@@ -309,6 +396,18 @@ export function TradesTable({ trades, selectedSessions, onSessionsChange }: Trad
                         <div className="p-12 text-center text-gray-500 flex flex-col items-center justify-center">
                             <p>{trades.length === 0 ? 'No trades recorded' : 'No trades match the current filters'}</p>
                         </div>
+                    )}
+
+                    {/* Scroll to top button — rendered via portal to escape transform containing block */}
+                    {showScrollTop && createPortal(
+                        <button
+                            onClick={() => tableTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                            className="fixed bottom-6 right-6 z-40 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gray-800/90 backdrop-blur-md border border-gray-600/50 text-gray-300 text-sm font-medium shadow-xl hover:bg-gray-700/90 hover:text-white transition-all"
+                        >
+                            <ArrowUpToLine className="w-4 h-4" />
+                            Top
+                        </button>,
+                        document.body,
                     )}
                 </div>
             )}

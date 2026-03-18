@@ -151,7 +151,8 @@ export interface BacktestPreset {
 
 const PRESETS_STORAGE_KEY = 'nebular_backtest_presets';
 
-export function loadPresets(): BacktestPreset[] {
+/** Read presets from localStorage (instant, used for initial render). */
+export function loadPresetsLocal(): BacktestPreset[] {
     try {
         const raw = localStorage.getItem(PRESETS_STORAGE_KEY);
         return raw ? JSON.parse(raw) : [];
@@ -160,23 +161,57 @@ export function loadPresets(): BacktestPreset[] {
     }
 }
 
-export function savePreset(preset: BacktestPreset): BacktestPreset[] {
-    const presets = loadPresets();
-    presets.unshift(preset);
+function _syncLocal(presets: BacktestPreset[]) {
     localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets));
-    return presets;
 }
 
-export function deletePreset(id: string): BacktestPreset[] {
-    const presets = loadPresets().filter((p) => p.id !== id);
-    localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets));
-    return presets;
+/** Fetch presets from backend (source of truth). */
+export async function loadPresets(): Promise<BacktestPreset[]> {
+    try {
+        const res = await apiClient.get<BacktestPreset[]>('/presets');
+        _syncLocal(res.data);
+        return res.data;
+    } catch {
+        return loadPresetsLocal();
+    }
 }
 
-export function renamePreset(id: string, name: string): BacktestPreset[] {
-    const presets = loadPresets().map((p) => (p.id === id ? { ...p, name } : p));
-    localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets));
-    return presets;
+export async function savePreset(preset: BacktestPreset): Promise<BacktestPreset[]> {
+    try {
+        const res = await apiClient.post<BacktestPreset[]>('/presets', preset);
+        _syncLocal(res.data);
+        return res.data;
+    } catch {
+        // Fallback to localStorage
+        const presets = loadPresetsLocal();
+        presets.unshift(preset);
+        _syncLocal(presets);
+        return presets;
+    }
+}
+
+export async function deletePreset(id: string): Promise<BacktestPreset[]> {
+    try {
+        const res = await apiClient.delete<BacktestPreset[]>(`/presets/${id}`);
+        _syncLocal(res.data);
+        return res.data;
+    } catch {
+        const presets = loadPresetsLocal().filter((p) => p.id !== id);
+        _syncLocal(presets);
+        return presets;
+    }
+}
+
+export async function renamePreset(id: string, name: string): Promise<BacktestPreset[]> {
+    try {
+        const res = await apiClient.put<BacktestPreset[]>(`/presets/${id}/rename`, { name });
+        _syncLocal(res.data);
+        return res.data;
+    } catch {
+        const presets = loadPresetsLocal().map((p) => (p.id === id ? { ...p, name } : p));
+        _syncLocal(presets);
+        return presets;
+    }
 }
 
 export interface BacktestMetrics {
@@ -286,6 +321,27 @@ export const api = {
             risk_per_trade: riskPerTrade,
             params,
             max_contracts: maxContracts,
+            engine_settings: engineSettings,
+        });
+        return res.data;
+    },
+
+    /**
+     * Re-run only the simulator using cached signals (fast path for auto-update).
+     * Requires a full backtest to have been run first to populate the signal cache.
+     */
+    resimulate: async (
+        initialEquity: number,
+        riskPerTrade: number,
+        maxContracts: number,
+        params: Record<string, number | string | boolean>,
+        engineSettings: BacktestEngineSettings,
+    ): Promise<BacktestResult> => {
+        const res = await apiClient.post<BacktestResult>('/backtest/resimulate', {
+            initial_equity: initialEquity,
+            risk_per_trade: riskPerTrade,
+            max_contracts: maxContracts,
+            params,
             engine_settings: engineSettings,
         });
         return res.data;

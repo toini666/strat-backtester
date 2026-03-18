@@ -297,6 +297,56 @@ def simulate(
         else pd.Timedelta(minutes=1)
     )
 
+    # -----------------------------------------------------------------------
+    # Pre-compute ref_minutes, timestamp strings, and Brussels dates
+    # for all bars to avoid per-bar timezone conversions in the hot loop.
+    # -----------------------------------------------------------------------
+    _pre_ref_minutes = np.empty(n, dtype=np.int32)
+    _pre_bar_time_str = [None] * n
+    _pre_close_time_str = [None] * n
+    _pre_brussels_dates = [None] * n
+
+    for _i in range(n):
+        _bt = idx[_i]
+        _ct = idx[_i + 1] if _i + 1 < n else idx[_i] + inferred_bar_delta
+        _pre_ref_minutes[_i] = _to_ref_minutes(_ct)
+        _pre_bar_time_str[_i] = str(_bt)
+        _pre_close_time_str[_i] = str(_ct)
+        _pre_brussels_dates[_i] = str(_to_brussels(_ct).date())
+
+    # Pre-compute auto-close bar flags
+    _pre_is_auto_close = np.zeros(n, dtype=np.bool_)
+    if config.auto_close_enabled:
+        ac_target = config.auto_close_hour * 60 + config.auto_close_minute
+        for _i in range(n):
+            _open_ref = _to_ref_minutes(idx[_i])
+            _close_ref = _pre_ref_minutes[_i]
+            if _close_ref >= _open_ref:
+                _pre_is_auto_close[_i] = ac_target >= _open_ref and ac_target <= _close_ref
+            else:
+                _pre_is_auto_close[_i] = ac_target >= _open_ref or ac_target <= _close_ref
+
+    # Pre-compute blackout flags for entry logic
+    _pre_is_blackout = np.zeros(n, dtype=np.bool_)
+    if config.blackout_windows:
+        for _i in range(n):
+            ref = _pre_ref_minutes[_i]
+            for w in config.blackout_windows:
+                if w.active and _is_in_time_slot(ref, w.start_hour, w.start_minute, w.end_hour, w.end_minute):
+                    _pre_is_blackout[_i] = True
+                    break
+
+    # Pre-index 1m data for fast sub-bar lookup via searchsorted
+    _data_1m_index_values = None
+    _data_1m_high = None
+    _data_1m_low = None
+    _data_1m_close = None
+    if data_1m is not None and not data_1m.empty:
+        _data_1m_index_values = data_1m.index.values  # numpy datetime64 array
+        _data_1m_high = data_1m["High"].values
+        _data_1m_low = data_1m["Low"].values
+        _data_1m_close = data_1m["Close"].values
+
     # Position state
     pos: Optional[_Position] = None
     last_close_bar = -9999
@@ -499,7 +549,7 @@ def simulate(
 
     def _get_sub_bars(bar_time: pd.Timestamp, bar_close_time: pd.Timestamp) -> Optional[pd.DataFrame]:
         """Get 1-minute bars within a higher-TF bar's time span."""
-        if data_1m is None or data_1m.empty:
+        if _data_1m_index_values is None:
             return None
 
         start = bar_time
@@ -516,8 +566,15 @@ def simulate(
             else:
                 end = end.tz_convert(data_1m.index.tz)
 
-        sub = data_1m[(data_1m.index >= start) & (data_1m.index < end)]
-        return sub if len(sub) > 0 else None
+        # Use searchsorted for O(log n) lookup instead of boolean indexing
+        start_np = np.datetime64(start)
+        end_np = np.datetime64(end)
+        i_start = np.searchsorted(_data_1m_index_values, start_np, side='left')
+        i_end = np.searchsorted(_data_1m_index_values, end_np, side='left')
+
+        if i_start >= i_end:
+            return None
+        return data_1m.iloc[i_start:i_end]
 
     def _update_supertrend_trailing(bar_idx: int):
         """Update position SL based on Supertrend trailing logic.
@@ -882,8 +939,8 @@ def simulate(
     for i in range(n):
         bar_time = idx[i]
         bar_close_time = _get_bar_close_time(i)
-        bar_time_str = str(bar_time)
-        close_time_str = str(bar_close_time)
+        bar_time_str = _pre_bar_time_str[i]
+        close_time_str = _pre_close_time_str[i]
         h = np_high[i]
         l = np_low[i]
         c = np_close[i]
@@ -912,13 +969,7 @@ def simulate(
             if (
                 pos is not None
                 and not closed_this_bar
-                and config.auto_close_enabled
-                and _is_auto_close_bar(
-                    bar_time,
-                    bar_close_time,
-                    config.auto_close_hour,
-                    config.auto_close_minute,
-                )
+                and _pre_is_auto_close[i]
             ):
                 in_profit = (c > pos.entry_price) if pos.side == 1 else (c < pos.entry_price)
                 reason = "Auto-Close (profit)" if in_profit else "Auto-Close (loss)"
@@ -942,13 +993,13 @@ def simulate(
 
         # --- Entry logic ---
         if pos is None and not closed_this_bar:
-            if _is_blackout(bar_close_time, config.blackout_windows):
+            if _pre_is_blackout[i]:
                 continue
             if (i - last_close_bar) < config.cooldown_bars:
                 continue
 
             # Check if daily limit has been reached for this entry date
-            entry_date = _get_brussels_date(close_time_str)
+            entry_date = _pre_brussels_dates[i]
             entry_excluded = _check_daily_limit(entry_date)
 
             if np_long_entry[i]:

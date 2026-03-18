@@ -162,8 +162,10 @@ class EMABreakOsc(Strategy):
         cloud_line_arr = np.full(n, np.nan)
 
         # Match Pine's initial state: array.new<float>(1, na)
-        blT = [np.nan]  # bullish tracking
-        brT = [np.nan]  # bearish tracking
+        # Use deque for O(1) appendleft instead of O(n) list.insert(0, x)
+        from collections import deque
+        blT = deque([np.nan])  # bullish tracking
+        brT = deque([np.nan])  # bearish tracking
 
         def _arr_avg(arr):
             """Pine's array.avg() — ignores NaN, returns NaN if all NaN."""
@@ -188,10 +190,10 @@ class EMABreakOsc(Strategy):
                 bl_avg = _arr_avg(blT)
                 # Pine: m > na evaluates to false
                 if not np.isnan(bl_avg) and m > bl_avg:
-                    blT.insert(0, m)
+                    blT.appendleft(m)
                 else:
                     val = hist_m if (not np.isnan(hist_m) and hist_m > 0) else m
-                    blT.insert(0, val)
+                    blT.appendleft(val)
 
             elif m < 0:
                 # Shrink bullish list by ONE from the end (Pine: pop)
@@ -204,10 +206,10 @@ class EMABreakOsc(Strategy):
                 bl_avg = _arr_avg(blT)
                 # Pine: m < na evaluates to false
                 if not np.isnan(bl_avg) and m < bl_avg:
-                    brT.insert(0, m)
+                    brT.appendleft(m)
                 else:
                     val = hist_m if (not np.isnan(hist_m) and hist_m < 0) else m
-                    brT.insert(0, val)
+                    brT.appendleft(val)
 
             # Compute cloud lines
             if m > 0:

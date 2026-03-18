@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   api,
   type Strategy,
@@ -64,6 +64,11 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [error, setError] = useState('');
+
+  // Auto-update mode: when enabled, parameter changes trigger automatic resimulation
+  const [autoUpdate, setAutoUpdate] = useState(false);
+  const [autoUpdateLoading, setAutoUpdateLoading] = useState(false);
+  const autoUpdateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Filters
   const [selectedSessions, setSelectedSessions] = useState<string[]>(['Asia', 'UK', 'US']);
@@ -180,6 +185,8 @@ function App() {
         engineSettings,
       );
       setResult(res);
+      // Track which strategy params were used for signal generation
+      lastSignalParamsRef.current = JSON.stringify(params);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -187,6 +194,75 @@ function App() {
       setLoading(false);
     }
   };
+
+  // Auto-update: debounced re-run when parameters change.
+  // - Strategy params change → full backtest (re-generates signals)
+  // - Risk/engine params change → fast resimulate (reuses cached signals)
+  const autoUpdateRef = useRef({
+    initialEquity, riskPerTrade, maxContracts, params, engineSettings,
+    selectedStrategy, selectedSymbol, interval, startDatetime, endDatetime,
+  });
+  autoUpdateRef.current = {
+    initialEquity, riskPerTrade, maxContracts, params, engineSettings,
+    selectedStrategy, selectedSymbol, interval, startDatetime, endDatetime,
+  };
+  // Track the last params that were used for signal generation
+  const lastSignalParamsRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!autoUpdate || !result) return;
+    if (autoUpdateTimer.current) clearTimeout(autoUpdateTimer.current);
+    autoUpdateTimer.current = setTimeout(async () => {
+      const p = autoUpdateRef.current;
+      if (!p.selectedStrategy || !p.selectedSymbol) return;
+
+      // Determine if strategy params changed (need full backtest)
+      const currentParamsKey = JSON.stringify(p.params);
+      const needsFullBacktest = lastSignalParamsRef.current !== null
+        && lastSignalParamsRef.current !== currentParamsKey;
+
+      setAutoUpdateLoading(true);
+      try {
+        let res: BacktestResult;
+        if (needsFullBacktest) {
+          // Strategy params changed → full backtest to regenerate signals
+          res = await api.runBacktest(
+            p.selectedStrategy.name,
+            p.selectedSymbol,
+            p.interval,
+            p.startDatetime,
+            p.endDatetime,
+            p.initialEquity,
+            p.riskPerTrade / 100,
+            p.params,
+            p.maxContracts,
+            p.engineSettings,
+          );
+          lastSignalParamsRef.current = currentParamsKey;
+        } else {
+          // Only risk/engine changed → fast resimulate with cached signals
+          res = await api.resimulate(
+            p.initialEquity,
+            p.riskPerTrade / 100,
+            p.maxContracts,
+            p.params,
+            p.engineSettings,
+          );
+        }
+        setResult(res);
+        setError('');
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        setError(message);
+      } finally {
+        setAutoUpdateLoading(false);
+      }
+    }, 400);
+    return () => {
+      if (autoUpdateTimer.current) clearTimeout(autoUpdateTimer.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoUpdate, initialEquity, riskPerTrade, maxContracts, params, engineSettings]);
 
   // Helper to calc metrics on a subset of trades
   const calculateMetrics = useCallback((trades: Trade[], equity: number): BacktestMetrics => {
@@ -492,6 +568,10 @@ function App() {
             runBacktest={runBacktest}
             loading={loading}
             error={error}
+            autoUpdate={autoUpdate}
+            setAutoUpdate={setAutoUpdate}
+            autoUpdateLoading={autoUpdateLoading}
+            hasResult={result !== null}
           />
 
           <Dashboard
@@ -500,6 +580,8 @@ function App() {
             onSessionsChange={setSelectedSessions}
             dataSource="Local"
             initialEquity={initialEquity}
+            autoUpdate={autoUpdate}
+            autoUpdateLoading={autoUpdateLoading}
           />
         </div>
       )}

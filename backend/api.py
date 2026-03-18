@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 import sys
 import os
@@ -28,6 +30,23 @@ DATA_CACHE = {
     "params": None,
     "data": None,
     "original_start_date": None
+}
+
+# Signal cache for auto-update resimulation.
+# Stores the expensive signal generation output so that changes to risk/engine
+# params only require re-running the simulator (fast path).
+SIGNAL_CACHE: Dict[str, Any] = {
+    "key": None,          # (strategy, symbol, interval, start, end, params_hash)
+    "sliced_data": None,
+    "sliced_signals": None,
+    "data_1m": None,
+    "specs": None,
+    "simulator_settings": None,
+    "full_debug": None,
+    "original_start_date": None,
+    "end_date": None,
+    "strategy_name": None,
+    "symbol": None,
 }
 
 # --- Strategy warmup bars ---
@@ -466,6 +485,16 @@ def _write_debug_export(
     return str(output_path)
 
 
+def _make_signal_cache_key(strategy_name: str, symbol: str, interval: str,
+                           start: str, end: str, params: Dict[str, Any]) -> str:
+    """Build a deterministic cache key for signal generation results."""
+    # Exclude params that only affect simulation, not signal generation
+    sig_params = {k: v for k, v in sorted(params.items())
+                  if k not in ("tp1_partial_pct", "tp2_partial_pct", "tick_size")}
+    raw = f"{strategy_name}|{symbol}|{interval}|{start}|{end}|{json.dumps(sig_params, sort_keys=True, default=str)}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
 def _run_simulator_backtest(
     req: "BacktestRequest",
     contract_id: str,
@@ -503,6 +532,24 @@ def _run_simulator_backtest(
 
     data_1m = market_store.load_bars(contract_id, start_date, end_date, "1m")
     data_1m, _ = _slice_from_start(data_1m, original_start_date)
+
+    # Populate signal cache for auto-update resimulation
+    cache_key = _make_signal_cache_key(
+        req.strategy_name, req.symbol, req.interval,
+        req.start_datetime, req.end_datetime, params,
+    )
+    SIGNAL_CACHE["key"] = cache_key
+    SIGNAL_CACHE["sliced_data"] = sliced_data
+    SIGNAL_CACHE["sliced_signals"] = sliced_signals
+    SIGNAL_CACHE["data_1m"] = data_1m
+    SIGNAL_CACHE["specs"] = specs
+    SIGNAL_CACHE["simulator_settings"] = simulator_settings
+    SIGNAL_CACHE["full_debug"] = signals.get("debug_frame")
+    SIGNAL_CACHE["original_start_date"] = original_start_date
+    SIGNAL_CACHE["end_date"] = end_date
+    SIGNAL_CACHE["strategy_name"] = req.strategy_name
+    SIGNAL_CACHE["symbol"] = req.symbol
+    SIGNAL_CACHE["params"] = params.copy()
 
     config = SimulatorConfig(
         initial_equity=req.initial_equity,
@@ -654,6 +701,147 @@ def run_backtest(req: BacktestRequest):
     )
 
 
+# ---------------------------------------------------------------------------
+# Auto-update resimulation endpoint — reuses cached signals, only re-runs
+# the simulator with updated risk/engine/partial params.
+# ---------------------------------------------------------------------------
+
+class ResimulateRequest(BaseModel):
+    """Lightweight request for re-running only the simulator."""
+    # Risk
+    initial_equity: float = Field(default=50000.0, ge=1000, le=10000000)
+    risk_per_trade: float = Field(default=0.01, ge=0.001, le=0.1)
+    max_contracts: int = Field(default=50, ge=1, le=1000)
+    # Strategy params that only affect simulation (TP partials, cooldown)
+    params: Dict[str, Any] = Field(default_factory=dict)
+    # Engine
+    engine_settings: BacktestEngineSettings = Field(default_factory=lambda: BacktestEngineSettings())
+
+
+@router.post("/backtest/resimulate", response_model=BacktestResult)
+def resimulate(req: ResimulateRequest):
+    """Re-run only the simulator using cached signals.
+
+    This is the fast path for auto-update mode: when the user changes
+    risk, engine, or partial TP parameters, we skip data loading and
+    signal generation entirely and only replay the simulation.
+    """
+    if SIGNAL_CACHE["key"] is None or SIGNAL_CACHE["sliced_data"] is None:
+        raise HTTPException(status_code=400, detail="No cached signals available. Run a full backtest first.")
+
+    sliced_data = SIGNAL_CACHE["sliced_data"]
+    sliced_signals = SIGNAL_CACHE["sliced_signals"]
+    data_1m = SIGNAL_CACHE["data_1m"]
+    specs = SIGNAL_CACHE["specs"]
+    base_simulator_settings = SIGNAL_CACHE["simulator_settings"]
+    cached_params = SIGNAL_CACHE["params"]
+
+    # Merge override params into cached strategy params for simulator settings
+    merged_params = cached_params.copy()
+    merged_params.update(req.params)
+
+    # Re-derive simulator settings with potentially updated partials
+    strategy_name = SIGNAL_CACHE["strategy_name"]
+    if strategy_name in STRATEGIES:
+        strategy_instance = STRATEGIES[strategy_name]()
+        simulator_settings = strategy_instance.get_simulator_settings(merged_params)
+    else:
+        simulator_settings = base_simulator_settings
+
+    engine_settings = req.engine_settings
+
+    config = SimulatorConfig(
+        initial_equity=req.initial_equity,
+        risk_per_trade=req.risk_per_trade,
+        max_contracts=req.max_contracts,
+        tick_size=specs["tick_size"],
+        tick_value=specs["tick_value"],
+        point_value=specs["point_value"],
+        fee_per_trade=specs["fee_per_trade"],
+        auto_close_enabled=engine_settings.auto_close_enabled,
+        auto_close_hour=engine_settings.auto_close_hour,
+        auto_close_minute=engine_settings.auto_close_minute,
+        blackout_windows=_build_blackout_windows(engine_settings),
+        cooldown_bars=int(sliced_signals.get("cooldown_bars", merged_params.get("cooldown_bars", 0))),
+        tp1_execution_mode=str(simulator_settings.get("tp1_execution_mode", "touch")),
+        tp1_partial_pct=float(simulator_settings.get("tp1_partial_pct", 0.25)),
+        tp2_partial_pct=float(simulator_settings.get("tp2_partial_pct", 0.25)),
+        ema_exit_after_tp1_only=bool(simulator_settings.get("ema_exit_after_tp1_only", False)),
+        daily_win_limit_enabled=engine_settings.daily_win_limit_enabled,
+        daily_win_limit=engine_settings.daily_win_limit,
+        daily_loss_limit_enabled=engine_settings.daily_loss_limit_enabled,
+        daily_loss_limit=engine_settings.daily_loss_limit,
+    )
+
+    try:
+        result = simulate_strategy(
+            data=sliced_data,
+            data_1m=data_1m,
+            signals=sliced_signals,
+            config=config,
+            ema_main=sliced_signals["ema_main"],
+            ema_secondary=sliced_signals["ema_secondary"],
+        )
+        result["debug_file"] = None
+        result["data_source_used"] = "cache"
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Resimulation error: {str(e)}") from e
+
+
+# =============================================================================
+# PRESETS — persistent favorites stored as JSON on disk
+# =============================================================================
+
+PRESETS_FILE = Path(__file__).resolve().parent.parent / "data" / "presets.json"
+
+
+def _load_presets_from_disk() -> List[Dict[str, Any]]:
+    if not PRESETS_FILE.exists():
+        return []
+    try:
+        return json.loads(PRESETS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def _save_presets_to_disk(presets: List[Dict[str, Any]]) -> None:
+    PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PRESETS_FILE.write_text(json.dumps(presets, indent=2, default=str), encoding="utf-8")
+
+
+@router.get("/presets")
+def get_presets():
+    return _load_presets_from_disk()
+
+
+@router.post("/presets")
+def create_preset(preset: Dict[str, Any]):
+    presets = _load_presets_from_disk()
+    presets.insert(0, preset)
+    _save_presets_to_disk(presets)
+    return presets
+
+
+@router.delete("/presets/{preset_id}")
+def delete_preset(preset_id: str):
+    presets = [p for p in _load_presets_from_disk() if p.get("id") != preset_id]
+    _save_presets_to_disk(presets)
+    return presets
+
+
+@router.put("/presets/{preset_id}/rename")
+def rename_preset(preset_id: str, body: Dict[str, Any]):
+    name = body.get("name", "")
+    presets = _load_presets_from_disk()
+    for p in presets:
+        if p.get("id") == preset_id:
+            p["name"] = name
+            break
+    _save_presets_to_disk(presets)
+    return presets
+
+
 # =============================================================================
 # OPTIMIZATION ENDPOINTS (legacy — still uses VectorBT, to be refactored)
 # =============================================================================
@@ -666,7 +854,6 @@ except ModuleNotFoundError:  # pragma: no cover
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from uuid import uuid4
 import itertools
-import json
 from pathlib import Path
 
 # Optimization Models
