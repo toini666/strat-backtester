@@ -329,6 +329,7 @@ CONTRACT_SPECS = {
     "MGC": {"tick_size": 0.10, "tick_value": 1.00},
     "CL":  {"tick_size": 0.01, "tick_value": 10.00},
     "MCL": {"tick_size": 0.01, "tick_value": 1.00},
+    "MBT": {"tick_size": 5.00, "tick_value": 0.50},
 }
 
 

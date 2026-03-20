@@ -47,7 +47,7 @@ All strategies use the event-driven simulator. It processes bars sequentially wi
 - **Blackout windows**: Prevents new entries during configured time slots
 - **Cooldown**: Minimum bars between trade close and next entry
 
-The exit logic (TP conditions, breakeven rules, EMA crosses) will vary per strategy. The simulator currently has EMABreakOsc-specific exit logic hardcoded. As more strategies are added, this should be refactored into strategy-provided exit callbacks.
+The exit logic is strategy-agnostic: the simulator handles SL/TP1 touch, bar-close-if-touched TP1, EMA-cross TP2, optional fixed TP2 prices, optional Supertrend trailing SL, and optional pre-TP1 breakeven levels — all driven by keys returned from `generate_signals()`.
 
 ## Active Strategies
 
@@ -87,11 +87,20 @@ calendar_days = max(2, int(trading_days * 7 / 5) + 3)
 ```
 
 ### 4. Signal Generation
-Each strategy's `generate_signals()` returns a dict with:
+Each strategy's `generate_signals()` returns a dict with required and optional keys:
+
+**Required:**
 - `long_entries`, `short_entries`: boolean Series
 - `sl_long`, `sl_short`, `tp1_long`, `tp1_short`: float Series (price levels)
-- `ema_main`, `ema_secondary`: Series (for simulator exit logic)
-- `debug_frame` (optional): DataFrame with all indicator values for CSV export
+- `ema_main`, `ema_secondary`: Series (for EMA-cross exit logic)
+
+**Optional (simulator handles via `.get()`):**
+- `be_long`, `be_short`: float Series — custom breakeven price levels (EMA9Scalp)
+- `entry_price_long`, `entry_price_short`: float Series — override bar-close entry price (UTBotAlligatorST)
+- `tp2_long`, `tp2_short`: float Series — fixed TP2 price levels (UTBotAlligatorST)
+- `supertrend`, `supertrend_trend`: Series — Supertrend trailing SL (UTBotAlligatorST)
+- `cooldown_bars`: int — per-signal cooldown override
+- `debug_frame`: DataFrame — all indicator values for CSV export
 
 ### 5. Simulation
 The simulator processes each timeframe bar sequentially. For each bar:
@@ -170,7 +179,13 @@ class MyStrategy(Strategy):
             "tp1_short": tp1_short,         # float Series (price)
             "ema_main": ema_main,           # Series (for exit logic)
             "ema_secondary": ema_secondary, # Series (for TP2 EMA cross)
+            "cooldown_bars": int,           # Optional: per-signal cooldown
             "debug_frame": debug_df,        # Optional DataFrame
+            # Optional additional keys (simulator handles via .get()):
+            # "be_long", "be_short"                       — custom breakeven levels
+            # "entry_price_long", "entry_price_short"     — override entry price
+            # "tp2_long", "tp2_short"                     — fixed TP2 price levels
+            # "supertrend", "supertrend_trend"            — Supertrend trailing SL
         }
 
     # For configurable TP partial sizes:
@@ -233,11 +248,14 @@ Defined in `CONTRACT_SPECS` and `FEES_MAP` dicts in `backend/api.py`:
 
 | Symbol | Tick Size | Tick Value | Point Value | Fee RT |
 |--------|-----------|------------|-------------|--------|
-| MNQ    | 0.25      | $0.50      | $2.00       | $0.74  |
-| MES    | 0.25      | $1.25      | $5.00       | $0.74  |
-| MYM    | 1.00      | $0.50      | $0.50       | $0.74  |
-| MGC    | 0.10      | $1.00      | $10.00      | $1.24  |
+| M2K    | 0.10      | $0.50      | $5.00       | $0.74  |
+| MBT    | 5.00      | $0.50      | $0.10       | $2.34  |
 | MCL    | 0.01      | $1.00      | $100.00     | $1.04  |
+| MES    | 0.25      | $1.25      | $5.00       | $0.74  |
+| MGC    | 0.10      | $1.00      | $10.00      | $1.24  |
+| MNQ    | 0.25      | $0.50      | $2.00       | $0.74  |
+| MYM    | 1.00      | $0.50      | $0.50       | $0.74  |
+
 
 ## Testing
 
