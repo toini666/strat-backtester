@@ -57,6 +57,7 @@ class SimulatorConfig:
     tp1_partial_pct: float = 0.25   # fraction of position to close at TP1
     tp2_partial_pct: float = 0.25   # fraction of position to close at TP2
     ema_exit_after_tp1_only: bool = False  # if True, EMA cross exit only fires after TP1
+    no_sl_after_tp1: bool = False  # if True, intra-bar SL/BE disabled after TP1 (exit only via close-based logic)
 
     daily_win_limit_enabled: bool = False
     daily_win_limit: float = 500.0
@@ -263,6 +264,13 @@ def simulate(
     np_tp2_long = _tp2_long_s.values if _tp2_long_s is not None else None
     np_tp2_short = _tp2_short_s.values if _tp2_short_s is not None else None
     has_fixed_tp2 = np_tp2_long is not None or np_tp2_short is not None
+
+    # Optional canal series (for HMA-canal-based exits instead of EMA cross)
+    _canal_lower_s = signals.get("canal_lower")
+    _canal_upper_s = signals.get("canal_upper")
+    np_canal_lower = _canal_lower_s.values if _canal_lower_s is not None else None
+    np_canal_upper = _canal_upper_s.values if _canal_upper_s is not None else None
+    has_canal_exit = np_canal_lower is not None and np_canal_upper is not None
 
     # Optional Supertrend series (for trailing SL and reversal close)
     _st_s = signals.get("supertrend")
@@ -653,6 +661,12 @@ def simulate(
         if pos is None:
             return False, tp1_touched_this_bar, tp2_touched_this_bar
 
+        # When no_sl_after_tp1 is set, disable all intra-bar SL/BE checks once
+        # TP1 has been hit or touched on this bar. Position exits only via
+        # close-based logic (canal exit, auto-close, end of data).
+        if config.no_sl_after_tp1 and (pos.tp1_hit or tp1_touched_this_bar):
+            return False, tp1_touched_this_bar, tp2_touched_this_bar
+
         # For Supertrend strategies, SL is already the effective SL (trailing
         # or breakeven handled by _update_supertrend_trailing).
         use_supertrend_sl = has_supertrend and pos.initial_risk > 0
@@ -897,6 +911,28 @@ def simulate(
                 elif pos.side == -1 and np_st_trend[bar_idx] != -1:
                     _close_position(close_price, exit_bar_time, exit_exec_time, "Supertrend Reversal")
                     return True
+
+        # Canal-based exits (HMA channel): replaces EMA cross logic when present.
+        # Long: TP2 when close re-enters canal; final exit when close < canalLower.
+        # Short: TP2 when close re-enters canal; final exit when close > canalUpper.
+        if has_canal_exit:
+            cl = np_canal_lower[bar_idx] if bar_idx < len(np_canal_lower) else np.nan
+            cu = np_canal_upper[bar_idx] if bar_idx < len(np_canal_upper) else np.nan
+            if not np.isnan(cl) and not np.isnan(cu):
+                if not has_fixed_tp2 and config.tp2_partial_pct > 0 and pos.tp1_hit and not pos.tp2_hit:
+                    inside_canal = close_price > cl and close_price < cu
+                    if inside_canal:
+                        exited = _partial_exit(close_price, config.tp2_partial_pct, "TP2_Canal", exit_bar_time, exit_exec_time)
+                        if exited > 0:
+                            pos.tp2_hit = True
+                if pos is not None:
+                    if pos.side == 1 and close_price < cl:
+                        _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                        return True
+                    elif pos.side == -1 and close_price > cu:
+                        _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                        return True
+            return pos is None
 
         ema_val = np_ema[bar_idx] if bar_idx < len(np_ema) else np.nan
         ema2_val = np_ema2[bar_idx] if bar_idx < len(np_ema2) else np.nan

@@ -1,0 +1,708 @@
+//@version=6
+indicator("HMA Oscillator", shorttitle="HMA-Osci", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ============================================
+// PARAMÈTRES INPUT
+// ============================================
+
+// --- HMA Ribbon ---
+grp_hma = "HMA RIBBON"
+i_emaLen    = input.int(7,   "Longueur EMA (Source)",        group=grp_hma, minval=1)
+i_hma1Len   = input.int(42,   "Longueur HMA Principale",      group=grp_hma, minval=1)
+i_hma2Len   = input.int(84,   "Longueur HMA Secondaire",      group=grp_hma, minval=1)
+i_ampMult    = input.float(2.0, "Multiplicateur d'Amplitude",  group=grp_hma, step=0.1, minval=0.1)
+i_timeOffset = input.int(-1,    "Offset (Vitesse Horizontale)", group=grp_hma, step=1, tooltip="Décale visuellement le canal HMA horizontalement. N'affecte pas les calculs ni les conditions de trading.")
+
+// --- 4Kings Oscillator ---
+grp_osc = "4KINGS OSCILLATOR"
+simple int    mL  = input.int(5,     "Hyper Wave Length",  group=grp_osc, minval=1, maxval=21)
+simple string sT  = input.string("SMA", "Signal Type",    group=grp_osc, options=["SMA", "EMA"])
+simple int    sL  = input.int(3,     "Signal Length",      group=grp_osc, minval=2, maxval=10)
+
+// --- Smart Money Flow ---
+grp_mf = "SMART MONEY FLOW"
+simple int mfL = input.int(35, "Money Flow Length", group=grp_mf, minval=10, maxval=55)
+simple int mfS = input.int(6,  "Money Flow Smooth", group=grp_mf, minval=2,  maxval=10)
+
+// --- Filtres Additionnels ---
+grp_filters = "FILTRES ADDITIONNELS"
+i_hwFilterOn    = input.bool(true, "Activer le filtre extrême Hyperwave", group=grp_filters, tooltip="Long interdit si HW > +N (zone suracheté extrême). Short interdit si HW < -N (zone survendu extrême).")
+i_hwExtreme     = input.float(20.0, "Niveau extrême Hyperwave (+/-)", group=grp_filters, minval=0.0, tooltip="Long interdit si dernière HW confirmée > +N. Short interdit si < -N.")
+i_maxSlPoints   = input.float(50.0, "Distance SL max (points)", group=grp_filters, minval=1.0, tooltip="Si le SL se trouve à plus de N points au moment du signal, le trade est ignoré.")
+i_cooldownBars  = input.int(1, "Bougies d'attente après clôture", group=grp_filters, tooltip="Délai minimum avant de reprendre une position après une clôture.", minval=0)
+i_maxCandlePct  = input.float(0.3, "Taille max bougie Entry (%)", group=grp_filters, step=0.1, minval=0.0, tooltip="Filtre les bougies dont la variation absolue entre open et close dépasse ce pourcentage du prix.")
+
+// --- Risk Management ---
+grp_risk = "GESTION DES RISQUES"
+i_tickBuffer = input.int(0,     "Buffer SL (en ticks)",                    group=grp_risk)
+i_rrPartial  = input.float(2.0, "Risk/Reward TP Partiel (BE)",             group=grp_risk, minval=0.5, step=0.5)
+i_tpPoints   = input.float(50.0, "TP Points Fixes (Prix absolu, ex: 50.0)", group=grp_risk, minval=1.0)
+
+// --- Auto-close horaire ---
+grp_time = "Auto-Close (Bruxelles)"
+i_autoCloseH = input.int(21, "Heure auto-close", minval=0, maxval=23, group=grp_time, inline="autoclose", tooltip="Ferme uniquement la position en cours à l'heure configurée.")
+i_autoCloseM = input.int(0,  "Minute auto-close", minval=0, maxval=59, group=grp_time, inline="autoclose")
+
+// --- Blackout (pas de nouveaux signaux) ---
+grp_bo = "Blackout (Bruxelles)"
+i_bo1On     = input.bool(false, "Blackout 1 actif", group=grp_bo, inline="bo1")
+i_bo1StartH = input.int(8,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo1")
+i_bo1StartM = input.int(0,  "M", minval=0, maxval=59, group=grp_bo, inline="bo1")
+i_bo1EndH   = input.int(8,  "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo1e")
+i_bo1EndM   = input.int(5,  "M", minval=0, maxval=59, group=grp_bo, inline="bo1e")
+
+i_bo2On     = input.bool(true, "Blackout 2 actif", group=grp_bo, inline="bo2")
+i_bo2StartH = input.int(11,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo2")
+i_bo2StartM = input.int(0,  "M", minval=0, maxval=59, group=grp_bo, inline="bo2")
+i_bo2EndH   = input.int(13,  "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo2e")
+i_bo2EndM   = input.int(0,  "M", minval=0, maxval=59, group=grp_bo, inline="bo2e")
+
+i_bo3On     = input.bool(false, "Blackout 3 actif", group=grp_bo, inline="bo3")
+i_bo3StartH = input.int(14, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo3")
+i_bo3StartM = input.int(30, "M", minval=0, maxval=59, group=grp_bo, inline="bo3")
+i_bo3EndH   = input.int(14, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo3e")
+i_bo3EndM   = input.int(35,  "M", minval=0, maxval=59, group=grp_bo, inline="bo3e")
+
+i_bo4On     = input.bool(true, "Blackout 4 actif", group=grp_bo, inline="bo4")
+i_bo4StartH = input.int(15, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo4")
+i_bo4StartM = input.int(30, "M", minval=0, maxval=59, group=grp_bo, inline="bo4")
+i_bo4EndH   = input.int(21, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo4e")
+i_bo4EndM   = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo4e")
+
+i_bo5On     = input.bool(true, "Blackout 5 actif", group=grp_bo, inline="bo5")
+i_bo5StartH = input.int(21, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo5")
+i_bo5StartM = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo5")
+i_bo5EndH   = input.int(23, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo5e")
+i_bo5EndM   = input.int(0,  "M", minval=0, maxval=59, group=grp_bo, inline="bo5e")
+
+i_bo6On     = input.bool(false, "Blackout 6 actif", group=grp_bo, inline="bo6")
+i_bo6StartH = input.int(23, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo6")
+i_bo6StartM = input.int(0,  "M", minval=0, maxval=59, group=grp_bo, inline="bo6")
+i_bo6EndH   = input.int(23, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo6e")
+i_bo6EndM   = input.int(5, "M", minval=0, maxval=59, group=grp_bo, inline="bo6e")
+
+// --- Stratégie Nom ---
+grp_main = "CONFIGURATION"
+i_stratName = input.string("HMAOsci", "Nom de la stratégie", group=grp_main)
+
+// ============================================
+// TYPES & VARIABLES D'ÉTAT OSCILLATEUR
+// ============================================
+
+type OscData
+    float sig
+    float sgD
+
+type MFIData
+    float   mfi
+    float[] blT
+    float[] brT
+
+var OscData osc = OscData.new(na, na)
+var MFIData mf  = MFIData.new(na, array.new<float>(1, na), array.new<float>(1, na))
+
+// Variables non-var pour accès historique [] (CRITICAL FIX — voir TECHNICAL_MEMORY)
+float oscSig = na
+float oscSgD = na
+float currentMfi = ta.sma(ta.mfi(hl2, mfL) - 50, mfS)
+
+// ============================================
+// VARIABLES D'ÉTAT POSITION
+// ============================================
+var bool  positionActive = false
+var int   currentSide    = 0       // 1 = Long, -1 = Short
+var float entryPrice     = na
+var float stopPrice      = na
+var float tpPrice        = na
+var int   lastActionBar  = -1
+var bool  tpPartialHit   = false
+var bool  hmaInTpHit     = false   // TP2: clôture dans le canal HMA
+
+// Tracking de la dernière hyperwave confirmée
+// 1 = crossover (bullish), -1 = crossunder (bearish), 0 = inconnu
+var int   lastConfirmedHW      = 0
+var float lastConfirmedHWValue = na
+var int   lastCloseBarIndex    = -9999
+
+// Lignes visuelles
+var line lineEntry = na
+var line lineStop  = na
+var line lineTP    = na
+
+// ============================================
+// FONCTIONS UTILITAIRES
+// ============================================
+
+roundToTick(float price) =>
+    math.round(price / syminfo.mintick) * syminfo.mintick
+
+getTimeframe() =>
+    string tf = timeframe.period
+    float tfNum = str.tonumber(tf)
+    string result = if not na(tfNum)
+        int tfMinutes = int(tfNum)
+        tfMinutes >= 60 and tfMinutes % 60 == 0 ? "H" + str.tostring(tfMinutes / 60) : "M" + str.tostring(tfMinutes)
+    else if str.endswith(tf, "S")
+        "S" + str.substring(tf, 0, str.length(tf) - 1)
+    else if tf == "D"
+        "D1"
+    else if str.endswith(tf, "D")
+        "D" + str.substring(tf, 0, str.length(tf) - 1)
+    else if tf == "W"
+        "W1"
+    else if str.endswith(tf, "W")
+        "W" + str.substring(tf, 0, str.length(tf) - 1)
+    else if tf == "M"
+        "MO1"
+    else if str.endswith(tf, "M")
+        "MO" + str.substring(tf, 0, str.length(tf) - 1)
+    else
+        tf
+    result
+
+// --- HORAIRES ---
+isInTimeSlot(int hh, int mm, int startH, int startM, int endH, int endM) =>
+    int curMin   = hh * 60 + mm
+    int startMin = startH * 60 + startM
+    int endMin   = endH * 60 + endM
+    bool endIsDayLastMinute = endH == 23 and endM == 59
+    if startMin <= endMin
+        curMin >= startMin and (endIsDayLastMinute ? curMin <= endMin : curMin < endMin)
+    else
+        curMin >= startMin or (endIsDayLastMinute ? curMin <= endMin : curMin < endMin)
+
+isBlackoutWindow() =>
+    int hh = hour(time_close, "Europe/Brussels")
+    int mm = minute(time_close, "Europe/Brussels")
+    bool b1 = i_bo1On and isInTimeSlot(hh, mm, i_bo1StartH, i_bo1StartM, i_bo1EndH, i_bo1EndM)
+    bool b2 = i_bo2On and isInTimeSlot(hh, mm, i_bo2StartH, i_bo2StartM, i_bo2EndH, i_bo2EndM)
+    bool b3 = i_bo3On and isInTimeSlot(hh, mm, i_bo3StartH, i_bo3StartM, i_bo3EndH, i_bo3EndM)
+    bool b4 = i_bo4On and isInTimeSlot(hh, mm, i_bo4StartH, i_bo4StartM, i_bo4EndH, i_bo4EndM)
+    bool b5 = i_bo5On and isInTimeSlot(hh, mm, i_bo5StartH, i_bo5StartM, i_bo5EndH, i_bo5EndM)
+    bool b6 = i_bo6On and isInTimeSlot(hh, mm, i_bo6StartH, i_bo6StartM, i_bo6EndH, i_bo6EndM)
+    b1 or b2 or b3 or b4 or b5 or b6
+
+isAutoCloseBar() =>
+    int openMin  = hour(time, "Europe/Brussels") * 60 + minute(time, "Europe/Brussels")
+    int closeMin = hour(time_close, "Europe/Brussels") * 60 + minute(time_close, "Europe/Brussels")
+    int targetMin = i_autoCloseH * 60 + i_autoCloseM
+    closeMin >= openMin ? (targetMin >= openMin and targetMin <= closeMin) : (targetMin >= openMin or targetMin <= closeMin)
+
+method st(simple string src, float oscVal, simple int len) =>
+    float o = switch src
+        "SMA" => ta.sma(oscVal, len)
+        "EMA" => ta.ema(oscVal, len)
+    o
+
+bool inBlackout   = isBlackoutWindow()
+bool autoCloseBar = isAutoCloseBar()
+
+// ============================================
+// HMA CALCULATION
+// Basé sur resources/hma-ribbon-new.txt
+// Source: EMA(close, emaLen) modulée en amplitude
+// ============================================
+
+float srcEma    = ta.ema(close, i_emaLen)
+
+float rawHma1   = ta.hma(srcEma, i_hma1Len)
+float rawHma2   = ta.hma(srcEma, i_hma2Len)
+
+// Application du multiplicateur d'amplitude (écart par rapport à la source)
+float hma1      = srcEma + (rawHma1 - srcEma) * i_ampMult
+float hma2      = srcEma + (rawHma2 - srcEma) * i_ampMult
+
+// Canal
+bool  canalGreen = hma1 > hma2
+float canalUpper = math.max(hma1, hma2)
+float canalLower = math.min(hma1, hma2)
+
+// ============================================
+// 4KINGS OSCILLATOR CORE LOGIC
+// ============================================
+
+calcOscillator() =>
+    float hi = ta.highest(mL)
+    float lo = ta.lowest(mL)
+    float av = ta.sma(hl2, mL)
+    osc.sig := ta.ema(ta.linreg((close - math.avg(hi, lo, av)) / (hi - lo) * 100, mL, 0), sL)
+    osc.sgD := sT.st(osc.sig, 2)
+
+calcMFI() =>
+    mf.mfi := currentMfi
+
+updateMFITracking() =>
+    if mf.mfi > 0
+        if mf.brT.size() > 1
+            mf.brT.pop()
+        if mf.blT.size() > mfL
+            mf.blT.pop()
+
+        if mf.mfi > mf.blT.avg()
+            mf.blT.unshift(mf.mfi)
+        else
+            float histMfi = currentMfi[mfL]
+            mf.blT.unshift(not na(histMfi) and histMfi > 0 ? histMfi : mf.mfi)
+
+    if mf.mfi < 0
+        if mf.blT.size() > 1
+            mf.blT.pop()
+        if mf.brT.size() > mfL
+            mf.brT.pop()
+
+        if mf.mfi < mf.blT.avg()
+            mf.brT.unshift(mf.mfi)
+        else
+            float histMfi = currentMfi[mfL]
+            mf.brT.unshift(not na(histMfi) and histMfi < 0 ? histMfi : mf.mfi)
+
+// Exécuter les calculs
+calcOscillator()
+calcMFI()
+
+// Copier les valeurs UDT dans les variables non-var APRÈS calcul
+oscSig := osc.sig
+oscSgD := osc.sgD
+
+updateMFITracking()
+
+// ============================================
+// LOGIQUE DE LA STRATÉGIE
+// ============================================
+
+// --- Détection Hyperwave confirmée ---
+bool hwCrossOver  = ta.crossover(oscSig,  oscSgD)
+bool hwCrossUnder = ta.crossunder(oscSig, oscSgD)
+
+if hwCrossOver
+    lastConfirmedHW      := 1
+    lastConfirmedHWValue := math.min(oscSig, oscSgD)
+if hwCrossUnder
+    lastConfirmedHW      := -1
+    lastConfirmedHWValue := math.max(oscSig, oscSgD)
+
+// --- Deltas ---
+bool deltaLongOn  = osc.sig > 0 and mf.mfi > 0
+bool deltaShortOn = osc.sig < 0 and mf.mfi < 0
+
+// --- Conditions Nuage MFI ---
+float activeMfiRefLine   = mf.mfi > 0 ? mf.blT.avg() : mf.mfi < 0 ? mf.brT.avg() : na
+float activeMfiCloudLine = mf.mfi
+bool hasActiveMfiCloud   = not na(activeMfiCloudLine) and not na(activeMfiRefLine) and activeMfiCloudLine != 0
+
+bool cloudLongAllowed  = hasActiveMfiCloud and activeMfiRefLine < activeMfiCloudLine
+bool cloudShortAllowed = hasActiveMfiCloud and activeMfiRefLine > activeMfiCloudLine
+
+// --- Filtre HW extrêmes ---
+// Long interdit si HW est en zone suracheté extrême (> +extreme)
+// Short interdit si HW est en zone survendu extrême (< -extreme)
+bool hwLongAllowed  = not i_hwFilterOn or na(lastConfirmedHWValue) or lastConfirmedHWValue <= i_hwExtreme
+bool hwShortAllowed = not i_hwFilterOn or na(lastConfirmedHWValue) or lastConfirmedHWValue >= -i_hwExtreme
+
+// --- Taille de bougie ---
+getCandleSizePct(o, c) => c != 0 ? (math.abs(c - o) / c * 100) : na
+isCandleSizeOk(o, c) =>
+    float candlePct = getCandleSizePct(o, c)
+    not na(candlePct) and candlePct <= i_maxCandlePct
+float currentCandlePct = getCandleSizePct(open, close)
+bool  currentCandleOk  = isCandleSizeOk(open, close)
+
+// --- Signal HMA ---
+// Long: canal vert ET clôture au-dessus du canal
+bool hmaBreakLong  = canalGreen and close > canalUpper and currentCandleOk
+// Short: canal rouge ET clôture en-dessous du canal
+bool hmaBreakShort = not canalGreen and close < canalLower and currentCandleOk
+
+// --- Calcul SL au niveau de l'extrême du canal ---
+// Long: SL = canalLower (ligne la plus éloignée du prix quand on est au-dessus)
+// Short: SL = canalUpper (ligne la plus éloignée du prix quand on est en-dessous)
+float slLong      = canalLower - (i_tickBuffer * syminfo.mintick)
+float slShort     = canalUpper + (i_tickBuffer * syminfo.mintick)
+float slDistLong  = close - slLong
+float slDistShort = slShort - close
+
+// Filtre: SL trop loin → trade ignoré
+bool slLongOk  = slDistLong  <= i_maxSlPoints
+bool slShortOk = slDistShort <= i_maxSlPoints
+
+// --- Cooldown ---
+bool cooldownOk = (bar_index - lastCloseBarIndex) >= i_cooldownBars
+
+// --- Conditions d'entrée complètes ---
+bool longEntry  = false
+bool shortEntry = false
+
+if hmaBreakLong  and lastConfirmedHW == 1  and not deltaShortOn and cloudLongAllowed  and hwLongAllowed  and cooldownOk and slLongOk
+    longEntry  := true
+
+if hmaBreakShort and lastConfirmedHW == -1 and not deltaLongOn  and cloudShortAllowed and hwShortAllowed and cooldownOk and slShortOk
+    shortEntry := true
+
+// --- Calcul des niveaux ---
+// Long
+float calcEntryLong     = close
+float calcStopLong      = roundToTick(slLong)
+float riskL             = calcEntryLong - calcStopLong
+float calcTpLong        = calcEntryLong + (riskL * i_rrPartial)
+float calcPointsTpLong  = calcEntryLong + i_tpPoints
+
+// Short
+float calcEntryShort    = close
+float calcStopShort     = roundToTick(slShort)
+float riskS             = calcStopShort - calcEntryShort
+float calcTpShort       = calcEntryShort - (riskS * i_rrPartial)
+float calcPointsTpShort = calcEntryShort - i_tpPoints
+
+// ============================================
+// GESTION ET EXÉCUTION DES POSITIONS
+// ============================================
+bool canAct = bar_index > lastActionBar
+
+// --- 0. CLÔTURE FORCÉE À L'HEURE D'AUTO-CLOSE ---
+bool forceCloseTriggered = false
+bool forceCloseInProfit  = false
+int  forceCloseSide      = 0
+
+if positionActive and autoCloseBar and canAct
+    forceCloseTriggered := true
+    forceCloseSide      := currentSide
+    if currentSide == 1
+        forceCloseInProfit := close > entryPrice
+    else
+        forceCloseInProfit := close < entryPrice
+
+    positionActive    := false
+    currentSide       := 0
+    lastActionBar     := bar_index
+    lastCloseBarIndex := bar_index
+    tpPartialHit      := false
+    hmaInTpHit        := false
+    canAct            := false
+
+    if not na(lineEntry)
+        line.delete(lineEntry)
+        lineEntry := na
+    if not na(lineStop)
+        line.delete(lineStop)
+        lineStop := na
+    if not na(lineTP)
+        line.delete(lineTP)
+        lineTP := na
+
+// --- 1. ENTRÉE LONGUE ---
+if not positionActive and longEntry and canAct and not inBlackout
+    positionActive := true
+    currentSide    := 1
+    entryPrice     := roundToTick(calcEntryLong)
+    stopPrice      := roundToTick(calcStopLong)
+    tpPrice        := roundToTick(calcTpLong)
+    float tp1DisplayLong = roundToTick(math.min(calcTpLong, calcPointsTpLong))
+    lastActionBar  := bar_index
+    tpPartialHit   := false
+    hmaInTpHit     := false
+
+    lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue,  style=line.style_dotted, width=1)
+    lineStop  := line.new(bar_index, stopPrice,  bar_index + 1, stopPrice,  color=color.red,   style=line.style_dotted, width=1)
+    lineTP    := line.new(bar_index, tp1DisplayLong, bar_index + 1, tp1DisplayLong, color=color.green, style=line.style_dotted, width=1)
+
+    alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+
+// --- 2. ENTRÉE COURTE ---
+else if not positionActive and shortEntry and canAct and not inBlackout
+    positionActive := true
+    currentSide    := -1
+    entryPrice     := roundToTick(calcEntryShort)
+    stopPrice      := roundToTick(calcStopShort)
+    tpPrice        := roundToTick(calcTpShort)
+    float tp1DisplayShort = roundToTick(math.max(calcTpShort, calcPointsTpShort))
+    lastActionBar  := bar_index
+    tpPartialHit   := false
+    hmaInTpHit     := false
+
+    lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue,  style=line.style_dotted, width=1)
+    lineStop  := line.new(bar_index, stopPrice,  bar_index + 1, stopPrice,  color=color.red,   style=line.style_dotted, width=1)
+    lineTP    := line.new(bar_index, tp1DisplayShort, bar_index + 1, tp1DisplayShort, color=color.green, style=line.style_dotted, width=1)
+
+    alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+
+// --- 3. SORTIES DE POSITIONS ACTIVES ---
+bool hitStopLoss  = false
+bool hitCanalExit = false   // Close de l'autre côté du canal
+bool hitBreakeven = false
+
+// Capture d'état pour visualisation AVANT reset
+bool exitedLong              = false
+bool exitedShort             = false
+bool wasStopLoss             = false
+bool wasBreakeven            = false
+bool wasCanalExit            = false
+bool wasInProfit             = false
+bool tpPartialJustHitLong    = false
+bool tpPartialJustHitShort   = false
+bool hmaInTpJustHitLong      = false
+bool hmaInTpJustHitShort     = false
+
+float activeTp1Long  = roundToTick(math.min(tpPrice, entryPrice + i_tpPoints))
+float activeTp1Short = roundToTick(math.max(tpPrice, entryPrice - i_tpPoints))
+
+if positionActive and canAct and bar_index > lastActionBar
+    if currentSide == 1  // LONG
+        // Stop Loss (seulement si TP partiel pas encore pris → c'est le vrai SL, pas le BE)
+        if low <= stopPrice and not tpPartialHit[1]
+            hitStopLoss := true
+
+        // 1er TP partiel: TP RR ou TP points, le plus proche
+        bool anyInitialTPHit = high >= activeTp1Long
+
+        if not tpPartialHit and anyInitialTPHit
+            // Alerte immédiate pour bouger le BE dès que touché
+            alert('{"ticker":"' + syminfo.ticker + '","type":"MOVEBE","side":"BUY","entry":' + str.tostring(entryPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
+
+            tpPartialHit         := true
+            tpPartialJustHitLong := true
+            stopPrice            := entryPrice  // SL → Break-Even
+            if not na(lineTP)
+                line.delete(lineTP)
+                lineTP := na
+            if not na(lineStop)
+                line.delete(lineStop)
+            lineStop := line.new(bar_index, stopPrice, bar_index + 1, stopPrice, color=color.orange, style=line.style_dotted, width=1)
+
+        // TP2: clôture dans le canal HMA (prix revenu dans le canal depuis le haut)
+        if tpPartialHit and not hmaInTpHit and close < canalUpper and close > canalLower
+            hmaInTpHit         := true
+            hmaInTpJustHitLong := true
+
+        // Exit final: clôture de l'autre côté du canal (close < canalLower)
+        if close < canalLower and not hitBreakeven and not hitStopLoss
+            hitCanalExit := true
+
+        // Alertes partiels (seulement si pas de close final sur cette bougie)
+        if tpPartialJustHitLong and not hitCanalExit
+            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(roundToTick(close)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+
+        if hmaInTpJustHitLong and not hitCanalExit
+            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(close) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+
+    else if currentSide == -1  // SHORT
+        // Stop Loss (seulement si TP partiel pas encore pris → c'est le vrai SL, pas le BE)
+        if high >= stopPrice and not tpPartialHit[1]
+            hitStopLoss := true
+
+        // 1er TP partiel: TP RR ou TP points, le plus proche
+        bool anyInitialTPHit = low <= activeTp1Short
+
+        if not tpPartialHit and anyInitialTPHit
+            // Alerte immédiate pour bouger le BE dès que touché
+            alert('{"ticker":"' + syminfo.ticker + '","type":"MOVEBE","side":"SELL","entry":' + str.tostring(entryPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
+
+            tpPartialHit          := true
+            tpPartialJustHitShort := true
+            stopPrice             := entryPrice  // SL → Break-Even
+            if not na(lineTP)
+                line.delete(lineTP)
+                lineTP := na
+            if not na(lineStop)
+                line.delete(lineStop)
+            lineStop := line.new(bar_index, stopPrice, bar_index + 1, stopPrice, color=color.orange, style=line.style_dotted, width=1)
+
+        // TP2: clôture dans le canal HMA (prix revenu dans le canal depuis le bas)
+        if tpPartialHit and not hmaInTpHit and close > canalLower and close < canalUpper
+            hmaInTpHit          := true
+            hmaInTpJustHitShort := true
+
+        // Exit final: clôture de l'autre côté du canal (close > canalUpper)
+        if close > canalUpper and not hitBreakeven and not hitStopLoss
+            hitCanalExit := true
+
+        // Alertes partiels (seulement si pas de close final sur cette bougie)
+        if tpPartialJustHitShort and not hitCanalExit
+            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(roundToTick(close)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+
+        if hmaInTpJustHitShort and not hitCanalExit
+            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(close) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+
+    // --- Fermeture de la position ---
+    bool closePosition = hitStopLoss or hitBreakeven or hitCanalExit
+
+    if closePosition
+        exitedLong   := currentSide == 1
+        exitedShort  := currentSide == -1
+        wasStopLoss  := hitStopLoss
+        wasBreakeven := hitBreakeven
+        wasCanalExit := hitCanalExit
+        if currentSide == 1
+            wasInProfit := close > entryPrice
+        else
+            wasInProfit := close < entryPrice
+
+        string closeSide = currentSide == 1 ? "SELL" : "BUY"
+        float  exitPrice = hitStopLoss ? stopPrice : (hitBreakeven ? entryPrice : close)
+
+        string closeAlertJson = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + closeSide + '","entry":' + str.tostring(roundToTick(exitPrice)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}'
+        if hitCanalExit
+            alert(closeAlertJson, alert.freq_once_per_bar_close)
+        else
+            alert(closeAlertJson, alert.freq_once_per_bar)
+
+        positionActive    := false
+        currentSide       := 0
+        lastActionBar     := bar_index
+        lastCloseBarIndex := bar_index
+        tpPartialHit      := false
+        hmaInTpHit        := false
+
+        if not na(lineEntry)
+            line.delete(lineEntry)
+            lineEntry := na
+        if not na(lineStop)
+            line.delete(lineStop)
+            lineStop := na
+        if not na(lineTP)
+            line.delete(lineTP)
+            lineTP := na
+
+    else
+        // Mise à jour des lignes visuelles (extension)
+        if not na(lineEntry)
+            line.set_x2(lineEntry, bar_index + 1)
+        if not na(lineStop)
+            line.set_xy1(lineStop, bar_index, stopPrice)
+            line.set_xy2(lineStop, bar_index + 1, stopPrice)
+        if not na(lineTP)
+            line.set_x2(lineTP, bar_index + 1)
+
+// ============================================
+// VISUALISATION
+// ============================================
+
+// --- Canal HMA ---
+color hmaLineColor = canalGreen ? color.new(color.green, 0) : color.new(color.red, 0)
+p1 = plot(hma1, "HMA Rapide", color=hmaLineColor, linewidth=1, offset=i_timeOffset)
+p2 = plot(hma2, "HMA Lente",  color=hmaLineColor, linewidth=1, offset=i_timeOffset)
+fill(p1, p2, color=canalGreen ? color.new(color.green, 75) : color.new(color.red, 75), title="Canal HMA")
+
+// --- Entrées (petites boules) ---
+isNewLong  = positionActive and currentSide == 1  and not positionActive[1]
+isNewShort = positionActive and currentSide == -1 and not positionActive[1]
+
+plotshape(isNewLong,  title="Entry L", style=shape.circle, location=location.belowbar, color=color.green, size=size.tiny)
+plotshape(isNewShort, title="Entry S", style=shape.circle, location=location.abovebar, color=color.red,   size=size.tiny)
+
+// --- TP Partiel 1 (croix verte) ---
+plotshape(tpPartialJustHitLong  ? high : na, "TP Partial Long",  shape.xcross, location.abovebar, color.green, size=size.tiny)
+plotshape(tpPartialJustHitShort ? low  : na, "TP Partial Short", shape.xcross, location.belowbar, color.green, size=size.tiny)
+
+// --- TP Partiel 2 — clôture dans le canal (croix aqua) ---
+plotshape(hmaInTpJustHitLong  ? high : na, "TP Canal Long",  shape.xcross, location.abovebar, color.aqua, size=size.tiny)
+plotshape(hmaInTpJustHitShort ? low  : na, "TP Canal Short", shape.xcross, location.belowbar, color.aqua, size=size.tiny)
+
+// --- SL (croix rouge) ---
+plotshape(exitedLong  and wasStopLoss ? low  : na, "SL Long",  shape.xcross, location.belowbar, color.red, size=size.tiny)
+plotshape(exitedShort and wasStopLoss ? high : na, "SL Short", shape.xcross, location.abovebar, color.red, size=size.tiny)
+
+// --- Break-Even (croix orange) ---
+plotshape(exitedLong  and wasBreakeven ? high : na, "BE Long",  shape.xcross, location.abovebar, color.orange, size=size.tiny)
+plotshape(exitedShort and wasBreakeven ? low  : na, "BE Short", shape.xcross, location.belowbar, color.orange, size=size.tiny)
+
+// --- Exit canal (couleur dynamique: vert si profit, rouge si perte) ---
+color canalExitColorL = wasInProfit ? color.green : color.red
+color canalExitColorS = wasInProfit ? color.green : color.red
+plotshape(exitedLong  and wasCanalExit ? high : na, "Canal Exit Long",  shape.xcross, location.abovebar, canalExitColorL, size=size.tiny)
+plotshape(exitedShort and wasCanalExit ? low  : na, "Canal Exit Short", shape.xcross, location.belowbar, canalExitColorS, size=size.tiny)
+
+// --- Clôture forcée (couleur dynamique: vert si profit, rouge si perte) ---
+color forceCloseColor = forceCloseInProfit ? color.green : color.red
+plotshape(forceCloseTriggered and forceCloseSide == 1  ? high : na, "Force Close L", shape.xcross, location.abovebar, forceCloseColor, size=size.tiny)
+plotshape(forceCloseTriggered and forceCloseSide == -1 ? low  : na, "Force Close S", shape.xcross, location.belowbar, forceCloseColor, size=size.tiny)
+
+// ============================================
+// STATUS TABLE
+// ============================================
+
+var table statusTable = table.new(position.top_right, 2, 12,
+     border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+
+if barstate.islast
+    // Header
+    table.cell(statusTable, 0, 0, "Condition",  text_color=color.white, bgcolor=color.new(color.gray, 70))
+    table.cell(statusTable, 1, 0, "Status",     text_color=color.white, bgcolor=color.new(color.gray, 70))
+
+    // Blackout
+    string blackoutStatus = inBlackout ? "BLACKOUT" : "OK"
+    color  blackoutColor  = inBlackout ? color.red : color.green
+    table.cell(statusTable, 0, 1, "Blackout",     text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 1, blackoutStatus, text_color=color.white, bgcolor=color.new(blackoutColor, 70))
+
+    // Oscillator values
+    string oscValueText   = str.tostring(osc.sig, "#.#")
+    string cloudValueText = na(activeMfiCloudLine) ? "—" : str.tostring(activeMfiCloudLine, "#.#")
+    string refValueText   = na(activeMfiRefLine)   ? "—" : str.tostring(activeMfiRefLine, "#.#")
+    string oscValues = "Osc:" + oscValueText + " Nuage:" + cloudValueText + " Indep:" + refValueText
+    table.cell(statusTable, 0, 2, "Oscillator", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 2, oscValues,    text_color=color.white, bgcolor=color.new(color.gray, 80))
+
+    // Last Hyperwave
+    string hwStatus = lastConfirmedHW == 1 ? "✓ BULLISH" : (lastConfirmedHW == -1 ? "✓ BEARISH" : "NONE")
+    color  hwColor  = lastConfirmedHW == 1 ? color.green : (lastConfirmedHW == -1 ? color.red : color.gray)
+    table.cell(statusTable, 0, 3, "Last HW", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 3, hwStatus,  text_color=color.white, bgcolor=color.new(hwColor, 70))
+
+    // Last Hyperwave value + filtre extrême
+    bool hwLongBlocked  = i_hwFilterOn and not na(lastConfirmedHWValue) and lastConfirmedHWValue > i_hwExtreme
+    bool hwShortBlocked = i_hwFilterOn and not na(lastConfirmedHWValue) and lastConfirmedHWValue < -i_hwExtreme
+    string hwValueStatus = na(lastConfirmedHWValue) ? "—" : str.tostring(lastConfirmedHWValue, "#.#")
+    if hwLongBlocked
+        hwValueStatus += " (L bloqué)"
+    else if hwShortBlocked
+        hwValueStatus += " (S bloqué)"
+    color hwValueColor = na(lastConfirmedHWValue) ? color.gray : (hwLongBlocked or hwShortBlocked ? color.red : color.green)
+    table.cell(statusTable, 0, 4, "HW Value",    text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 4, hwValueStatus, text_color=color.white, bgcolor=color.new(hwValueColor, 70))
+
+    // Delta status
+    string deltaStatus = deltaLongOn ? "LONG ON" : (deltaShortOn ? "SHORT ON" : "OFF")
+    color  deltaColor  = deltaLongOn ? color.green : (deltaShortOn ? color.red : color.gray)
+    table.cell(statusTable, 0, 5, "Deltas",    text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 5, deltaStatus, text_color=color.white, bgcolor=color.new(deltaColor, 70))
+
+    // Cloud MFI status
+    bool cloudL = cloudLongAllowed
+    bool cloudS = cloudShortAllowed
+    string cloudStatus = cloudL and cloudS ? "BOTH OK" : (cloudL ? "LONG OK" : (cloudS ? "SHORT OK" : "BLOCKED"))
+    color  cloudColor  = cloudL and cloudS ? color.gray : (cloudL ? color.green : (cloudS ? color.red : color.gray))
+    table.cell(statusTable, 0, 6, "Nuage MFI",  text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 6, cloudStatus,  text_color=color.white, bgcolor=color.new(cloudColor, 70))
+
+    // Canal HMA status
+    string canalDir   = canalGreen ? "VERT ↑" : "ROUGE ↓"
+    string pricePos   = close > canalUpper ? " | au-dessus" : (close < canalLower ? " | en-dessous" : " | dans canal")
+    color  canalColor = canalGreen ? color.green : color.red
+    table.cell(statusTable, 0, 7, "Canal HMA",          text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 7, canalDir + pricePos,  text_color=color.white, bgcolor=color.new(canalColor, 70))
+
+    // Signal HMA Break
+    string sigStatus = hmaBreakLong ? "BREAK ↑" : (hmaBreakShort ? "BREAK ↓" : "—")
+    color  sigColor  = hmaBreakLong ? color.green : (hmaBreakShort ? color.red : color.gray)
+    table.cell(statusTable, 0, 8, "Signal HMA", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 8, sigStatus,    text_color=color.white, bgcolor=color.new(sigColor, 70))
+
+    // Distance SL
+    float slDistDisplay = positionActive ? (currentSide == 1 ? entryPrice - stopPrice : stopPrice - entryPrice) : (hmaBreakLong ? slDistLong : (hmaBreakShort ? slDistShort : na))
+    string slDistText   = na(slDistDisplay) ? "—" : str.tostring(slDistDisplay, "#.#") + " pts"
+    bool   slDisplayOk  = na(slDistDisplay) or slDistDisplay <= i_maxSlPoints
+    color  slDistColor  = slDisplayOk ? color.green : color.red
+    table.cell(statusTable, 0, 9, "Distance SL", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 9, slDistText,    text_color=color.white, bgcolor=color.new(slDistColor, 70))
+
+    // Position status
+    string posStatus = positionActive ? (currentSide == 1 ? "LONG" : "SHORT") : "NONE"
+    color  posColor  = positionActive ? (currentSide == 1 ? color.green : color.red) : color.gray
+    table.cell(statusTable, 0, 10, "Position", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 10, posStatus,  text_color=color.white, bgcolor=color.new(posColor, 70))
+
+    // TP Partial status
+    string tpStatus      = tpPartialHit ? "✓ HIT (BE)" : (positionActive ? "PENDING" : "—")
+    color  tpStatusColor = tpPartialHit ? color.green : color.gray
+    table.cell(statusTable, 0, 11, "TP Partial", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 11, tpStatus,     text_color=color.white, bgcolor=color.new(tpStatusColor, 70))
