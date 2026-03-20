@@ -1,0 +1,251 @@
+[
+  {
+    "id": "58e17210-4c53-4dc4-869a-2fac030f3db2",
+    "symbol": "MNQ",
+    "contract_id": "CON.F.US.MNQ.M26",
+    "start_date": "2026-01-15 00:00:00+01:00",
+    "end_date": "2026-03-20 11:39:00+01:00",
+    "bar_count_1m": 63753,
+    "total_size_mb": 8.81,
+    "timeframes": [
+      "1m",
+      "2m",
+      "3m",
+      "5m",
+      "7m",
+      "15m"
+    ],
+    "timezone": "Europe/Brussels",
+    "updated_at": "2026-03-20T10:40:18.790729",
+    "contract_segments": [
+      {
+        "contract": "CON.F.US.MNQ.H26",
+        "label": "H26",
+        "from": "2026-01-15",
+        "to": "2026-03-16"
+      },
+      {
+        "contract": "CON.F.US.MNQ.M26",
+        "label": "M26",
+        "from": "2026-03-16",
+        "to": "2026-03-20"
+      }
+    ]
+  },
+  {
+    "id": "4c78b936-fc0f-4314-86aa-a159df72345c",
+    "symbol": "MES",
+    "contract_id": "CON.F.US.MES.M26",
+    "start_date": "2026-01-15 00:00:00+01:00",
+    "end_date": "2026-03-20 11:39:00+01:00",
+    "bar_count_1m": 63752,
+    "total_size_mb": 8.24,
+    "timeframes": [
+      "1m",
+      "2m",
+      "3m",
+      "5m",
+      "7m",
+      "15m"
+    ],
+    "timezone": "Europe/Brussels",
+    "updated_at": "2026-03-20T10:40:24.020856",
+    "contract_segments": [
+      {
+        "contract": "CON.F.US.MES.H26",
+        "label": "H26",
+        "from": "2026-01-15",
+        "to": "2026-03-16"
+      },
+      {
+        "contract": "CON.F.US.MES.M26",
+        "label": "M26",
+        "from": "2026-03-16",
+        "to": "2026-03-20"
+      }
+    ]
+  },
+  {
+    "id": "85eb5c7b-50c2-4547-bcac-284c1ebe0115",
+    "symbol": "MYM",
+    "contract_id": "CON.F.US.MYM.M26",
+    "start_date": "2026-01-15 00:00:00+01:00",
+    "end_date": "2026-03-20 11:39:00+01:00",
+    "bar_count_1m": 63208,
+    "total_size_mb": 8.21,
+    "timeframes": [
+      "1m",
+      "2m",
+      "3m",
+      "5m",
+      "7m",
+      "15m"
+    ],
+    "timezone": "Europe/Brussels",
+    "updated_at": "2026-03-20T10:40:29.199252",
+    "contract_segments": [
+      {
+        "contract": "CON.F.US.MYM.H26",
+        "label": "H26",
+        "from": "2026-01-15",
+        "to": "2026-03-16"
+      },
+      {
+        "contract": "CON.F.US.MYM.M26",
+        "label": "M26",
+        "from": "2026-03-16",
+        "to": "2026-03-20"
+      }
+    ]
+  },
+  {
+    "id": "4f495d1d-a071-4c63-9bdf-dd1d4c5d212c",
+    "symbol": "MGC",
+    "contract_id": "CON.F.US.MGC.J26",
+    "start_date": "2026-01-15 00:00:00+01:00",
+    "end_date": "2026-03-20 11:39:00+01:00",
+    "bar_count_1m": 63828,
+    "total_size_mb": 7.95,
+    "timeframes": [
+      "1m",
+      "2m",
+      "3m",
+      "5m",
+      "7m",
+      "15m"
+    ],
+    "timezone": "Europe/Brussels",
+    "updated_at": "2026-03-20T10:40:36.083269",
+    "contract_segments": [
+      {
+        "contract": "CON.F.US.MGC.G26",
+        "label": "G26",
+        "from": "2026-01-15",
+        "to": "2026-02-27"
+      },
+      {
+        "contract": "CON.F.US.MGC.J26",
+        "label": "J26",
+        "from": "2026-03-02",
+        "to": "2026-03-20"
+      }
+    ]
+  },
+  {
+    "id": "5b1715e9-052f-48bd-8a37-860df8a414da",
+    "symbol": "MBT",
+    "contract_id": "CON.F.US.MBT.H26",
+    "start_date": "2026-01-15 00:00:00+01:00",
+    "end_date": "2026-03-20 11:39:00+01:00",
+    "bar_count_1m": 62064,
+    "total_size_mb": 7.92,
+    "timeframes": [
+      "1m",
+      "2m",
+      "3m",
+      "5m",
+      "7m",
+      "15m"
+    ],
+    "timezone": "Europe/Brussels",
+    "updated_at": "2026-03-20T10:40:42.068667",
+    "contract_segments": [
+      {
+        "contract": "CON.F.US.MBT.F26",
+        "label": "F26",
+        "from": "2026-01-15",
+        "to": "2026-01-30"
+      },
+      {
+        "contract": "CON.F.US.MBT.G26",
+        "label": "G26",
+        "from": "2026-02-02",
+        "to": "2026-02-27"
+      },
+      {
+        "contract": "CON.F.US.MBT.H26",
+        "label": "H26",
+        "from": "2026-03-02",
+        "to": "2026-03-20"
+      }
+    ]
+  },
+  {
+    "id": "df913be5-561d-48ca-8c3b-da213b594f44",
+    "symbol": "M2K",
+    "contract_id": "CON.F.US.M2K.M26",
+    "start_date": "2026-01-15 00:00:00+01:00",
+    "end_date": "2026-03-20 11:55:00+01:00",
+    "bar_count_1m": 63051,
+    "total_size_mb": 7.62,
+    "timeframes": [
+      "1m",
+      "2m",
+      "3m",
+      "5m",
+      "7m",
+      "15m"
+    ],
+    "timezone": "Europe/Brussels",
+    "updated_at": "2026-03-20T11:18:49.127876",
+    "contract_segments": [
+      {
+        "contract": "CON.F.US.M2K.H26",
+        "label": "H26",
+        "from": "2026-01-15",
+        "to": "2026-03-17"
+      },
+      {
+        "contract": "CON.F.US.M2K.M26",
+        "label": "M26",
+        "from": "2026-03-17",
+        "to": "2026-03-20"
+      }
+    ]
+  },
+  {
+    "id": "b5d7ff44-5a11-44ae-93ab-4f037012c307",
+    "symbol": "MCL",
+    "contract_id": "CON.F.US.MCLE.K26",
+    "start_date": "2026-01-15 19:49:00+01:00",
+    "end_date": "2026-03-20 11:39:00+01:00",
+    "bar_count_1m": 62244,
+    "total_size_mb": 7.01,
+    "timeframes": [
+      "1m",
+      "2m",
+      "3m",
+      "5m",
+      "7m",
+      "15m"
+    ],
+    "timezone": "Europe/Brussels",
+    "updated_at": "2026-03-20T10:40:52.684776",
+    "contract_segments": [
+      {
+        "contract": "CON.F.US.MCLE.G26",
+        "label": "G26",
+        "from": "2026-01-15",
+        "to": "2026-01-16"
+      },
+      {
+        "contract": "CON.F.US.MCLE.H26",
+        "label": "H26",
+        "from": "2026-01-19",
+        "to": "2026-02-20"
+      },
+      {
+        "contract": "CON.F.US.MCLE.J26",
+        "label": "J26",
+        "from": "2026-02-23",
+        "to": "2026-03-15"
+      },
+      {
+        "contract": "CON.F.US.MCLE.K26",
+        "label": "K26",
+        "from": "2026-03-15",
+        "to": "2026-03-20"
+      }
+    ]
+  }
+]

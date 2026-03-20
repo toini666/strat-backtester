@@ -96,7 +96,7 @@ export function MarketDataPanel() {
         }
     };
 
-    const COL_COUNT = 11;
+    const COL_COUNT = 10;
 
     return (
         <div className="space-y-6">
@@ -144,7 +144,6 @@ export function MarketDataPanel() {
                                     <th className="text-right py-2 px-3 font-medium">Bars 1m</th>
                                     <th className="text-right py-2 px-3 font-medium">Missing</th>
                                     <th className="text-left py-2 px-3 font-medium">Status</th>
-                                    <th className="text-left py-2 px-3 font-medium">Next Rollover</th>
                                     <th className="text-left py-2 px-3 font-medium">Updated</th>
                                     <th className="text-center py-2 px-3 font-medium">Actions</th>
                                 </tr>
@@ -199,18 +198,6 @@ export function MarketDataPanel() {
                                                             ? `${Math.abs(dataset.days_until_retention_limit).toFixed(1)}d past limit`
                                                             : `${dataset.days_until_retention_limit.toFixed(1)}d before limit`}
                                                     </div>
-                                                </td>
-                                                <td className="py-3 px-3">
-                                                    {dataset.next_rollover ? (
-                                                        <div>
-                                                            <div className="text-gray-100 font-semibold text-xs">{dataset.next_rollover.date}</div>
-                                                            <div className="text-[11px] text-gray-500 mt-0.5">
-                                                                {dataset.next_rollover.from_contract} → {dataset.next_rollover.to_contract}
-                                                            </div>
-                                                        </div>
-                                                    ) : (
-                                                        <span className="text-gray-600 text-xs">—</span>
-                                                    )}
                                                 </td>
                                                 <td className="py-3 px-3 text-gray-400 text-xs font-mono">{formatDateTime(dataset.updated_at)}</td>
                                                 <td className="py-3 px-3 text-center">

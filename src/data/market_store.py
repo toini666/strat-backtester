@@ -31,65 +31,12 @@ SYMBOL_CONTRACTS = {
     "MYM": "CON.F.US.MYM.M26",
     "MGC": "CON.F.US.MGC.J26",
     "MBT": "CON.F.US.MBT.H26",
-    "M2K": "CON.F.US.M2K.H26",
+    "M2K": "CON.F.US.M2K.M26",
     "MCL": "CON.F.US.MCLE.K26",
 }
 
 # Timeframes to generate from 1m data
 RECOMPOSE_TIMEFRAMES = ["2m", "3m", "5m", "7m", "15m"]
-
-# Rollover calendar: when to switch from current contract to next one.
-# Dates are the FIRST SESSION of the new contract (00:00 Brussels time).
-# All data before this date should use the current contract; from this date onwards, the next.
-# Based on TradingView continuous contract (non back-adjusted) rollover behavior.
-#
-# Month codes: F=Jan, G=Feb, H=Mar, J=Apr, K=May, M=Jun, N=Jul, Q=Aug, U=Sep, V=Oct, X=Nov, Z=Dec
-ROLLOVER_CALENDAR = {
-    # Equity index micros — quarterly (H, M, U, Z)
-    # Roll on Thursday before 3rd Friday (expiration) of contract month
-    "MNQ": [
-        {"from": "H26", "to": "M26", "date": "2026-03-16", "next_contract": "CON.F.US.MNQ.M26"},
-        {"from": "M26", "to": "U26", "date": "2026-06-18", "next_contract": "CON.F.US.MNQ.U26"},
-    ],
-    "MES": [
-        {"from": "H26", "to": "M26", "date": "2026-03-16", "next_contract": "CON.F.US.MES.M26"},
-        {"from": "M26", "to": "U26", "date": "2026-06-18", "next_contract": "CON.F.US.MES.U26"},
-    ],
-    "MYM": [
-        {"from": "H26", "to": "M26", "date": "2026-03-16", "next_contract": "CON.F.US.MYM.M26"},
-        {"from": "M26", "to": "U26", "date": "2026-06-18", "next_contract": "CON.F.US.MYM.U26"},
-    ],
-    "M2K": [
-        {"from": "H26", "to": "M26", "date": "2026-03-16", "next_contract": "CON.F.US.M2K.M26"},
-        {"from": "M26", "to": "U26", "date": "2026-06-18", "next_contract": "CON.F.US.M2K.U26"},
-    ],
-    # Bitcoin micro — quarterly
-    "MBT": [
-        {"from": "H26", "to": "M26", "date": "2026-03-27", "next_contract": "CON.F.US.MBT.M26"},
-        {"from": "M26", "to": "U26", "date": "2026-06-26", "next_contract": "CON.F.US.MBT.U26"},
-    ],
-    # Gold micro — bi-monthly (G, J, M, Q, V, Z)
-    # Roll ~last business day before contract month
-    "MGC": [
-        {"from": "J26", "to": "M26", "date": "2026-03-30", "next_contract": "CON.F.US.MGC.M26"},
-        {"from": "M26", "to": "Q26", "date": "2026-05-28", "next_contract": "CON.F.US.MGC.Q26"},
-    ],
-    # Micro Crude Oil — monthly contracts, roll ~3rd week before expiry
-    "MCL": [
-        {"from": "J26", "to": "K26", "date": "2026-03-17", "next_contract": "CON.F.US.MCLE.K26"},
-        {"from": "K26", "to": "M26", "date": "2026-04-20", "next_contract": "CON.F.US.MCLE.M26"},
-    ],
-}
-
-
-def get_next_rollover(symbol: str) -> Optional[Dict[str, Any]]:
-    """Return the next upcoming rollover for a symbol, or None."""
-    rolls = ROLLOVER_CALENDAR.get(symbol, [])
-    today = datetime.now().strftime("%Y-%m-%d")
-    for roll in rolls:
-        if roll["date"] > today:
-            return roll
-    return None
 
 
 def _to_brussels(df: pd.DataFrame) -> pd.DataFrame:
@@ -306,6 +253,40 @@ class MarketDataStore:
                 dataset_entry = entry
                 break
 
+        # Maintain contract segments history
+        existing_segments = dataset_entry.get("contract_segments", []) if dataset_entry else []
+        if not existing_segments and dataset_entry:
+            # Reconstruct initial segment from stored metadata
+            old_cid = dataset_entry["contract_id"]
+            existing_segments = [{
+                "contract": old_cid,
+                "label": old_cid.split(".")[-1],
+                "from": str(pd.Timestamp(dataset_entry["start_date"]).date()),
+                "to": str(pd.Timestamp(dataset_entry["end_date"]).date()),
+            }]
+
+        if not existing_segments:
+            new_segments = [{
+                "contract": contract_id,
+                "label": contract_id.split(".")[-1],
+                "from": str(df.index.min().date()),
+                "to": str(df.index.max().date()),
+            }]
+        elif existing_segments[-1]["contract"] == contract_id:
+            existing_segments[-1]["to"] = str(df.index.max().date())
+            new_segments = existing_segments
+        else:
+            # New contract: close previous segment at old end date, open new one
+            old_end = pd.Timestamp(dataset_entry["end_date"]).date() if dataset_entry else df.index.min().date()
+            existing_segments[-1]["to"] = str(old_end)
+            existing_segments.append({
+                "contract": contract_id,
+                "label": contract_id.split(".")[-1],
+                "from": str(old_end),
+                "to": str(df.index.max().date()),
+            })
+            new_segments = existing_segments
+
         metadata = {
             "id": dataset_entry["id"] if dataset_entry else str(uuid.uuid4()),
             "symbol": symbol,
@@ -317,6 +298,7 @@ class MarketDataStore:
             "timeframes": ["1m"] + RECOMPOSE_TIMEFRAMES,
             "timezone": BRUSSELS_TZ,
             "updated_at": datetime.utcnow().isoformat(),
+            "contract_segments": new_segments,
         }
 
         if dataset_entry:

@@ -21,9 +21,6 @@ env/
 # Data cache
 data/cache/
 
-# Market data store (Parquet files, user-specific)
-data/market_data/
-
 # Debug / backtest output
 debug/
 *.log

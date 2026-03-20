@@ -9,13 +9,13 @@ import threading
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.data.market_store import BRUSSELS_TZ, MarketDataStore, SYMBOL_CONTRACTS, get_next_rollover
+from src.data.market_store import BRUSSELS_TZ, MarketDataStore, SYMBOL_CONTRACTS
 from src.data.topstep import TopstepClient
 
 logger = logging.getLogger(__name__)
@@ -44,13 +44,6 @@ class DownloadStatusResponse(BaseModel):
     message: str = ""
 
 
-class RolloverInfo(BaseModel):
-    from_contract: str
-    to_contract: str
-    date: str
-    next_contract_id: str
-
-
 class ContractSegment(BaseModel):
     contract: str
     label: str
@@ -77,7 +70,6 @@ class MarketDatasetResponse(BaseModel):
     days_until_retention_limit: float
     retention_warning: bool
     retention_exceeded: bool
-    next_rollover: Optional[RolloverInfo] = None
     contract_segments: List[ContractSegment] = Field(default_factory=list)
 
 
@@ -123,15 +115,6 @@ def _serialize_dataset(dataset: Dict[str, Any]) -> MarketDatasetResponse:
     days_until_retention_limit = RETENTION_WINDOW_DAYS - missing_days
 
     symbol = dataset.get("symbol", "")
-    roll = get_next_rollover(symbol)
-    rollover_info = None
-    if roll:
-        rollover_info = RolloverInfo(
-            from_contract=roll["from"],
-            to_contract=roll["to"],
-            date=roll["date"],
-            next_contract_id=roll["next_contract"],
-        )
 
     return MarketDatasetResponse(
         id=dataset["id"],
@@ -149,7 +132,6 @@ def _serialize_dataset(dataset: Dict[str, Any]) -> MarketDatasetResponse:
         days_until_retention_limit=round(days_until_retention_limit, 2),
         retention_warning=0.0 <= days_until_retention_limit <= RETENTION_WARNING_DAYS,
         retention_exceeded=days_until_retention_limit < 0.0,
-        next_rollover=rollover_info,
         contract_segments=_build_contract_segments(dataset),
     )
 

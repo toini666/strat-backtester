@@ -237,13 +237,6 @@ export interface BacktestResult {
 }
 
 // Market Data Store
-export interface RolloverInfo {
-    from_contract: string;
-    to_contract: string;
-    date: string;
-    next_contract_id: string;
-}
-
 export interface ContractSegment {
     contract: string;
     label: string;
@@ -267,7 +260,6 @@ export interface MarketDataset {
     days_until_retention_limit: number;
     retention_warning: boolean;
     retention_exceeded: boolean;
-    next_rollover: RolloverInfo | null;
     contract_segments: ContractSegment[];
 }
 
