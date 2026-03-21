@@ -21,6 +21,9 @@ env/
 # Data cache
 data/cache/
 
+# User-specific presets (each user keeps their own locally, not shared via git)
+data/presets.json
+
 # Debug / backtest output
 debug/
 *.log
