@@ -296,6 +296,20 @@ export function Sidebar({
             );
         }
 
+        if (key === 'alligator_mode') {
+            return (
+                <select
+                    className="input-base"
+                    value={String(value)}
+                    onChange={(event) => handleParamChange(key, event.target.value)}
+                >
+                    <option value="Bougie courante">Bougie courante</option>
+                    <option value="Offset">Offset</option>
+                    <option value="Les deux">Les deux</option>
+                </select>
+            );
+        }
+
         if (typeof value === 'string') {
             return (
                 <input

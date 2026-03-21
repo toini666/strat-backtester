@@ -13,6 +13,9 @@ echo ""
 echo -e "${BLUE}🔹 Récupération des mises à jour...${NC}"
 git pull
 
+# --- Dé-tracker presets.json si encore suivi par git (one-shot) ---
+git rm --cached data/presets.json 2>/dev/null && echo -e "${BLUE}🔹 presets.json dé-tracké (tes presets sont conservés)${NC}" || true
+
 # --- Mettre à jour les dépendances Python si besoin ---
 echo -e "${BLUE}🔹 Mise à jour des dépendances Python...${NC}"
 source venv/bin/activate
