@@ -3,10 +3,10 @@
     "id": "58e17210-4c53-4dc4-869a-2fac030f3db2",
     "symbol": "MNQ",
     "contract_id": "CON.F.US.MNQ.M26",
-    "start_date": "2026-01-15 00:00:00+01:00",
+    "start_date": "2025-01-02 00:00:00+01:00",
     "end_date": "2026-03-20 11:39:00+01:00",
-    "bar_count_1m": 63753,
-    "total_size_mb": 8.81,
+    "bar_count_1m": 428760,
+    "total_size_mb": 59.14,
     "timeframes": [
       "1m",
       "2m",
@@ -16,7 +16,7 @@
       "15m"
     ],
     "timezone": "Europe/Brussels",
-    "updated_at": "2026-03-20T10:40:18.790729",
+    "updated_at": "2026-03-20T23:36:59.685537",
     "contract_segments": [
       {
         "contract": "CON.F.US.MNQ.H26",
@@ -36,10 +36,10 @@
     "id": "4c78b936-fc0f-4314-86aa-a159df72345c",
     "symbol": "MES",
     "contract_id": "CON.F.US.MES.M26",
-    "start_date": "2026-01-15 00:00:00+01:00",
+    "start_date": "2025-01-02 00:00:00+01:00",
     "end_date": "2026-03-20 11:39:00+01:00",
-    "bar_count_1m": 63752,
-    "total_size_mb": 8.24,
+    "bar_count_1m": 428747,
+    "total_size_mb": 55.3,
     "timeframes": [
       "1m",
       "2m",
@@ -49,7 +49,7 @@
       "15m"
     ],
     "timezone": "Europe/Brussels",
-    "updated_at": "2026-03-20T10:40:24.020856",
+    "updated_at": "2026-03-21T00:13:14.829509",
     "contract_segments": [
       {
         "contract": "CON.F.US.MES.H26",
@@ -102,10 +102,10 @@
     "id": "4f495d1d-a071-4c63-9bdf-dd1d4c5d212c",
     "symbol": "MGC",
     "contract_id": "CON.F.US.MGC.J26",
-    "start_date": "2026-01-15 00:00:00+01:00",
+    "start_date": "2025-01-02 00:00:00+01:00",
     "end_date": "2026-03-20 11:39:00+01:00",
-    "bar_count_1m": 63828,
-    "total_size_mb": 7.95,
+    "bar_count_1m": 430080,
+    "total_size_mb": 53.3,
     "timeframes": [
       "1m",
       "2m",
@@ -115,7 +115,7 @@
       "15m"
     ],
     "timezone": "Europe/Brussels",
-    "updated_at": "2026-03-20T10:40:36.083269",
+    "updated_at": "2026-03-21T00:15:56.570707",
     "contract_segments": [
       {
         "contract": "CON.F.US.MGC.G26",

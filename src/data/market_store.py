@@ -163,24 +163,19 @@ class MarketDataStore:
             raise FileNotFoundError(f"CSV file missing: {csv_path}")
 
         logger.info(f"Loading local data for {sym} from {csv_path}")
-        df = pd.read_csv(csv_path, index_col="Date", parse_dates=True)
+        df = pd.read_csv(csv_path, index_col="Date")
+        df.index = pd.to_datetime(df.index, utc=True)
+        df.index = df.index.tz_convert(BRUSSELS_TZ)
 
         slice_start = pd.Timestamp(start)
         slice_end = pd.Timestamp(end)
 
-        if df.index.tz is not None:
-            if slice_start.tzinfo is None:
-                slice_start = slice_start.tz_localize("UTC")
-            if slice_end.tzinfo is None:
-                slice_end = slice_end.tz_localize("UTC")
-            # Convert to same tz as data
-            slice_start = slice_start.tz_convert(df.index.tz)
-            slice_end = slice_end.tz_convert(df.index.tz)
-        else:
-            if slice_start.tzinfo is not None:
-                slice_start = slice_start.tz_localize(None)
-            if slice_end.tzinfo is not None:
-                slice_end = slice_end.tz_localize(None)
+        if slice_start.tzinfo is None:
+            slice_start = slice_start.tz_localize("UTC")
+        if slice_end.tzinfo is None:
+            slice_end = slice_end.tz_localize("UTC")
+        slice_start = slice_start.tz_convert(BRUSSELS_TZ)
+        slice_end = slice_end.tz_convert(BRUSSELS_TZ)
 
         # Recompose if needed
         if timeframe != "1m":
@@ -218,14 +213,9 @@ class MarketDataStore:
         # Merge with existing data if present
         if csv_1m_path.exists():
             logger.info(f"Merging with existing data for {symbol}")
-            existing = pd.read_csv(csv_1m_path, index_col="Date", parse_dates=True)
-            if not isinstance(existing.index, pd.DatetimeIndex):
-                existing.index = pd.to_datetime(existing.index)
-            # Ensure same timezone for merge
-            if existing.index.tz is None:
-                existing.index = existing.index.tz_localize(BRUSSELS_TZ)
-            elif str(existing.index.tz) != BRUSSELS_TZ:
-                existing.index = existing.index.tz_convert(BRUSSELS_TZ)
+            existing = pd.read_csv(csv_1m_path, index_col="Date")
+            existing.index = pd.to_datetime(existing.index, utc=True)
+            existing.index = existing.index.tz_convert(BRUSSELS_TZ)
             df = pd.concat([existing, df])
             df = df[~df.index.duplicated(keep="last")]
             df.sort_index(ascending=True, inplace=True)
@@ -337,13 +327,9 @@ class MarketDataStore:
                 logger.warning("Skipping %s: missing %s", symbol, csv_1m_path)
                 continue
 
-            df_1m = pd.read_csv(csv_1m_path, index_col="Date", parse_dates=True)
-            if not isinstance(df_1m.index, pd.DatetimeIndex):
-                df_1m.index = pd.to_datetime(df_1m.index)
-            if df_1m.index.tz is None:
-                df_1m.index = df_1m.index.tz_localize(BRUSSELS_TZ)
-            elif str(df_1m.index.tz) != BRUSSELS_TZ:
-                df_1m.index = df_1m.index.tz_convert(BRUSSELS_TZ)
+            df_1m = pd.read_csv(csv_1m_path, index_col="Date")
+            df_1m.index = pd.to_datetime(df_1m.index, utc=True)
+            df_1m.index = df_1m.index.tz_convert(BRUSSELS_TZ)
             df_1m.sort_index(inplace=True)
 
             for tf in RECOMPOSE_TIMEFRAMES:

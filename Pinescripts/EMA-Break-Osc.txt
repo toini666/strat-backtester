@@ -473,10 +473,12 @@ if positionActive and canAct and bar_index > lastActionBar
 
         // 1er TP partiel: exécution au close de la bougie qui touche la cible.
         if not tpPartialHit and anyInitialTPHit
+            // Alerte immédiate (once per bar) pour bouger le BE dès que touché
+            alert('{"ticker":"' + syminfo.ticker + '","type":"MOVEBE","side":"BUY","entry":' + str.tostring(entryPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
+            
             tpPartialHit := true
             tpPartialJustHitLong := true
             stopPrice    := entryPrice  // SL → Break-Even
-            float partialPriceLong = roundToTick(close)
             if not na(lineTP)
                 line.delete(lineTP)
                 lineTP := na
@@ -485,21 +487,21 @@ if positionActive and canAct and bar_index > lastActionBar
                 line.delete(lineStop)
             lineStop := line.new(bar_index, stopPrice, bar_index + 1, stopPrice, color=color.orange, style=line.style_dotted, width=1)
 
-            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(partialPriceLong) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
-
-        // 2ème Condition: Clôture sous l'EMA 13 (uniquement si TP1 déjà pris ET en profit)
-        if tpPartialHit and not ema13TpHit and ema13BreakDown and close > entryPrice
+        // TP2 EMA13: après TP1, si clôture sous l'EMA secondaire (sans croiser l'EMA principale)
+        if tpPartialHit and not ema13TpHit and close < ema13
             ema13TpHit := true
             tpEma13JustHitLong := true
-            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(close) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
-
-        bool canBELong = tpPartialHit[1]
-        if canBELong and low <= entryPrice
-            hitBreakeven := true
 
         // TP Final: clôture sous l'EMA (même sans TP partiel)
         if close < ema30 and not hitBreakeven and not hitStopLoss
             hitEMACross := true
+
+        // Envoi des alertes partiel SEULEMENT si on ne close pas la position sur cette même bougie (EMA Cross)
+        if tpPartialJustHitLong and not hitEMACross
+            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(roundToTick(close)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+
+        if tpEma13JustHitLong and not hitEMACross
+            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(close) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
 
     else if currentSide == -1  // SHORT
         // Stop Loss (seulement si TP partiel pas encore pris → c'est le vrai SL, pas le BE)
@@ -510,10 +512,12 @@ if positionActive and canAct and bar_index > lastActionBar
 
         // 1er TP partiel: exécution au close de la bougie qui touche la cible.
         if not tpPartialHit and anyInitialTPHit
+            // Alerte immédiate (once per bar) pour bouger le BE dès que touché
+            alert('{"ticker":"' + syminfo.ticker + '","type":"MOVEBE","side":"SELL","entry":' + str.tostring(entryPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
+            
             tpPartialHit := true
             tpPartialJustHitShort := true
             stopPrice    := entryPrice  // SL → Break-Even
-            float partialPriceShort = roundToTick(close)
             if not na(lineTP)
                 line.delete(lineTP)
                 lineTP := na
@@ -521,21 +525,21 @@ if positionActive and canAct and bar_index > lastActionBar
                 line.delete(lineStop)
             lineStop := line.new(bar_index, stopPrice, bar_index + 1, stopPrice, color=color.orange, style=line.style_dotted, width=1)
             
-            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(partialPriceShort) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
-
-        // 2ème Condition: Clôture au-dessus de l'EMA 13 (uniquement si TP1 déjà pris ET en profit)
-        if tpPartialHit and not ema13TpHit and ema13BreakUp and close < entryPrice
+        // TP2 EMA13: après TP1, si clôture au-dessus de l'EMA secondaire (sans croiser l'EMA principale)
+        if tpPartialHit and not ema13TpHit and close > ema13
             ema13TpHit := true
             tpEma13JustHitShort := true
-            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(close) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
-
-        bool canBEShort = tpPartialHit[1]
-        if canBEShort and high >= entryPrice
-            hitBreakeven := true
 
         // TP Final: clôture au-dessus de l'EMA (même sans TP partiel)
         if close > ema30 and not hitBreakeven and not hitStopLoss
             hitEMACross := true
+
+        // Envoi des alertes partiel SEULEMENT si on ne close pas la position sur cette même bougie (EMA Cross)
+        if tpPartialJustHitShort and not hitEMACross
+            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(roundToTick(close)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+
+        if tpEma13JustHitShort and not hitEMACross
+            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(close) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
 
     // --- Fermeture de la position ---
     bool closePosition = hitStopLoss or hitBreakeven or hitEMACross

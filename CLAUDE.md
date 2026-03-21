@@ -64,6 +64,12 @@ All strategies have corresponding PineScript files in `Pinescripts/`:
 ### 1. Data Loading
 All data comes from local CSV files via `market_store.py`. The store holds 1-minute OHLCV bars per symbol (MNQ, MES, MGC, etc.).
 
+**Data sources:**
+- **Historical backfill**: Databento OHLCV-1m CSVs (one-time import per ticker). Requires front-month contract resolution from multi-contract data. See agent memory for full import procedure.
+- **Ongoing updates**: Topstep API via `save_bars()`, which handles merge, timezone conversion, and timeframe recomposition automatically.
+
+**CSV format**: `Date,Open,High,Low,Close,Volume` with `Date` as Brussels tz-aware timestamps. CSVs may contain mixed UTC offsets (+01:00 winter / +02:00 summer) — `market_store.py` reads them via `pd.to_datetime(utc=True)` then `tz_convert('Europe/Brussels')`.
+
 ### 2. Timeframe Recomposition (`src/data/recompose.py`)
 Higher-timeframe bars (3m, 5m, 7m, 15m, etc.) are recomposed from 1-minute data:
 - Bars re-anchor at each **session start** (detected via gaps > 30 minutes in the 1m data)
