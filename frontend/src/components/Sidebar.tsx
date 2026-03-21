@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef, type Dispatch, type SetStateAction } from 'react';
 import { Check, ClipboardCopy, Clock3, Database, Lock, Pencil, Play, RefreshCw, Settings, ShieldAlert, Star, ChevronDown, ChevronUp, Trash2, RotateCcw, Upload } from 'lucide-react';
+import { ConfirmModal } from './ui/Modal';
 import {
     type AvailableDataset,
     type BacktestEngineSettings,
@@ -107,6 +108,7 @@ export function Sidebar({
     const [importOpen, setImportOpen] = useState(false);
     const [importText, setImportText] = useState('');
     const [importError, setImportError] = useState('');
+    const [deleteConfirmPreset, setDeleteConfirmPreset] = useState<BacktestPreset | null>(null);
 
     useEffect(() => {
         loadPresets().then(setPresets);
@@ -182,6 +184,7 @@ export function Sidebar({
     const handleDeletePreset = async (id: string) => {
         const updated = await deletePresetFromStorage(id);
         setPresets(updated);
+        setDeleteConfirmPreset(null);
     };
 
     const startRenaming = (preset: BacktestPreset) => {
@@ -316,6 +319,7 @@ export function Sidebar({
     };
 
     return (
+        <>
         <div className="space-y-6">
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                 <div className={`glass-panel rounded-xl p-5 ${autoUpdate ? 'opacity-60' : ''}`}>
@@ -770,7 +774,7 @@ export function Sidebar({
                                             : <ClipboardCopy className="w-3.5 h-3.5" />}
                                     </button>
                                     <button
-                                        onClick={() => handleDeletePreset(preset.id)}
+                                        onClick={() => setDeleteConfirmPreset(preset)}
                                         className="p-1.5 rounded-md text-red-400 hover:bg-red-500/10 transition-colors"
                                         title="Delete preset"
                                     >
@@ -873,5 +877,17 @@ export function Sidebar({
                 </div>
             )}
         </div>
+
+        <ConfirmModal
+            isOpen={deleteConfirmPreset !== null}
+            onClose={() => setDeleteConfirmPreset(null)}
+            onConfirm={() => deleteConfirmPreset && handleDeletePreset(deleteConfirmPreset.id)}
+            title="Supprimer le preset"
+            message={`Supprimer "${deleteConfirmPreset?.name}" ? Cette action est irréversible.`}
+            confirmText="Supprimer"
+            cancelText="Annuler"
+            variant="danger"
+        />
+        </>
     );
 }
