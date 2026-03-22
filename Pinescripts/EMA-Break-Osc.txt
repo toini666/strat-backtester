@@ -26,6 +26,8 @@ grp_filters = "FILTRES ADDITIONNELS"
 i_breakWaitBars = input.int(2, "Bougies supp. après Break (0-50)", minval=0, maxval=50, group=grp_filters, tooltip="Nombre de bougies supplémentaires après le break EMA pour valider toutes les autres conditions. 0 = bougie du break uniquement.")
 i_hwFilterOn    = input.bool(true, "Activer le filtre valeur Hyperwave", group=grp_filters, tooltip="Ignore le signal si la dernière Hyperwave était comprise entre -N et +N.")
 i_hwLevel       = input.float(16.0, "Niveau d'exclusion Hyperwave (+/-)", group=grp_filters, minval=0.0)
+i_hwExtremeFilterOn = input.bool(false, "Activer le filtre extrême Hyperwave", group=grp_filters, tooltip="Long interdit si HW > +N (zone suracheté extrême). Short interdit si HW < -N (zone survendu extrême).")
+i_hwExtreme         = input.float(20.0, "Niveau extrême Hyperwave (+/-)", group=grp_filters, minval=0.0, tooltip="Long interdit si dernière HW confirmée > +N. Short interdit si < -N.")
 i_cooldownBars  = input.int(1, "Bougies d'attente après clôture", group=grp_filters, tooltip="Délai minimum avant de reprendre une position après une clôture.", minval=0)
 i_maxCandlePct  = input.float(0.4, "Taille max bougie Break/Entry (%)", group=grp_filters, step=0.1, minval=0.0, tooltip="Filtre les bougies dont la variation absolue entre open et close depasse ce pourcentage du prix.")
 i_requireEmaAlignment = input.bool(false, "Exiger EMA secondaire dans le bon sens", group=grp_filters, tooltip="Long: EMA secondaire au-dessus de l'EMA principale. Short: EMA secondaire en-dessous de l'EMA principale.")
@@ -340,15 +342,17 @@ bool longEntry  = false
 bool shortEntry = false
 
 bool hwFilterOk = not i_hwFilterOn or (not na(lastConfirmedHWValue) and math.abs(lastConfirmedHWValue) > i_hwLevel)
+bool hwLongAllowed  = not i_hwExtremeFilterOn or na(lastConfirmedHWValue) or lastConfirmedHWValue <= i_hwExtreme
+bool hwShortAllowed = not i_hwExtremeFilterOn or na(lastConfirmedHWValue) or lastConfirmedHWValue >= -i_hwExtreme
 bool cooldownOk = (bar_index - lastCloseBarIndex) >= i_cooldownBars
 bool storedLongBreakOk  = barsSinceLongBreak <= i_breakWaitBars and lastBreakLongSizeOk
 bool storedShortBreakOk = barsSinceShortBreak <= i_breakWaitBars and lastBreakShortSizeOk
 
-if barsSinceLongBreak <= i_breakWaitBars and storedLongBreakOk and lastConfirmedHW == 1 and not deltaShortOn and cloudLongAllowed and hwFilterOk and currentCandleOk and cooldownOk and emaAlignmentLongOk
+if barsSinceLongBreak <= i_breakWaitBars and storedLongBreakOk and lastConfirmedHW == 1 and not deltaShortOn and cloudLongAllowed and hwFilterOk and hwLongAllowed and currentCandleOk and cooldownOk and emaAlignmentLongOk
     longEntry := true
     barsSinceLongBreak := 9999 // Reset pour ne pas ré-entrer
 
-if barsSinceShortBreak <= i_breakWaitBars and storedShortBreakOk and lastConfirmedHW == -1 and not deltaLongOn and cloudShortAllowed and hwFilterOk and currentCandleOk and cooldownOk and emaAlignmentShortOk
+if barsSinceShortBreak <= i_breakWaitBars and storedShortBreakOk and lastConfirmedHW == -1 and not deltaLongOn and cloudShortAllowed and hwFilterOk and hwShortAllowed and currentCandleOk and cooldownOk and emaAlignmentShortOk
     shortEntry := true
     barsSinceShortBreak := 9999 // Reset pour ne pas ré-entrer
 
@@ -645,7 +649,7 @@ plotshape(forceCloseTriggered and forceCloseSide == -1 ? low  : na, "Force Close
 // STATUS TABLE
 // ============================================
 
-var table statusTable = table.new(position.top_right, 2, 12,
+var table statusTable = table.new(position.top_right, 2, 13,
      border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
 if barstate.islast
@@ -673,10 +677,12 @@ if barstate.islast
     table.cell(statusTable, 0, 3, "Last HW",    text_color=color.white, bgcolor=color.new(color.gray, 80))
     table.cell(statusTable, 1, 3, hwStatus,      text_color=color.white, bgcolor=color.new(hwColor, 70))
 
-    // Last Hyperwave value
+    // Last Hyperwave value (range filter)
     bool hwValueInFilterZone = not na(lastConfirmedHWValue) and math.abs(lastConfirmedHWValue) <= i_hwLevel
     string hwValueStatus = na(lastConfirmedHWValue) ? "—" : str.tostring(lastConfirmedHWValue, "#.#")
-    color  hwValueColor  = na(lastConfirmedHWValue) ? color.gray : (hwValueInFilterZone ? color.red : color.green)
+    if i_hwFilterOn and hwValueInFilterZone
+        hwValueStatus += " (range bloqué)"
+    color  hwValueColor  = na(lastConfirmedHWValue) ? color.gray : (i_hwFilterOn and hwValueInFilterZone ? color.red : color.green)
     table.cell(statusTable, 0, 4, "HW Value",   text_color=color.white, bgcolor=color.new(color.gray, 80))
     table.cell(statusTable, 1, 4, hwValueStatus, text_color=color.white, bgcolor=color.new(hwValueColor, 70))
 
@@ -746,3 +752,11 @@ if barstate.islast
     color  tpStatusColor = tpPartialHit ? color.green : color.gray
     table.cell(statusTable, 0, 11, "TP Partial",  text_color=color.white, bgcolor=color.new(color.gray, 80))
     table.cell(statusTable, 1, 11, tpStatus,      text_color=color.white, bgcolor=color.new(tpStatusColor, 70))
+
+    // HW Extreme filter status
+    bool hwLongBlocked  = i_hwExtremeFilterOn and not na(lastConfirmedHWValue) and lastConfirmedHWValue > i_hwExtreme
+    bool hwShortBlocked = i_hwExtremeFilterOn and not na(lastConfirmedHWValue) and lastConfirmedHWValue < -i_hwExtreme
+    string hwExtremeText = not i_hwExtremeFilterOn ? "OFF" : (na(lastConfirmedHWValue) ? "—" : (hwLongBlocked ? "L bloqué (" + str.tostring(lastConfirmedHWValue, "#.#") + ")" : (hwShortBlocked ? "S bloqué (" + str.tostring(lastConfirmedHWValue, "#.#") + ")" : "OK (" + str.tostring(lastConfirmedHWValue, "#.#") + ")")))
+    color  hwExtremeColor = not i_hwExtremeFilterOn ? color.gray : (hwLongBlocked or hwShortBlocked ? color.red : color.green)
+    table.cell(statusTable, 0, 12, "HW Extrême",   text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 12, hwExtremeText,  text_color=color.white, bgcolor=color.new(hwExtremeColor, 70))

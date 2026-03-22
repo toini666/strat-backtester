@@ -49,6 +49,8 @@ class EMABreakOsc(Strategy):
         "break_wait_bars": 2,
         "hw_filter_on": True,
         "hw_level": 16.0,
+        "hw_extreme_filter_on": False,
+        "hw_extreme": 20.0,
         "cooldown_bars": 1,
         "max_candle_pct": 0.4,
         "require_ema_alignment": False,
@@ -73,6 +75,7 @@ class EMABreakOsc(Strategy):
         "mf_smooth": [4, 6, 8],
         "break_wait_bars": [0, 1, 2, 3],
         "hw_level": [10.0, 14.0, 16.0, 20.0],
+        "hw_extreme": [15.0, 18.0, 20.0, 25.0],
         "cooldown_bars": [0, 1, 2],
         "max_candle_pct": [0.3, 0.4, 0.5, 0.6],
         "rr_partial": [1.5, 2.0, 2.5, 3.0],
@@ -256,6 +259,8 @@ class EMABreakOsc(Strategy):
         break_wait = p["break_wait_bars"]
         hw_filter_on = p["hw_filter_on"]
         hw_level = p["hw_level"]
+        hw_extreme_filter_on = p["hw_extreme_filter_on"]
+        hw_extreme = p["hw_extreme"]
         max_candle_pct = p["max_candle_pct"]
         require_align = p["require_ema_alignment"]
         tick_buf = p["tick_buffer"]
@@ -339,6 +344,8 @@ class EMABreakOsc(Strategy):
         ema_align_long_arr = np.zeros(n, dtype=bool)
         ema_align_short_arr = np.zeros(n, dtype=bool)
         hw_filter_ok_arr = np.zeros(n, dtype=bool)
+        hw_long_allowed_arr = np.zeros(n, dtype=bool)
+        hw_short_allowed_arr = np.zeros(n, dtype=bool)
         bars_since_long_arr = np.full(n, np.nan)
         bars_since_short_arr = np.full(n, np.nan)
         last_break_long_low_arr = np.full(n, np.nan)
@@ -414,6 +421,13 @@ class EMABreakOsc(Strategy):
                 not np.isnan(last_confirmed_hw_val)
                 and abs(last_confirmed_hw_val) > hw_level
             )
+            # Condition 2: extreme filter — long blocked if HW > +extreme, short if HW < -extreme
+            if np.isnan(last_confirmed_hw_val):
+                hw_long_allowed = True
+                hw_short_allowed = True
+            else:
+                hw_long_allowed = (not hw_extreme_filter_on) or (last_confirmed_hw_val <= hw_extreme)
+                hw_short_allowed = (not hw_extreme_filter_on) or (last_confirmed_hw_val >= -hw_extreme)
             stored_long_ok = (
                 bars_since_long_break <= break_wait and last_break_long_size_ok
             )
@@ -423,6 +437,8 @@ class EMABreakOsc(Strategy):
             ema_align_long = (not require_align) or (ema2_i > ema_i)
             ema_align_short = (not require_align) or (ema2_i < ema_i)
             hw_filter_ok_arr[i] = hw_filter_ok
+            hw_long_allowed_arr[i] = hw_long_allowed
+            hw_short_allowed_arr[i] = hw_short_allowed
             stored_long_arr[i] = stored_long_ok
             stored_short_arr[i] = stored_short_ok
             ema_align_long_arr[i] = ema_align_long
@@ -443,6 +459,7 @@ class EMABreakOsc(Strategy):
                 and not delta_short_on
                 and cloud_long_arr[i]
                 and hw_filter_ok
+                and hw_long_allowed
                 and candle_ok
                 and ema_align_long
             ):
@@ -466,6 +483,7 @@ class EMABreakOsc(Strategy):
                 and not delta_long_on
                 and cloud_short_arr[i]
                 and hw_filter_ok
+                and hw_short_allowed
                 and candle_ok
                 and ema_align_short
             ):
@@ -517,6 +535,8 @@ class EMABreakOsc(Strategy):
                 "stored_long_ok": stored_long_arr.astype(int),
                 "stored_short_ok": stored_short_arr.astype(int),
                 "hw_filter_ok": hw_filter_ok_arr.astype(int),
+                "hw_long_allowed": hw_long_allowed_arr.astype(int),
+                "hw_short_allowed": hw_short_allowed_arr.astype(int),
                 "ema_align_long": ema_align_long_arr.astype(int),
                 "ema_align_short": ema_align_short_arr.astype(int),
                 "long_entry_signal": long_entries.astype(int),

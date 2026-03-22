@@ -57,6 +57,8 @@ class HMAOsci(Strategy):
         # Filters
         "hw_filter_on": True,
         "hw_extreme": 20.0,     # Block long if last HW value > +extreme, short if < -extreme
+        "hw_range_filter_on": False,
+        "hw_range": 16.0,       # Block all trades if abs(HW) <= range (consolidation zone)
         "max_sl_points": 50.0,  # Skip trade if SL distance > this many points
         "cooldown_bars": 1,
         "max_candle_pct": 0.3,  # Skip if |close-open|/close*100 > this value
@@ -82,6 +84,7 @@ class HMAOsci(Strategy):
         "mf_length": [25, 30, 35, 40],
         "mf_smooth": [4, 6, 8],
         "hw_extreme": [15.0, 20.0, 25.0],
+        "hw_range": [10.0, 14.0, 16.0, 20.0],
         "max_sl_points": [30.0, 40.0, 50.0, 60.0],
         "cooldown_bars": [0, 1, 2],
         "max_candle_pct": [0.2, 0.3, 0.4],
@@ -266,6 +269,8 @@ class HMAOsci(Strategy):
         mfS = p["mf_smooth"]
         hw_filter_on = p["hw_filter_on"]
         hw_extreme = p["hw_extreme"]
+        hw_range_filter_on = p["hw_range_filter_on"]
+        hw_range = p["hw_range"]
         max_sl_points = p["max_sl_points"]
         max_candle_pct = p["max_candle_pct"]
         tick_buf = p["tick_buffer"]
@@ -338,6 +343,7 @@ class HMAOsci(Strategy):
         candle_ok_arr = np.zeros(n, dtype=bool)
         hw_long_allowed_arr = np.zeros(n, dtype=bool)
         hw_short_allowed_arr = np.zeros(n, dtype=bool)
+        hw_range_ok_arr = np.zeros(n, dtype=bool)
         sl_long_ok_arr = np.zeros(n, dtype=bool)
         sl_short_ok_arr = np.zeros(n, dtype=bool)
 
@@ -408,11 +414,15 @@ class HMAOsci(Strategy):
             if np.isnan(last_confirmed_hw_val):
                 hw_long_allowed = True
                 hw_short_allowed = True
+                hw_range_ok = True
             else:
                 hw_long_allowed = (not hw_filter_on) or (last_confirmed_hw_val <= hw_extreme)
                 hw_short_allowed = (not hw_filter_on) or (last_confirmed_hw_val >= -hw_extreme)
+                # Condition 1: range filter — no trade if abs(HW) <= range (consolidation)
+                hw_range_ok = (not hw_range_filter_on) or (abs(last_confirmed_hw_val) > hw_range)
             hw_long_allowed_arr[i] = hw_long_allowed
             hw_short_allowed_arr[i] = hw_short_allowed
+            hw_range_ok_arr[i] = hw_range_ok
 
             # --- Cloud filter ---
             cloud_long_ok = cloud_long_arr[i]
@@ -440,6 +450,7 @@ class HMAOsci(Strategy):
                 and not delta_short_on
                 and cloud_long_ok
                 and hw_long_allowed
+                and hw_range_ok
                 and sl_long_ok
             ):
                 entry = round_tick(c)
@@ -460,6 +471,7 @@ class HMAOsci(Strategy):
                 and not delta_long_on
                 and cloud_short_ok
                 and hw_short_allowed
+                and hw_range_ok
                 and sl_short_ok
             ):
                 entry = round_tick(c)
@@ -500,6 +512,7 @@ class HMAOsci(Strategy):
                 "hma_break_short": hma_break_short_arr.astype(int),
                 "hw_long_allowed": hw_long_allowed_arr.astype(int),
                 "hw_short_allowed": hw_short_allowed_arr.astype(int),
+                "hw_range_ok": hw_range_ok_arr.astype(int),
                 "sl_long_ok": sl_long_ok_arr.astype(int),
                 "sl_short_ok": sl_short_ok_arr.astype(int),
                 "long_entry_signal": long_entries.astype(int),

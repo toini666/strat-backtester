@@ -28,6 +28,8 @@ simple int mfS = input.int(6,  "Money Flow Smooth", group=grp_mf, minval=2,  max
 grp_filters = "FILTRES ADDITIONNELS"
 i_hwFilterOn    = input.bool(true, "Activer le filtre extrême Hyperwave", group=grp_filters, tooltip="Long interdit si HW > +N (zone suracheté extrême). Short interdit si HW < -N (zone survendu extrême).")
 i_hwExtreme     = input.float(20.0, "Niveau extrême Hyperwave (+/-)", group=grp_filters, minval=0.0, tooltip="Long interdit si dernière HW confirmée > +N. Short interdit si < -N.")
+i_hwRangeFilterOn = input.bool(false, "Activer le filtre range Hyperwave", group=grp_filters, tooltip="Aucun trade (long ou short) si la dernière HW confirmée est comprise entre -N et +N.")
+i_hwRange         = input.float(16.0, "Niveau range Hyperwave (+/-)", group=grp_filters, minval=0.0, tooltip="Pas de trade si abs(HW) <= N.")
 i_maxSlPoints   = input.float(50.0, "Distance SL max (points)", group=grp_filters, minval=1.0, tooltip="Si le SL se trouve à plus de N points au moment du signal, le trade est ignoré.")
 i_cooldownBars  = input.int(1, "Bougies d'attente après clôture", group=grp_filters, tooltip="Délai minimum avant de reprendre une position après une clôture.", minval=0)
 i_maxCandlePct  = input.float(0.3, "Taille max bougie Entry (%)", group=grp_filters, step=0.1, minval=0.0, tooltip="Filtre les bougies dont la variation absolue entre open et close dépasse ce pourcentage du prix.")
@@ -299,6 +301,9 @@ bool cloudShortAllowed = hasActiveMfiCloud and activeMfiRefLine > activeMfiCloud
 bool hwLongAllowed  = not i_hwFilterOn or na(lastConfirmedHWValue) or lastConfirmedHWValue <= i_hwExtreme
 bool hwShortAllowed = not i_hwFilterOn or na(lastConfirmedHWValue) or lastConfirmedHWValue >= -i_hwExtreme
 
+// Filtre range: aucun trade si abs(HW) <= range (HW trop faible, pas de tendance claire)
+bool hwRangeOk = not i_hwRangeFilterOn or na(lastConfirmedHWValue) or math.abs(lastConfirmedHWValue) > i_hwRange
+
 // --- Taille de bougie ---
 getCandleSizePct(o, c) => c != 0 ? (math.abs(c - o) / c * 100) : na
 isCandleSizeOk(o, c) =>
@@ -332,10 +337,10 @@ bool cooldownOk = (bar_index - lastCloseBarIndex) >= i_cooldownBars
 bool longEntry  = false
 bool shortEntry = false
 
-if hmaBreakLong  and lastConfirmedHW == 1  and not deltaShortOn and cloudLongAllowed  and hwLongAllowed  and cooldownOk and slLongOk
+if hmaBreakLong  and lastConfirmedHW == 1  and not deltaShortOn and cloudLongAllowed  and hwLongAllowed  and hwRangeOk and cooldownOk and slLongOk
     longEntry  := true
 
-if hmaBreakShort and lastConfirmedHW == -1 and not deltaLongOn  and cloudShortAllowed and hwShortAllowed and cooldownOk and slShortOk
+if hmaBreakShort and lastConfirmedHW == -1 and not deltaLongOn  and cloudShortAllowed and hwShortAllowed and hwRangeOk and cooldownOk and slShortOk
     shortEntry := true
 
 // --- Calcul des niveaux ---
@@ -460,7 +465,7 @@ if positionActive and canAct and bar_index > lastActionBar
 
         if not tpPartialHit and anyInitialTPHit
             // Alerte à la clôture pour bouger le BE
-            alert('{"ticker":"' + syminfo.ticker + '","type":"MOVEBE","side":"BUY","entry":' + str.tostring(entryPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+            alert('{"ticker":"' + syminfo.ticker + '","type":"MOVEBE","side":"BUY","entry":' + str.tostring(roundToTick(activeTp1Long)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
 
             tpPartialHit         := true
             tpPartialJustHitLong := true
@@ -486,7 +491,7 @@ if positionActive and canAct and bar_index > lastActionBar
             alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(roundToTick(close)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
 
         if hmaInTpJustHitLong and not hitCanalExit
-            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(close) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(roundToTick(close)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
 
     else if currentSide == -1  // SHORT
         // Stop Loss (seulement si TP partiel pas encore pris → c'est le vrai SL, pas le BE)
@@ -502,7 +507,7 @@ if positionActive and canAct and bar_index > lastActionBar
 
         if not tpPartialHit and anyInitialTPHit
             // Alerte à la clôture pour bouger le BE
-            alert('{"ticker":"' + syminfo.ticker + '","type":"MOVEBE","side":"SELL","entry":' + str.tostring(entryPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+            alert('{"ticker":"' + syminfo.ticker + '","type":"MOVEBE","side":"SELL","entry":' + str.tostring(roundToTick(activeTp1Short)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
 
             tpPartialHit          := true
             tpPartialJustHitShort := true
@@ -528,7 +533,7 @@ if positionActive and canAct and bar_index > lastActionBar
             alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(roundToTick(close)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
 
         if hmaInTpJustHitShort and not hitCanalExit
-            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(close) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(roundToTick(close)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
 
     // --- Fermeture de la position ---
     bool closePosition = hitStopLoss or hitBreakeven or hitCanalExit
@@ -628,7 +633,7 @@ plotshape(forceCloseTriggered and forceCloseSide == -1 ? low  : na, "Force Close
 // STATUS TABLE
 // ============================================
 
-var table statusTable = table.new(position.top_right, 2, 12,
+var table statusTable = table.new(position.top_right, 2, 13,
      border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
 if barstate.islast
@@ -714,3 +719,10 @@ if barstate.islast
     color  tpStatusColor = tpPartialHit ? color.green : color.gray
     table.cell(statusTable, 0, 11, "TP Partial", text_color=color.white, bgcolor=color.new(color.gray, 80))
     table.cell(statusTable, 1, 11, tpStatus,     text_color=color.white, bgcolor=color.new(tpStatusColor, 70))
+
+    // HW Range filter status
+    bool hwRangeBlocked = i_hwRangeFilterOn and not na(lastConfirmedHWValue) and math.abs(lastConfirmedHWValue) <= i_hwRange
+    string hwRangeText = not i_hwRangeFilterOn ? "OFF" : (na(lastConfirmedHWValue) ? "—" : (hwRangeBlocked ? "BLOQUÉ (" + str.tostring(lastConfirmedHWValue, "#.#") + ")" : "OK (" + str.tostring(lastConfirmedHWValue, "#.#") + ")"))
+    color  hwRangeColor = not i_hwRangeFilterOn ? color.gray : (hwRangeBlocked ? color.red : color.green)
+    table.cell(statusTable, 0, 12, "HW Range",  text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(statusTable, 1, 12, hwRangeText, text_color=color.white, bgcolor=color.new(hwRangeColor, 70))
