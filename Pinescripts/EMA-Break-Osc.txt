@@ -25,17 +25,17 @@ simple int mfS = input.int(6,  "Money Flow Smooth", group=grp_mf, minval=2,  max
 grp_filters = "FILTRES ADDITIONNELS"
 i_breakWaitBars = input.int(2, "Bougies supp. après Break (0-50)", minval=0, maxval=50, group=grp_filters, tooltip="Nombre de bougies supplémentaires après le break EMA pour valider toutes les autres conditions. 0 = bougie du break uniquement.")
 i_hwFilterOn    = input.bool(true, "Activer le filtre valeur Hyperwave", group=grp_filters, tooltip="Ignore le signal si la dernière Hyperwave était comprise entre -N et +N.")
-i_hwLevel       = input.float(16.0, "Niveau d'exclusion Hyperwave (+/-)", group=grp_filters, minval=0.0)
+i_hwLevel       = input.float(20.0, "Niveau d'exclusion Hyperwave (+/-)", group=grp_filters, minval=0.0)
 i_hwExtremeFilterOn = input.bool(false, "Activer le filtre extrême Hyperwave", group=grp_filters, tooltip="Long interdit si HW > +N (zone suracheté extrême). Short interdit si HW < -N (zone survendu extrême).")
-i_hwExtreme         = input.float(20.0, "Niveau extrême Hyperwave (+/-)", group=grp_filters, minval=0.0, tooltip="Long interdit si dernière HW confirmée > +N. Short interdit si < -N.")
+i_hwExtreme         = input.float(10.0, "Niveau extrême Hyperwave (+/-)", group=grp_filters, minval=0.0, tooltip="Long interdit si dernière HW confirmée > +N. Short interdit si < -N.")
 i_cooldownBars  = input.int(1, "Bougies d'attente après clôture", group=grp_filters, tooltip="Délai minimum avant de reprendre une position après une clôture.", minval=0)
 i_maxCandlePct  = input.float(0.4, "Taille max bougie Break/Entry (%)", group=grp_filters, step=0.1, minval=0.0, tooltip="Filtre les bougies dont la variation absolue entre open et close depasse ce pourcentage du prix.")
 i_requireEmaAlignment = input.bool(false, "Exiger EMA secondaire dans le bon sens", group=grp_filters, tooltip="Long: EMA secondaire au-dessus de l'EMA principale. Short: EMA secondaire en-dessous de l'EMA principale.")
 
 // --- Risk Management ---
 grp_risk = "GESTION DES RISQUES"
-i_tickBuffer = input.int(2,     "Buffer SL (en ticks)",             group=grp_risk)
-i_rrPartial  = input.float(2.0, "Risk/Reward TP Partiel (BE)",     group=grp_risk, minval=0.5, step=0.5)
+i_tickBuffer = input.int(0,     "Buffer SL (en ticks)",             group=grp_risk)
+i_rrPartial  = input.float(2.5, "Risk/Reward TP Partiel (BE)",     group=grp_risk, minval=0.5, step=0.5)
 i_tpPoints   = input.float(50.0, "TP Points Fixes (Prix absolu, ex: 50.0)", group=grp_risk, minval=1.0)
 
 // --- Auto-close horaire ---
@@ -45,31 +45,31 @@ i_autoCloseM = input.int(0,  "Minute auto-close", minval=0, maxval=59, group=grp
 
 // --- Blackout (pas de nouveaux signaux) ---
 grp_bo = "Blackout (Bruxelles)"
-i_bo1On     = input.bool(false, "Blackout 1 actif", group=grp_bo, inline="bo1")
-i_bo1StartH = input.int(8,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo1")
+i_bo1On     = input.bool(true, "Blackout 1 actif", group=grp_bo, inline="bo1")
+i_bo1StartH = input.int(0,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo1")
 i_bo1StartM = input.int(0,  "M", minval=0, maxval=59, group=grp_bo, inline="bo1")
-i_bo1EndH   = input.int(8,  "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo1e")
-i_bo1EndM   = input.int(5,  "M", minval=0, maxval=59, group=grp_bo, inline="bo1e")
+i_bo1EndH   = input.int(6,  "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo1e")
+i_bo1EndM   = input.int(0,  "M", minval=0, maxval=59, group=grp_bo, inline="bo1e")
 
 i_bo2On     = input.bool(true, "Blackout 2 actif", group=grp_bo, inline="bo2")
-i_bo2StartH = input.int(11,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo2")
+i_bo2StartH = input.int(9,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo2")
 i_bo2StartM = input.int(0,  "M", minval=0, maxval=59, group=grp_bo, inline="bo2")
-i_bo2EndH   = input.int(13,  "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo2e")
+i_bo2EndH   = input.int(12,  "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo2e")
 i_bo2EndM   = input.int(0,  "M", minval=0, maxval=59, group=grp_bo, inline="bo2e")
 
-i_bo3On     = input.bool(false, "Blackout 3 actif", group=grp_bo, inline="bo3")
-i_bo3StartH = input.int(14, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo3")
-i_bo3StartM = input.int(30, "M", minval=0, maxval=59, group=grp_bo, inline="bo3")
-i_bo3EndH   = input.int(14, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo3e")
-i_bo3EndM   = input.int(35,  "M", minval=0, maxval=59, group=grp_bo, inline="bo3e")
+i_bo3On     = input.bool(true, "Blackout 3 actif", group=grp_bo, inline="bo3")
+i_bo3StartH = input.int(15, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo3")
+i_bo3StartM = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo3")
+i_bo3EndH   = input.int(17, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo3e")
+i_bo3EndM   = input.int(0,  "M", minval=0, maxval=59, group=grp_bo, inline="bo3e")
 
 i_bo4On     = input.bool(true, "Blackout 4 actif", group=grp_bo, inline="bo4")
-i_bo4StartH = input.int(15, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo4")
-i_bo4StartM = input.int(30, "M", minval=0, maxval=59, group=grp_bo, inline="bo4")
-i_bo4EndH   = input.int(21, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo4e")
-i_bo4EndM   = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo4e")
+i_bo4StartH = input.int(20, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo4")
+i_bo4StartM = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo4")
+i_bo4EndH   = input.int(23, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo4e")
+i_bo4EndM   = input.int(59, "M", minval=0, maxval=59, group=grp_bo, inline="bo4e")
 
-i_bo5On     = input.bool(true, "Blackout 5 actif", group=grp_bo, inline="bo5")
+i_bo5On     = input.bool(false, "Blackout 5 actif", group=grp_bo, inline="bo5")
 i_bo5StartH = input.int(21, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo5")
 i_bo5StartM = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo5")
 i_bo5EndH   = input.int(23, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo5e")
