@@ -238,8 +238,9 @@ export function Sidebar({
         const strategy = strategies.find((s) => s.name === preset.strategyName);
         if (strategy) {
             selectStrategy(strategy);
-            // Override params after selectStrategy resets to defaults
-            setTimeout(() => setParams(({ ...preset.params })), 0);
+            // Merge strategy defaults with preset params so new params added after
+            // the preset was saved still appear with their default values.
+            setTimeout(() => setParams({ ...strategy.default_params, ...preset.params }), 0);
         }
         // Data
         setSelectedSymbol(preset.symbol);
