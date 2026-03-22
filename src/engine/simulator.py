@@ -58,6 +58,8 @@ class SimulatorConfig:
     tp2_partial_pct: float = 0.25   # fraction of position to close at TP2
     ema_exit_after_tp1_only: bool = False  # if True, EMA cross exit only fires after TP1
     no_sl_after_tp1: bool = False  # if True, intra-bar SL/BE disabled after TP1 (exit only via close-based logic)
+    tp1_full_exit: bool = False          # if True, TP1 closes entire position (no partial); no breakeven move
+    inverse_canal_exit: bool = False     # if True, LONG exits when close>upper, SHORT exits when close<lower
 
     daily_win_limit_enabled: bool = False
     daily_win_limit: float = 500.0
@@ -264,6 +266,12 @@ def simulate(
     np_tp2_long = _tp2_long_s.values if _tp2_long_s is not None else None
     np_tp2_short = _tp2_short_s.values if _tp2_short_s is not None else None
     has_fixed_tp2 = np_tp2_long is not None or np_tp2_short is not None
+
+    # Optional size-risk price override (for inverse strategies: size by TP distance, not SL distance)
+    _sr_long_s = signals.get("size_risk_long")
+    _sr_short_s = signals.get("size_risk_short")
+    np_size_risk_long = _sr_long_s.values if _sr_long_s is not None else None
+    np_size_risk_short = _sr_short_s.values if _sr_short_s is not None else None
 
     # Optional canal series (for HMA-canal-based exits instead of EMA cross)
     _canal_lower_s = signals.get("canal_lower")
@@ -691,6 +699,9 @@ def simulate(
             if not pos.tp1_hit and not tp1_touched_this_bar and h >= pos.tp1_price:
                 if tp1_deferred_to_bar_close:
                     tp1_touched_this_bar = True
+                elif config.tp1_full_exit:
+                    _close_position(pos.tp1_price, exit_bar_time, exit_exec_time, "TP1")
+                    return True, tp1_touched_this_bar, tp2_touched_this_bar
                 else:
                     _partial_exit(
                         pos.tp1_price,
@@ -744,6 +755,9 @@ def simulate(
             if not pos.tp1_hit and not tp1_touched_this_bar and l <= pos.tp1_price:
                 if tp1_deferred_to_bar_close:
                     tp1_touched_this_bar = True
+                elif config.tp1_full_exit:
+                    _close_position(pos.tp1_price, exit_bar_time, exit_exec_time, "TP1")
+                    return True, tp1_touched_this_bar, tp2_touched_this_bar
                 else:
                     _partial_exit(
                         pos.tp1_price,
@@ -913,25 +927,33 @@ def simulate(
                     return True
 
         # Canal-based exits (HMA channel): replaces EMA cross logic when present.
-        # Long: TP2 when close re-enters canal; final exit when close < canalLower.
-        # Short: TP2 when close re-enters canal; final exit when close > canalUpper.
+        # Normal: Long exits when close < canalLower, Short exits when close > canalUpper.
+        # Inverse (inverse_canal_exit=True): Long exits when close > canalUpper, Short exits when close < canalLower.
         if has_canal_exit:
             cl = np_canal_lower[bar_idx] if bar_idx < len(np_canal_lower) else np.nan
             cu = np_canal_upper[bar_idx] if bar_idx < len(np_canal_upper) else np.nan
             if not np.isnan(cl) and not np.isnan(cu):
-                if not has_fixed_tp2 and config.tp2_partial_pct > 0 and pos.tp1_hit and not pos.tp2_hit:
+                if not config.inverse_canal_exit and not has_fixed_tp2 and config.tp2_partial_pct > 0 and pos.tp1_hit and not pos.tp2_hit:
                     inside_canal = close_price > cl and close_price < cu
                     if inside_canal:
                         exited = _partial_exit(close_price, config.tp2_partial_pct, "TP2_Canal", exit_bar_time, exit_exec_time)
                         if exited > 0:
                             pos.tp2_hit = True
                 if pos is not None:
-                    if pos.side == 1 and close_price < cl:
-                        _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
-                        return True
-                    elif pos.side == -1 and close_price > cu:
-                        _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
-                        return True
+                    if config.inverse_canal_exit:
+                        if pos.side == 1 and close_price > cu:
+                            _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                            return True
+                        elif pos.side == -1 and close_price < cl:
+                            _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                            return True
+                    else:
+                        if pos.side == 1 and close_price < cl:
+                            _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                            return True
+                        elif pos.side == -1 and close_price > cu:
+                            _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                            return True
             return pos is None
 
         ema_val = np_ema[bar_idx] if bar_idx < len(np_ema) else np.nan
@@ -1049,7 +1071,12 @@ def simulate(
                 if np.isnan(sl_price) or np.isnan(tp1_price):
                     continue
 
-                size = _calc_size(entry_price, sl_price)
+                risk_ref_long = (
+                    np_size_risk_long[i]
+                    if np_size_risk_long is not None and not np.isnan(np_size_risk_long[i])
+                    else sl_price
+                )
+                size = _calc_size(entry_price, risk_ref_long)
                 be_val = np_be_long[i]
                 tp2_val = np_tp2_long[i] if np_tp2_long is not None else np.nan
                 pos = _Position(
@@ -1079,7 +1106,12 @@ def simulate(
                 if np.isnan(sl_price) or np.isnan(tp1_price):
                     continue
 
-                size = _calc_size(entry_price, sl_price)
+                risk_ref_short = (
+                    np_size_risk_short[i]
+                    if np_size_risk_short is not None and not np.isnan(np_size_risk_short[i])
+                    else sl_price
+                )
+                size = _calc_size(entry_price, risk_ref_short)
                 be_val = np_be_short[i]
                 tp2_val = np_tp2_short[i] if np_tp2_short is not None else np.nan
                 pos = _Position(

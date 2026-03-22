@@ -162,11 +162,6 @@ class MarketDataStore:
         if not csv_path.exists():
             raise FileNotFoundError(f"CSV file missing: {csv_path}")
 
-        logger.info(f"Loading local data for {sym} from {csv_path}")
-        df = pd.read_csv(csv_path, index_col="Date")
-        df.index = pd.to_datetime(df.index, utc=True)
-        df.index = df.index.tz_convert(BRUSSELS_TZ)
-
         slice_start = pd.Timestamp(start)
         slice_end = pd.Timestamp(end)
 
@@ -177,14 +172,27 @@ class MarketDataStore:
         slice_start = slice_start.tz_convert(BRUSSELS_TZ)
         slice_end = slice_end.tz_convert(BRUSSELS_TZ)
 
-        # Recompose if needed
-        if timeframe != "1m":
-            df = recompose_bars(df, timeframe)
+        # Use pre-computed CSV if available, otherwise recompose from 1m
+        tf_csv_path = self._get_symbol_dir(sym) / f"{sym}_{timeframe}.csv"
+        if timeframe != "1m" and tf_csv_path.exists():
+            logger.info(f"Loading local data for {sym} from {tf_csv_path}")
+            df = pd.read_csv(tf_csv_path, index_col="Date")
+            df.index = pd.to_datetime(df.index, utc=True)
+            df.index = df.index.tz_convert(BRUSSELS_TZ)
             df = df[(df.index >= slice_start) & (df.index <= slice_end)]
-            logger.info(f"Recomposed {len(df)} bars at {timeframe} from local 1m data")
+            logger.info(f"Loaded {len(df)} {timeframe} bars from local store")
         else:
-            df = df[(df.index >= slice_start) & (df.index <= slice_end)]
-            logger.info(f"Loaded {len(df)} 1m bars from local store")
+            logger.info(f"Loading local data for {sym} from {csv_path}")
+            df = pd.read_csv(csv_path, index_col="Date")
+            df.index = pd.to_datetime(df.index, utc=True)
+            df.index = df.index.tz_convert(BRUSSELS_TZ)
+            if timeframe != "1m":
+                df = recompose_bars(df, timeframe)
+                df = df[(df.index >= slice_start) & (df.index <= slice_end)]
+                logger.info(f"Recomposed {len(df)} bars at {timeframe} from local 1m data")
+            else:
+                df = df[(df.index >= slice_start) & (df.index <= slice_end)]
+                logger.info(f"Loaded {len(df)} 1m bars from local store")
 
         return df
 

@@ -58,6 +58,7 @@ STRATEGY_WARMUP_BARS = {
     "EMA9Scalp": 80,        # EMA(7)→28 + setup detection margin
     "UTBotAlligatorST": 120, # SMMA(13)+offset(8)→~60 + ATR(10) + margin
     "HMAOsci": 250,         # EMA(7)→28 + HMA(84)→135 + MFI(35)→41 + margin
+    "HMAOsciInverse": 150,  # EMA(10)→40 + HMA(21)→30 + MFI(35)→41 + margin (shorter HMAs)
 }
 DEFAULT_WARMUP_BARS = 200
 BACKTEST_TZ = "Europe/Brussels"
@@ -571,6 +572,8 @@ def _run_simulator_backtest(
         tp2_partial_pct=float(simulator_settings.get("tp2_partial_pct", 0.25)),
         ema_exit_after_tp1_only=bool(simulator_settings.get("ema_exit_after_tp1_only", False)),
         no_sl_after_tp1=bool(simulator_settings.get("no_sl_after_tp1", False)),
+        tp1_full_exit=bool(simulator_settings.get("tp1_full_exit", False)),
+        inverse_canal_exit=bool(simulator_settings.get("inverse_canal_exit", False)),
         daily_win_limit_enabled=engine_settings.daily_win_limit_enabled,
         daily_win_limit=engine_settings.daily_win_limit,
         daily_loss_limit_enabled=engine_settings.daily_loss_limit_enabled,
@@ -771,6 +774,8 @@ def resimulate(req: ResimulateRequest):
         tp2_partial_pct=float(simulator_settings.get("tp2_partial_pct", 0.25)),
         ema_exit_after_tp1_only=bool(simulator_settings.get("ema_exit_after_tp1_only", False)),
         no_sl_after_tp1=bool(simulator_settings.get("no_sl_after_tp1", False)),
+        tp1_full_exit=bool(simulator_settings.get("tp1_full_exit", False)),
+        inverse_canal_exit=bool(simulator_settings.get("inverse_canal_exit", False)),
         daily_win_limit_enabled=engine_settings.daily_win_limit_enabled,
         daily_win_limit=engine_settings.daily_win_limit,
         daily_loss_limit_enabled=engine_settings.daily_loss_limit_enabled,
