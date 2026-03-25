@@ -700,7 +700,7 @@ def simulate(
                 if tp1_deferred_to_bar_close:
                     tp1_touched_this_bar = True
                 elif config.tp1_full_exit:
-                    _close_position(pos.tp1_price, exit_bar_time, exit_exec_time, "TP1")
+                    _close_position(pos.tp1_price, exit_bar_time, exit_exec_time, "TP")
                     return True, tp1_touched_this_bar, tp2_touched_this_bar
                 else:
                     _partial_exit(
@@ -756,7 +756,7 @@ def simulate(
                 if tp1_deferred_to_bar_close:
                     tp1_touched_this_bar = True
                 elif config.tp1_full_exit:
-                    _close_position(pos.tp1_price, exit_bar_time, exit_exec_time, "TP1")
+                    _close_position(pos.tp1_price, exit_bar_time, exit_exec_time, "TP")
                     return True, tp1_touched_this_bar, tp2_touched_this_bar
                 else:
                     _partial_exit(

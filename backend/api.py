@@ -55,10 +55,11 @@ SIGNAL_CACHE: Dict[str, Any] = {
 # EMA(n) converges to 99% accuracy after ~4n bars from first valid value.
 STRATEGY_WARMUP_BARS = {
     "EMABreakOsc": 250,     # EMA(30)→100 + MFI(35)+cloud(35)→112 + margin
-    "EMA9Scalp": 80,        # EMA(7)→28 + setup detection margin
+    "EMA9Scalp": 150,       # EMA(7)→28 + MFI(35)+smooth(6)+cloud→76 + oscillator margin
     "UTBotAlligatorST": 120, # SMMA(13)+offset(8)→~60 + ATR(10) + margin
     "HMAOsci": 250,         # EMA(7)→28 + HMA(84)→135 + MFI(35)→41 + margin
-    "HMAOsciInverse": 150,  # EMA(10)→40 + HMA(21)→30 + MFI(35)→41 + margin (shorter HMAs)
+    "HMASSLOsci": 250,      # EMA(7)→28 + HMA(84)→135 + EMA(60) SSL rangema→240 + margin
+    "RobReversal": 150,     # EMA(13)→52 + MFI(35)+cloud(35)→112 + margin
 }
 DEFAULT_WARMUP_BARS = 200
 BACKTEST_TZ = "Europe/Brussels"

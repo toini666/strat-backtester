@@ -1,0 +1,752 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Antoine - Indicateur Rob Reversal 15min
+
+//@version=6
+indicator("Rob Reversal Toini", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS - PARAMÈTRES CONFIGURABLES
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Paramètres EMA
+emaLength = input.int(13, "Période EMA", minval=1, group="Filtre EMA")
+emaColor = input.color(color.orange, "Couleur EMA", group="Filtre EMA")
+
+// Paramètres de la stratégie
+takeProfit = input.float(40, "Take Profit (points fixes)", minval=1, group="Stratégie", tooltip="TP en nombre de points fixes")
+riskRewardRatio = input.float(2.0, "Risk/Reward Ratio", minval=0.1, step=0.1, group="Stratégie", tooltip="RR souhaité. Le TP sera défini au minimum entre RR et points fixes")
+maxStopLoss = input.float(40, "Stop Loss Maximum (points)", minval=1, group="Stratégie")
+triggerBars = input.int(2, "Bougies pour déclencher", minval=1, maxval=10, group="Stratégie", tooltip="Nombre de bougies après le setup pour déclencher l'entrée")
+blockNewSignals = input.bool(true, "Bloquer signaux si trade en cours", group="Stratégie", tooltip="Si activé, n'affiche pas de nouveaux signaux tant que le TP ou SL n'est pas atteint")
+
+// Paramètres visuels
+showTradeSignals = input.bool(true, "Afficher les entrées de trade", group="Affichage")
+showLevels = input.bool(true, "Afficher les niveaux Entry/SL/TP", group="Affichage")
+
+// Paramètres horaires
+grpTime = "Auto-Close (Bruxelles)"
+i_autoCloseH = input.int(21, "Heure auto-close", minval=0, maxval=23, group=grpTime, inline="autoclose", tooltip="Ferme uniquement la position en cours à l'heure configurée.")
+i_autoCloseM = input.int(0, "Minute auto-close", minval=0, maxval=59, group=grpTime, inline="autoclose")
+
+grpBo = "Blackout (Bruxelles)"
+i_bo1On = input.bool(true, "Blackout 1 actif", group=grpBo, inline="bo1")
+i_bo1StartH = input.int(8, "Début H", minval=0, maxval=23, group=grpBo, inline="bo1")
+i_bo1StartM = input.int(0, "M", minval=0, maxval=59, group=grpBo, inline="bo1")
+i_bo1EndH = input.int(8, "Fin H", minval=0, maxval=23, group=grpBo, inline="bo1e")
+i_bo1EndM = input.int(5, "M", minval=0, maxval=59, group=grpBo, inline="bo1e")
+
+i_bo2On = input.bool(false, "Blackout 2 actif", group=grpBo, inline="bo2")
+i_bo2StartH = input.int(11, "Début H", minval=0, maxval=23, group=grpBo, inline="bo2")
+i_bo2StartM = input.int(0, "M", minval=0, maxval=59, group=grpBo, inline="bo2")
+i_bo2EndH = input.int(13, "Fin H", minval=0, maxval=23, group=grpBo, inline="bo2e")
+i_bo2EndM = input.int(0, "M", minval=0, maxval=59, group=grpBo, inline="bo2e")
+
+i_bo3On = input.bool(true, "Blackout 3 actif", group=grpBo, inline="bo3")
+i_bo3StartH = input.int(14, "Début H", minval=0, maxval=23, group=grpBo, inline="bo3")
+i_bo3StartM = input.int(30, "M", minval=0, maxval=59, group=grpBo, inline="bo3")
+i_bo3EndH = input.int(14, "Fin H", minval=0, maxval=23, group=grpBo, inline="bo3e")
+i_bo3EndM = input.int(35, "M", minval=0, maxval=59, group=grpBo, inline="bo3e")
+
+i_bo4On = input.bool(false, "Blackout 4 actif", group=grpBo, inline="bo4")
+i_bo4StartH = input.int(16, "Début H", minval=0, maxval=23, group=grpBo, inline="bo4")
+i_bo4StartM = input.int(0, "M", minval=0, maxval=59, group=grpBo, inline="bo4")
+i_bo4EndH = input.int(21, "Fin H", minval=0, maxval=23, group=grpBo, inline="bo4e")
+i_bo4EndM = input.int(0, "M", minval=0, maxval=59, group=grpBo, inline="bo4e")
+
+i_bo5On = input.bool(true, "Blackout 5 actif", group=grpBo, inline="bo5")
+i_bo5StartH = input.int(21, "Début H", minval=0, maxval=23, group=grpBo, inline="bo5")
+i_bo5StartM = input.int(0, "M", minval=0, maxval=59, group=grpBo, inline="bo5")
+i_bo5EndH = input.int(23, "Fin H", minval=0, maxval=23, group=grpBo, inline="bo5e")
+i_bo5EndM = input.int(0, "M", minval=0, maxval=59, group=grpBo, inline="bo5e")
+
+i_bo6On = input.bool(true, "Blackout 6 actif", group=grpBo, inline="bo6")
+i_bo6StartH = input.int(23, "Début H", minval=0, maxval=23, group=grpBo, inline="bo6")
+i_bo6StartM = input.int(0, "M", minval=0, maxval=59, group=grpBo, inline="bo6")
+i_bo6EndH = input.int(23, "Fin H", minval=0, maxval=23, group=grpBo, inline="bo6e")
+i_bo6EndM = input.int(5, "M", minval=0, maxval=59, group=grpBo, inline="bo6e")
+
+// --- 4Kings Oscillator ---
+grp_osc       = "4KINGS OSCILLATOR"
+simple int    mL = input.int(5,     "Hyper Wave Length", group=grp_osc, minval=1, maxval=21)
+simple string sT = input.string("SMA", "Signal Type",   group=grp_osc, options=["SMA", "EMA"])
+simple int    sL = input.int(3,     "Signal Length",     group=grp_osc, minval=2, maxval=10)
+
+// --- Smart Money Flow ---
+grp_mf      = "SMART MONEY FLOW"
+simple int mfL = input.int(35, "Money Flow Length", group=grp_mf, minval=10, maxval=55)
+simple int mfS = input.int(6,  "Money Flow Smooth", group=grp_mf, minval=2,  maxval=10)
+
+// --- Filtres Oscillateur ---
+grp_fil        = "FILTRES OSCILLATEUR"
+i_hwDirOn      = input.bool(true,  "① Activer sens HW",              group=grp_fil, tooltip="Long OK si dernière HW = crossover. Short OK si crossunder.")
+i_hwExtremeOn  = input.bool(true,  "② Activer extrêmes HW (cross)",  group=grp_fil, tooltip="Long interdit si valeur au cross > +N. Short interdit si < -N.")
+i_hwExtreme    = input.float(20.0, "   Niveau extrême (+/-)",        group=grp_fil, minval=0.0)
+i_sigExtremeOn = input.bool(true,  "③ Activer extrêmes SIG courant", group=grp_fil, tooltip="Long interdit si oscSig courant > +N. Short interdit si < -N. Même seuil que ②.")
+i_hwRangeOn    = input.bool(true,  "④ Activer range HW",             group=grp_fil, tooltip="Aucun trade si abs(HW au cross) <= N.")
+i_hwRange      = input.float(10.0, "   Niveau range (+/-)",          group=grp_fil, minval=0.0)
+i_cloudOn      = input.bool(true,  "⑤ Activer nuage MFI",            group=grp_fil, tooltip="Vérifie la position MFI par rapport à sa référence. Compensable par ⑥.")
+i_deltaOn      = input.bool(true,  "⑥ Activer deltas",               group=grp_fil, tooltip="Long OK si delta short non actif. Short OK si delta long non actif. Fallback pour ⑤.")
+i_cloudZeroOn  = input.bool(true,  "⑦ Activer nuage < 0 / > 0",      group=grp_fil, tooltip="Long OK si nuage MFI < 0. Short OK si nuage MFI > 0.")
+i_deltaExtOn   = input.bool(true,  "⑧ Activer extinction deltas",     group=grp_fil, tooltip="Long OK si delta short vient de s'éteindre. Short OK si delta long vient de s'éteindre.")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TYPES & VARIABLES D'ÉTAT
+// ══════════════════════════════════════════════════════════════════════════════
+
+type OscData
+    float sig
+    float sgD
+
+type MFIData
+    float   mfi
+    float[] blT
+    float[] brT
+
+var OscData osc = OscData.new(na, na)
+var MFIData mf  = MFIData.new(na, array.new<float>(1, na), array.new<float>(1, na))
+
+float oscSig     = na
+float oscSgD     = na
+float currentMfi = ta.sma(ta.mfi(hl2, mfL) - 50, mfS)
+
+var int   lastConfirmedHW      = 0
+var float lastConfirmedHWValue = na
+
+var bool tradeInProgress = false
+var float activeEntryPrice = na
+var float activeSL = na
+var float activeTP = na
+var bool isLongTrade = false
+var int lastActionBar = -1
+var int tradeEntryBar = 0
+
+var float pendingLongEntry = na
+var float pendingLongSL = na
+var float pendingLongTP = na
+var bool pendingLongOrder = false
+var int longSetupBarIndex = 0
+
+var float pendingShortEntry = na
+var float pendingShortSL = na
+var float pendingShortTP = na
+var bool pendingShortOrder = false
+var int shortSetupBarIndex = 0
+
+var line entryLine = na
+var line slLine = na
+var line tpLine = na
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FONCTIONS UTILITAIRES
+// ══════════════════════════════════════════════════════════════════════════════
+
+roundToTick(float price) =>
+    math.round(price / syminfo.mintick) * syminfo.mintick
+
+isInTimeSlot(int hh, int mm, int startH, int startM, int endH, int endM) =>
+    int curMin = hh * 60 + mm
+    int startMin = startH * 60 + startM
+    int endMin = endH * 60 + endM
+    bool endIsDayLastMinute = endH == 23 and endM == 59
+    if startMin <= endMin
+        curMin >= startMin and (endIsDayLastMinute ? curMin <= endMin : curMin < endMin)
+    else
+        curMin >= startMin or (endIsDayLastMinute ? curMin <= endMin : curMin < endMin)
+
+isBlackoutWindow() =>
+    int hh = hour(time_close, "Europe/Brussels")
+    int mm = minute(time_close, "Europe/Brussels")
+    bool b1 = i_bo1On and isInTimeSlot(hh, mm, i_bo1StartH, i_bo1StartM, i_bo1EndH, i_bo1EndM)
+    bool b2 = i_bo2On and isInTimeSlot(hh, mm, i_bo2StartH, i_bo2StartM, i_bo2EndH, i_bo2EndM)
+    bool b3 = i_bo3On and isInTimeSlot(hh, mm, i_bo3StartH, i_bo3StartM, i_bo3EndH, i_bo3EndM)
+    bool b4 = i_bo4On and isInTimeSlot(hh, mm, i_bo4StartH, i_bo4StartM, i_bo4EndH, i_bo4EndM)
+    bool b5 = i_bo5On and isInTimeSlot(hh, mm, i_bo5StartH, i_bo5StartM, i_bo5EndH, i_bo5EndM)
+    bool b6 = i_bo6On and isInTimeSlot(hh, mm, i_bo6StartH, i_bo6StartM, i_bo6EndH, i_bo6EndM)
+    b1 or b2 or b3 or b4 or b5 or b6
+
+isAutoCloseBar() =>
+    hour(time_close, "Europe/Brussels") == i_autoCloseH and minute(time_close, "Europe/Brussels") == i_autoCloseM
+
+method st(simple string src, float oscVal, simple int len) =>
+    float o = switch src
+        "SMA" => ta.sma(oscVal, len)
+        "EMA" => ta.ema(oscVal, len)
+    o
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CALCULS - EMA ET CONDITIONS DE BASE
+// ══════════════════════════════════════════════════════════════════════════════
+
+tickSize = syminfo.mintick
+
+ema8 = ta.ema(close, emaLength)
+plot(ema8, "EMA 8", color=emaColor, linewidth=2)
+
+barA_open = open[1]
+barA_close = close[1]
+barA_high = high[1]
+barA_low = low[1]
+
+barB_open = open
+barB_close = close
+barB_high = high
+barB_low = low
+
+barA_isBullish = barA_close > barA_open
+barA_isBearish = barA_close < barA_open
+
+barA_bodyHigh = math.max(barA_open, barA_close)
+barA_bodyLow = math.min(barA_open, barA_close)
+
+longCondition1 = barA_isBearish
+longCondition2 = barB_low < (barA_low - tickSize)
+longCondition3 = barB_close > barA_bodyLow and barB_close < barA_bodyHigh
+longCondition4 = barB_close > ema8
+
+shortCondition1 = barA_isBullish
+shortCondition2 = barB_high > (barA_high + tickSize)
+shortCondition3 = barB_close < barA_bodyHigh and barB_close > barA_bodyLow
+shortCondition4 = barB_close < ema8
+
+longSetupRaw = longCondition1 and longCondition2 and longCondition3 and longCondition4
+shortSetupRaw = shortCondition1 and shortCondition2 and shortCondition3 and shortCondition4
+
+bool inBlackout = isBlackoutWindow()
+bool autoCloseBar = isAutoCloseBar()
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CALCUL OSCILLATEUR
+// ══════════════════════════════════════════════════════════════════════════════
+
+calcOscillator() =>
+    float hi = ta.highest(mL)
+    float lo = ta.lowest(mL)
+    float av = ta.sma(hl2, mL)
+    osc.sig := ta.ema(ta.linreg((close - math.avg(hi, lo, av)) / (hi - lo) * 100, mL, 0), sL)
+    osc.sgD := sT.st(osc.sig, 2)
+
+calcMFI() =>
+    mf.mfi := currentMfi
+
+updateMFITracking() =>
+    if mf.mfi > 0
+        if mf.brT.size() > 1
+            mf.brT.pop()
+        if mf.blT.size() > mfL
+            mf.blT.pop()
+        if mf.mfi > mf.blT.avg()
+            mf.blT.unshift(mf.mfi)
+        else
+            float histMfi = currentMfi[mfL]
+            mf.blT.unshift(not na(histMfi) and histMfi > 0 ? histMfi : mf.mfi)
+    if mf.mfi < 0
+        if mf.blT.size() > 1
+            mf.blT.pop()
+        if mf.brT.size() > mfL
+            mf.brT.pop()
+        if mf.mfi < mf.blT.avg()
+            mf.brT.unshift(mf.mfi)
+        else
+            float histMfi = currentMfi[mfL]
+            mf.brT.unshift(not na(histMfi) and histMfi < 0 ? histMfi : mf.mfi)
+
+calcOscillator()
+calcMFI()
+oscSig := osc.sig
+oscSgD := osc.sgD
+updateMFITracking()
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONDITIONS OSCILLATEUR (8 filtres)
+// ══════════════════════════════════════════════════════════════════════════════
+
+bool hwCrossOver  = ta.crossover(oscSig,  oscSgD)
+bool hwCrossUnder = ta.crossunder(oscSig, oscSgD)
+
+if hwCrossOver
+    lastConfirmedHW      := 1
+    lastConfirmedHWValue := math.min(oscSig, oscSgD)
+if hwCrossUnder
+    lastConfirmedHW      := -1
+    lastConfirmedHWValue := math.max(oscSig, oscSgD)
+
+// ① Sens HW
+bool hwDirLongOk  = not i_hwDirOn or lastConfirmedHW == 1
+bool hwDirShortOk = not i_hwDirOn or lastConfirmedHW == -1
+
+// ② Extrêmes HW (valeur au dernier cross)
+bool hwExtremeLongOk  = not i_hwExtremeOn or na(lastConfirmedHWValue) or lastConfirmedHWValue <= i_hwExtreme
+bool hwExtremeShortOk = not i_hwExtremeOn or na(lastConfirmedHWValue) or lastConfirmedHWValue >= -i_hwExtreme
+
+// ③ Extrêmes SIG courant
+bool sigExtremeLongOk  = not i_sigExtremeOn or na(oscSig) or oscSig <= i_hwExtreme
+bool sigExtremeShortOk = not i_sigExtremeOn or na(oscSig) or oscSig >= -i_hwExtreme
+
+// ④ Range HW
+bool hwRangeOk = not i_hwRangeOn or na(lastConfirmedHWValue) or math.abs(lastConfirmedHWValue) > i_hwRange
+
+// ⑤ Nuage MFI
+float activeMfiRefLine  = mf.mfi > 0 ? mf.blT.avg() : mf.mfi < 0 ? mf.brT.avg() : na
+float activeMfiCloud    = mf.mfi
+bool  hasActiveMfiCloud = not na(activeMfiCloud) and not na(activeMfiRefLine) and activeMfiCloud != 0
+bool  cloudLongOk       = hasActiveMfiCloud and activeMfiRefLine < activeMfiCloud
+bool  cloudShortOk      = hasActiveMfiCloud and activeMfiRefLine > activeMfiCloud
+
+// ⑥ Deltas
+bool deltaLongOn  = oscSig > 0 and mf.mfi > 0
+bool deltaShortOn = oscSig < 0 and mf.mfi < 0
+bool deltaLongOk  = not i_deltaOn or not deltaShortOn
+bool deltaShortOk = not i_deltaOn or not deltaLongOn
+
+// ⑦ Nuage < 0 / > 0
+bool cloudZeroLongOk  = not i_cloudZeroOn or mf.mfi < 0
+bool cloudZeroShortOk = not i_cloudZeroOn or mf.mfi > 0
+
+// ⑧ Extinction deltas
+bool deltaExtLongOk  = not i_deltaExtOn or (deltaShortOn[1] and not deltaShortOn)
+bool deltaExtShortOk = not i_deltaExtOn or (deltaLongOn[1]  and not deltaLongOn)
+
+// ⑤+⑥ Gate combiné (OR)
+bool cloudOrDeltaLongOk  = not i_cloudOn or cloudLongOk  or (i_deltaOn and deltaLongOn)
+bool cloudOrDeltaShortOk = not i_cloudOn or cloudShortOk or (i_deltaOn and deltaShortOn)
+
+// Résultat oscillateur global
+bool oscAllLongOk  = hwDirLongOk  and hwExtremeLongOk  and sigExtremeLongOk  and hwRangeOk and cloudOrDeltaLongOk  and deltaLongOk  and cloudZeroLongOk  and deltaExtLongOk
+bool oscAllShortOk = hwDirShortOk and hwExtremeShortOk and sigExtremeShortOk and hwRangeOk and cloudOrDeltaShortOk and deltaShortOk and cloudZeroShortOk and deltaExtShortOk
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GESTION DES POSITIONS & TIMING
+// ══════════════════════════════════════════════════════════════════════════════
+
+bool justEnteredTrade = false
+bool justClosedTP = false
+bool justClosedSL = false
+bool justAutoClosed = false
+float priceAtClose = na
+float closedEntryPrice = na
+string sideAtClose = ""
+bool closedTradeWasLong = false
+
+bool canAct = bar_index > lastActionBar
+
+if tradeInProgress and autoCloseBar and canAct
+    justAutoClosed := true
+    priceAtClose := roundToTick(close)
+    closedEntryPrice := activeEntryPrice
+    closedTradeWasLong := isLongTrade
+    tradeInProgress := false
+    activeEntryPrice := na
+    activeSL := na
+    activeTP := na
+    lastActionBar := bar_index
+    canAct := false
+
+if tradeInProgress and canAct
+    if isLongTrade
+        if high >= activeTP
+            justClosedTP := true
+            priceAtClose := activeTP
+            closedEntryPrice := activeEntryPrice
+            sideAtClose := "SELL"
+            closedTradeWasLong := true
+            tradeInProgress := false
+            activeEntryPrice := na
+            activeSL := na
+            activeTP := na
+            lastActionBar := bar_index
+            canAct := false
+        else if low <= activeSL
+            justClosedSL := true
+            priceAtClose := activeSL
+            closedEntryPrice := activeEntryPrice
+            sideAtClose := "SELL"
+            closedTradeWasLong := true
+            tradeInProgress := false
+            activeEntryPrice := na
+            activeSL := na
+            activeTP := na
+            lastActionBar := bar_index
+            canAct := false
+    else
+        if low <= activeTP
+            justClosedTP := true
+            priceAtClose := activeTP
+            closedEntryPrice := activeEntryPrice
+            sideAtClose := "BUY"
+            closedTradeWasLong := false
+            tradeInProgress := false
+            activeEntryPrice := na
+            activeSL := na
+            activeTP := na
+            lastActionBar := bar_index
+            canAct := false
+        else if high >= activeSL
+            justClosedSL := true
+            priceAtClose := activeSL
+            closedEntryPrice := activeEntryPrice
+            sideAtClose := "BUY"
+            closedTradeWasLong := false
+            tradeInProgress := false
+            activeEntryPrice := na
+            activeSL := na
+            activeTP := na
+            lastActionBar := bar_index
+            canAct := false
+
+canShowNewSignals = not blockNewSignals or not tradeInProgress
+longSetup = longSetupRaw and canShowNewSignals and not inBlackout and canAct and oscAllLongOk
+shortSetup = shortSetupRaw and canShowNewSignals and not inBlackout and canAct and oscAllShortOk
+
+if longSetup and not justEnteredTrade
+    pendingLongEntry := barB_high + tickSize
+    rawSL = pendingLongEntry - barB_low
+    pendingLongSL := rawSL > maxStopLoss ? pendingLongEntry - maxStopLoss : barB_low
+
+    slDistance = pendingLongEntry - pendingLongSL
+    tpBasedOnRR = pendingLongEntry + (slDistance * riskRewardRatio)
+    tpBasedOnPoints = pendingLongEntry + takeProfit
+    pendingLongTP := math.min(tpBasedOnRR, tpBasedOnPoints)
+
+    pendingLongOrder := true
+    longSetupBarIndex := bar_index
+
+if shortSetup and not justEnteredTrade
+    pendingShortEntry := barB_low - tickSize
+    rawSL = barB_high - pendingShortEntry
+    pendingShortSL := rawSL > maxStopLoss ? pendingShortEntry + maxStopLoss : barB_high
+
+    slDistance = pendingShortSL - pendingShortEntry
+    tpBasedOnRR = pendingShortEntry - (slDistance * riskRewardRatio)
+    tpBasedOnPoints = pendingShortEntry - takeProfit
+    pendingShortTP := math.max(tpBasedOnRR, tpBasedOnPoints)
+
+    pendingShortOrder := true
+    shortSetupBarIndex := bar_index
+
+barsSinceLongSetup = bar_index - longSetupBarIndex
+barsSinceShortSetup = bar_index - shortSetupBarIndex
+
+inLongTriggerWindow = pendingLongOrder and barsSinceLongSetup >= 1 and barsSinceLongSetup <= triggerBars
+inShortTriggerWindow = pendingShortOrder and barsSinceShortSetup >= 1 and barsSinceShortSetup <= triggerBars
+
+longTriggered = inLongTriggerWindow and high >= pendingLongEntry and canShowNewSignals and not inBlackout and canAct
+shortTriggered = inShortTriggerWindow and low <= pendingShortEntry and canShowNewSignals and not inBlackout and canAct
+
+if longTriggered and not tradeInProgress
+    tradeInProgress := true
+    activeEntryPrice := pendingLongEntry
+    activeSL := pendingLongSL
+    activeTP := pendingLongTP
+    isLongTrade := true
+    tradeEntryBar := bar_index
+    justEnteredTrade := true
+    lastActionBar := bar_index
+
+    pendingLongOrder := false
+    pendingLongEntry := na
+    pendingLongSL := na
+    pendingLongTP := na
+    pendingShortOrder := false
+    pendingShortEntry := na
+    pendingShortSL := na
+    pendingShortTP := na
+
+else if shortTriggered and not tradeInProgress
+    tradeInProgress := true
+    activeEntryPrice := pendingShortEntry
+    activeSL := pendingShortSL
+    activeTP := pendingShortTP
+    isLongTrade := false
+    tradeEntryBar := bar_index
+    justEnteredTrade := true
+    lastActionBar := bar_index
+
+    pendingShortOrder := false
+    pendingShortEntry := na
+    pendingShortSL := na
+    pendingShortTP := na
+    pendingLongOrder := false
+    pendingLongEntry := na
+    pendingLongSL := na
+    pendingLongTP := na
+
+if longTriggered or (pendingLongOrder and barsSinceLongSetup > triggerBars)
+    pendingLongOrder := false
+    pendingLongEntry := na
+    pendingLongSL := na
+    pendingLongTP := na
+
+if shortTriggered or (pendingShortOrder and barsSinceShortSetup > triggerBars)
+    pendingShortOrder := false
+    pendingShortEntry := na
+    pendingShortSL := na
+    pendingShortTP := na
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LIGNES POINTILLÉES - NIVEAUX DU TRADE ACTIF
+// ══════════════════════════════════════════════════════════════════════════════
+
+if not showLevels or not tradeInProgress
+    if not na(entryLine)
+        line.delete(entryLine)
+        entryLine := na
+    if not na(slLine)
+        line.delete(slLine)
+        slLine := na
+    if not na(tpLine)
+        line.delete(tpLine)
+        tpLine := na
+else
+    if na(entryLine)
+        entryLine := line.new(tradeEntryBar, activeEntryPrice, bar_index, activeEntryPrice, color=color.white, style=line.style_dotted, width=1)
+    else
+        line.set_xy1(entryLine, tradeEntryBar, activeEntryPrice)
+        line.set_xy2(entryLine, bar_index, activeEntryPrice)
+
+    if na(slLine)
+        slLine := line.new(tradeEntryBar, activeSL, bar_index, activeSL, color=color.red, style=line.style_dotted, width=1)
+    else
+        line.set_xy1(slLine, tradeEntryBar, activeSL)
+        line.set_xy2(slLine, bar_index, activeSL)
+
+    if na(tpLine)
+        tpLine := line.new(tradeEntryBar, activeTP, bar_index, activeTP, color=color.green, style=line.style_dotted, width=1)
+    else
+        line.set_xy1(tpLine, tradeEntryBar, activeTP)
+        line.set_xy2(tpLine, bar_index, activeTP)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// AFFICHAGE VISUEL - SETUPS, ENTRÉES ET SORTIES
+// ══════════════════════════════════════════════════════════════════════════════
+
+plotshape(showTradeSignals and longSetup and not justEnteredTrade, title="Setup LONG", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small)
+plotshape(showTradeSignals and shortSetup and not justEnteredTrade, title="Setup SHORT", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small)
+
+bool longEntryConfirmed = justEnteredTrade and isLongTrade
+bool shortEntryConfirmed = justEnteredTrade and not isLongTrade
+
+plotshape(showTradeSignals and longEntryConfirmed, title="Entrée LONG", style=shape.circle, location=location.belowbar, color=color.green, size=size.tiny)
+plotshape(showTradeSignals and shortEntryConfirmed, title="Entrée SHORT", style=shape.circle, location=location.abovebar, color=color.red, size=size.tiny)
+
+plotshape(showTradeSignals and justClosedTP and closedTradeWasLong, title="TP Long", style=shape.xcross, location=location.abovebar, color=color.green, size=size.tiny)
+plotshape(showTradeSignals and justClosedSL and closedTradeWasLong, title="SL Long", style=shape.xcross, location=location.belowbar, color=color.red, size=size.tiny)
+plotshape(showTradeSignals and justClosedTP and not closedTradeWasLong, title="TP Short", style=shape.xcross, location=location.belowbar, color=color.green, size=size.tiny)
+plotshape(showTradeSignals and justClosedSL and not closedTradeWasLong, title="SL Short", style=shape.xcross, location=location.abovebar, color=color.red, size=size.tiny)
+
+bool autoCloseLongProfit = justAutoClosed and closedTradeWasLong and priceAtClose > closedEntryPrice
+bool autoCloseLongLoss = justAutoClosed and closedTradeWasLong and priceAtClose < closedEntryPrice
+bool autoCloseLongBE = justAutoClosed and closedTradeWasLong and priceAtClose == closedEntryPrice
+bool autoCloseShortProfit = justAutoClosed and not closedTradeWasLong and priceAtClose < closedEntryPrice
+bool autoCloseShortLoss = justAutoClosed and not closedTradeWasLong and priceAtClose > closedEntryPrice
+bool autoCloseShortBE = justAutoClosed and not closedTradeWasLong and priceAtClose == closedEntryPrice
+
+plotshape(showTradeSignals and autoCloseLongProfit, title="Auto-Close Long Profit", style=shape.xcross, location=location.abovebar, color=color.green, size=size.tiny)
+plotshape(showTradeSignals and autoCloseLongLoss, title="Auto-Close Long Loss", style=shape.xcross, location=location.belowbar, color=color.red, size=size.tiny)
+plotshape(showTradeSignals and autoCloseLongBE, title="Auto-Close Long BE", style=shape.xcross, location=location.abovebar, color=color.orange, size=size.tiny)
+plotshape(showTradeSignals and autoCloseShortProfit, title="Auto-Close Short Profit", style=shape.xcross, location=location.belowbar, color=color.green, size=size.tiny)
+plotshape(showTradeSignals and autoCloseShortLoss, title="Auto-Close Short Loss", style=shape.xcross, location=location.abovebar, color=color.red, size=size.tiny)
+plotshape(showTradeSignals and autoCloseShortBE, title="Auto-Close Short BE", style=shape.xcross, location=location.belowbar, color=color.orange, size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// STATUS TABLE
+// ══════════════════════════════════════════════════════════════════════════════
+
+f_icon(bool cond) => cond ? "✓" : "✗"
+f_bg(bool cond)   => cond ? color.new(color.green, 30) : color.new(color.red, 30)
+f_bgNa()          => color.new(color.gray, 60)
+
+TXT_WHITE = color.white
+HDR_BG    = color.new(color.navy, 20)
+SEP_BG    = color.new(color.gray,  80)
+
+var table statusTable = table.new(position.top_right, 3, 20, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+
+if barstate.islast
+    // ── En-têtes ──────────────────────────────────────────
+    table.cell(statusTable, 0, 0, "Condition",  text_color=TXT_WHITE, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(statusTable, 1, 0, "▲ LONG",    text_color=color.new(color.lime, 10), bgcolor=HDR_BG)
+    table.cell(statusTable, 2, 0, "▼ SHORT",   text_color=color.new(color.red,  10), bgcolor=HDR_BG)
+
+    // ── Blackout ──────────────────────────────────────────
+    table.cell(statusTable, 0, 1, "Blackout", text_color=TXT_WHITE, text_halign=text.align_left)
+    table.cell(statusTable, 1, 1, f_icon(not inBlackout), text_color=TXT_WHITE, bgcolor=f_bg(not inBlackout))
+    table.cell(statusTable, 2, 1, f_icon(not inBlackout), text_color=TXT_WHITE, bgcolor=f_bg(not inBlackout))
+
+    // ── Auto-Close ────────────────────────────────────────
+    table.cell(statusTable, 0, 2, "Auto-Close", text_color=TXT_WHITE, text_halign=text.align_left)
+    table.cell(statusTable, 1, 2, autoCloseBar ? "AUTO-CLOSE" : "—", text_color=TXT_WHITE, bgcolor=autoCloseBar ? color.new(color.orange, 70) : color.new(color.gray, 70))
+    table.cell(statusTable, 2, 2, autoCloseBar ? "AUTO-CLOSE" : "—", text_color=TXT_WHITE, bgcolor=autoCloseBar ? color.new(color.orange, 70) : color.new(color.gray, 70))
+
+    // ── Contexte A ────────────────────────────────────────
+    table.cell(statusTable, 0, 3, "Contexte A", text_color=TXT_WHITE, text_halign=text.align_left)
+    table.cell(statusTable, 1, 3, f_icon(longCondition1),  text_color=TXT_WHITE, bgcolor=f_bg(longCondition1))
+    table.cell(statusTable, 2, 3, f_icon(shortCondition1), text_color=TXT_WHITE, bgcolor=f_bg(shortCondition1))
+
+    // ── Sweep B ───────────────────────────────────────────
+    table.cell(statusTable, 0, 4, "Sweep B", text_color=TXT_WHITE, text_halign=text.align_left)
+    table.cell(statusTable, 1, 4, f_icon(longCondition2),  text_color=TXT_WHITE, bgcolor=f_bg(longCondition2))
+    table.cell(statusTable, 2, 4, f_icon(shortCondition2), text_color=TXT_WHITE, bgcolor=f_bg(shortCondition2))
+
+    // ── Close Corps ───────────────────────────────────────
+    table.cell(statusTable, 0, 5, "Close Corps", text_color=TXT_WHITE, text_halign=text.align_left)
+    table.cell(statusTable, 1, 5, f_icon(longCondition3),  text_color=TXT_WHITE, bgcolor=f_bg(longCondition3))
+    table.cell(statusTable, 2, 5, f_icon(shortCondition3), text_color=TXT_WHITE, bgcolor=f_bg(shortCondition3))
+
+    // ── Filtre EMA ────────────────────────────────────────
+    table.cell(statusTable, 0, 6, "Filtre EMA", text_color=TXT_WHITE, text_halign=text.align_left)
+    table.cell(statusTable, 1, 6, f_icon(longCondition4),  text_color=TXT_WHITE, bgcolor=f_bg(longCondition4))
+    table.cell(statusTable, 2, 6, f_icon(shortCondition4), text_color=TXT_WHITE, bgcolor=f_bg(shortCondition4))
+
+    // ── ① Sens HW ─────────────────────────────────────────
+    string hwDirStr = na(lastConfirmedHWValue)
+         ? "① Sens HW (—)"
+         : lastConfirmedHW == 1
+             ? "① Sens HW (▲ " + str.tostring(math.round(lastConfirmedHWValue, 1)) + ")"
+             : "① Sens HW (▼ " + str.tostring(math.round(lastConfirmedHWValue, 1)) + ")"
+    table.cell(statusTable, 0, 7, hwDirStr, text_color=TXT_WHITE, text_halign=text.align_left)
+    table.cell(statusTable, 1, 7, i_hwDirOn ? f_icon(hwDirLongOk)  : "—", text_color=TXT_WHITE, bgcolor=i_hwDirOn ? f_bg(hwDirLongOk)  : f_bgNa())
+    table.cell(statusTable, 2, 7, i_hwDirOn ? f_icon(hwDirShortOk) : "—", text_color=TXT_WHITE, bgcolor=i_hwDirOn ? f_bg(hwDirShortOk) : f_bgNa())
+
+    // ── ② Extrêmes HW ────────────────────────────────────
+    string hwExtStr = "② HW Extrême (±" + str.tostring(i_hwExtreme, "#") + ")"
+         + (na(lastConfirmedHWValue) ? " —" : " = " + str.tostring(math.round(lastConfirmedHWValue, 1)))
+    table.cell(statusTable, 0, 8, hwExtStr, text_color=TXT_WHITE, text_halign=text.align_left)
+    table.cell(statusTable, 1, 8, i_hwExtremeOn ? f_icon(hwExtremeLongOk)  : "—", text_color=TXT_WHITE, bgcolor=i_hwExtremeOn ? f_bg(hwExtremeLongOk)  : f_bgNa())
+    table.cell(statusTable, 2, 8, i_hwExtremeOn ? f_icon(hwExtremeShortOk) : "—", text_color=TXT_WHITE, bgcolor=i_hwExtremeOn ? f_bg(hwExtremeShortOk) : f_bgNa())
+
+    // ── ③ Extrêmes SIG ───────────────────────────────────
+    string sigExtStr = "③ SIG Extrême (±" + str.tostring(i_hwExtreme, "#") + ")"
+         + (na(oscSig) ? " —" : " = " + str.tostring(math.round(oscSig, 1)))
+    table.cell(statusTable, 0, 9, sigExtStr, text_color=TXT_WHITE, text_halign=text.align_left)
+    table.cell(statusTable, 1, 9, i_sigExtremeOn ? f_icon(sigExtremeLongOk)  : "—", text_color=TXT_WHITE, bgcolor=i_sigExtremeOn ? f_bg(sigExtremeLongOk)  : f_bgNa())
+    table.cell(statusTable, 2, 9, i_sigExtremeOn ? f_icon(sigExtremeShortOk) : "—", text_color=TXT_WHITE, bgcolor=i_sigExtremeOn ? f_bg(sigExtremeShortOk) : f_bgNa())
+
+    // ── ④ Range HW ────────────────────────────────────────
+    string hwRngStr = "④ HW Range (±" + str.tostring(i_hwRange, "#") + ")"
+         + (na(lastConfirmedHWValue) ? " —" : " |" + str.tostring(math.round(math.abs(lastConfirmedHWValue), 1)) + "|")
+    table.cell(statusTable, 0, 10, hwRngStr, text_color=TXT_WHITE, text_halign=text.align_left)
+    table.cell(statusTable, 1, 10, i_hwRangeOn ? f_icon(hwRangeOk) : "—", text_color=TXT_WHITE, bgcolor=i_hwRangeOn ? f_bg(hwRangeOk) : f_bgNa())
+    table.cell(statusTable, 2, 10, i_hwRangeOn ? f_icon(hwRangeOk) : "—", text_color=TXT_WHITE, bgcolor=i_hwRangeOn ? f_bg(hwRangeOk) : f_bgNa())
+
+    // ── ⑤ Nuage MFI ──────────────────────────────────────
+    string mfiCurStr  = not na(activeMfiCloud)   ? str.tostring(math.round(activeMfiCloud,   1)) : "—"
+    string mfiRefStr  = not na(activeMfiRefLine) ? str.tostring(math.round(activeMfiRefLine, 1)) : "—"
+    string cloudStr   = "⑤ Nuage (" + mfiCurStr + " / " + mfiRefStr + ")"
+    color cloudBgL = not i_cloudOn ? f_bgNa()
+         : cloudLongOk                    ? color.new(color.green,  30)
+         : (i_deltaOn and deltaLongOn)     ? color.new(color.orange, 30)
+         : color.new(color.red, 30)
+    color cloudBgS = not i_cloudOn ? f_bgNa()
+         : cloudShortOk                   ? color.new(color.green,  30)
+         : (i_deltaOn and deltaShortOn)    ? color.new(color.orange, 30)
+         : color.new(color.red, 30)
+    string cloudIconL = not i_cloudOn ? "—" : cloudLongOk  ? "✓" : (i_deltaOn and deltaLongOn)  ? "~" : "✗"
+    string cloudIconS = not i_cloudOn ? "—" : cloudShortOk ? "✓" : (i_deltaOn and deltaShortOn) ? "~" : "✗"
+    table.cell(statusTable, 0, 11, cloudStr,   text_color=TXT_WHITE, text_halign=text.align_left)
+    table.cell(statusTable, 1, 11, cloudIconL, text_color=TXT_WHITE, bgcolor=cloudBgL)
+    table.cell(statusTable, 2, 11, cloudIconS, text_color=TXT_WHITE, bgcolor=cloudBgS)
+
+    // ── ⑥ Deltas ─────────────────────────────────────────
+    string sigValStr = not na(oscSig) ? str.tostring(math.round(oscSig, 1)) : "—"
+    string mfiValStr = not na(activeMfiCloud) ? str.tostring(math.round(activeMfiCloud, 1)) : "—"
+    string deltaStr  = "⑥ Deltas (sig " + sigValStr + " / mfi " + mfiValStr + ")"
+    table.cell(statusTable, 0, 12, deltaStr, text_color=TXT_WHITE, text_halign=text.align_left)
+    table.cell(statusTable, 1, 12, i_deltaOn ? f_icon(deltaLongOk)  : "—", text_color=TXT_WHITE, bgcolor=i_deltaOn ? f_bg(deltaLongOk)  : f_bgNa())
+    table.cell(statusTable, 2, 12, i_deltaOn ? f_icon(deltaShortOk) : "—", text_color=TXT_WHITE, bgcolor=i_deltaOn ? f_bg(deltaShortOk) : f_bgNa())
+
+    // ── ⑦ Nuage < 0 / > 0 ────────────────────────────────
+    string cloudZeroStr = "⑦ Nuage < 0 / > 0 (" + (not na(activeMfiCloud) ? str.tostring(math.round(activeMfiCloud, 1)) : "—") + ")"
+    table.cell(statusTable, 0, 13, cloudZeroStr, text_color=TXT_WHITE, text_halign=text.align_left)
+    table.cell(statusTable, 1, 13, i_cloudZeroOn ? f_icon(cloudZeroLongOk)  : "—", text_color=TXT_WHITE, bgcolor=i_cloudZeroOn ? f_bg(cloudZeroLongOk)  : f_bgNa())
+    table.cell(statusTable, 2, 13, i_cloudZeroOn ? f_icon(cloudZeroShortOk) : "—", text_color=TXT_WHITE, bgcolor=i_cloudZeroOn ? f_bg(cloudZeroShortOk) : f_bgNa())
+
+    // ── ⑧ Extinction deltas ──────────────────────────────
+    table.cell(statusTable, 0, 14, "⑧ Extinction deltas", text_color=TXT_WHITE, text_halign=text.align_left)
+    table.cell(statusTable, 1, 14, i_deltaExtOn ? f_icon(deltaExtLongOk)  : "—", text_color=TXT_WHITE, bgcolor=i_deltaExtOn ? f_bg(deltaExtLongOk)  : f_bgNa())
+    table.cell(statusTable, 2, 14, i_deltaExtOn ? f_icon(deltaExtShortOk) : "—", text_color=TXT_WHITE, bgcolor=i_deltaExtOn ? f_bg(deltaExtShortOk) : f_bgNa())
+
+    // ── Séparateur ────────────────────────────────────────
+    table.cell(statusTable, 0, 15, "", bgcolor=SEP_BG, text_size=size.tiny)
+    table.cell(statusTable, 1, 15, "", bgcolor=SEP_BG, text_size=size.tiny)
+    table.cell(statusTable, 2, 15, "", bgcolor=SEP_BG, text_size=size.tiny)
+
+    // ── Setup ─────────────────────────────────────────────
+    string setupStatusL = longSetupRaw  ? (longSetup  ? "✓ READY" : inBlackout ? "BLACKOUT" : not oscAllLongOk  ? "OSC KO" : not canAct ? "LOCKED" : "BLOCKED") : "✗"
+    string setupStatusS = shortSetupRaw ? (shortSetup ? "✓ READY" : inBlackout ? "BLACKOUT" : not oscAllShortOk ? "OSC KO" : not canAct ? "LOCKED" : "BLOCKED") : "✗"
+    color setupColorL = longSetupRaw  ? (longSetup  ? color.new(color.green, 15) : color.new(color.orange, 30)) : color.new(color.red, 35)
+    color setupColorS = shortSetupRaw ? (shortSetup ? color.new(color.green, 15) : color.new(color.orange, 30)) : color.new(color.red, 35)
+    table.cell(statusTable, 0, 16, "Setup", text_color=TXT_WHITE, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(statusTable, 1, 16, setupStatusL, text_color=TXT_WHITE, bgcolor=setupColorL)
+    table.cell(statusTable, 2, 16, setupStatusS, text_color=TXT_WHITE, bgcolor=setupColorS)
+
+    // ── Pending ───────────────────────────────────────────
+    table.cell(statusTable, 0, 17, "Pending", text_color=TXT_WHITE, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(statusTable, 1, 17, pendingLongOrder  ? "LONG"  : "—", text_color=TXT_WHITE, bgcolor=pendingLongOrder  ? color.new(color.green, 30) : f_bgNa())
+    table.cell(statusTable, 2, 17, pendingShortOrder ? "SHORT" : "—", text_color=TXT_WHITE, bgcolor=pendingShortOrder ? color.new(color.red,   30) : f_bgNa())
+
+    // ── Trigger ───────────────────────────────────────────
+    string trigLongStr  = inLongTriggerWindow  ? "LONG ("  + str.tostring(math.max(triggerBars - barsSinceLongSetup,  0)) + ")" : "—"
+    string trigShortStr = inShortTriggerWindow ? "SHORT (" + str.tostring(math.max(triggerBars - barsSinceShortSetup, 0)) + ")" : "—"
+    table.cell(statusTable, 0, 18, "Trigger", text_color=TXT_WHITE, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(statusTable, 1, 18, trigLongStr,  text_color=TXT_WHITE, bgcolor=inLongTriggerWindow  ? color.new(color.green, 30) : f_bgNa())
+    table.cell(statusTable, 2, 18, trigShortStr, text_color=TXT_WHITE, bgcolor=inShortTriggerWindow ? color.new(color.red,   30) : f_bgNa())
+
+    // ── Position ──────────────────────────────────────────
+    table.cell(statusTable, 0, 19, "Position", text_color=TXT_WHITE, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(statusTable, 1, 19, tradeInProgress and isLongTrade      ? "LONG"  : "—", text_color=TXT_WHITE, bgcolor=tradeInProgress and isLongTrade      ? color.new(color.green, 30) : f_bgNa())
+    table.cell(statusTable, 2, 19, tradeInProgress and not isLongTrade  ? "SHORT" : "—", text_color=TXT_WHITE, bgcolor=tradeInProgress and not isLongTrade  ? color.new(color.red,   30) : f_bgNa())
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ALERTES DYNAMIQUES EN JSON
+// ══════════════════════════════════════════════════════════════════════════════
+
+formatPrice(price) =>
+    str.tostring(price, format.mintick)
+
+formatTimeframe() =>
+    tf = timeframe.period
+    result = ""
+    if str.contains(tf, "S")
+        result := "S" + str.replace(tf, "S", "")
+    else if str.contains(tf, "D")
+        if tf == "D"
+            result := "D1"
+        else
+            result := "D" + str.replace(tf, "D", "")
+    else if str.contains(tf, "W")
+        if tf == "W"
+            result := "W1"
+        else
+            result := "W" + str.replace(tf, "W", "")
+    else if str.contains(tf, "M")
+        if tf == "M"
+            result := "MO1"
+        else
+            result := "MO" + str.replace(tf, "M", "")
+    else
+        tfInt = str.tonumber(tf)
+        if tfInt >= 60
+            result := "H" + str.tostring(math.round(tfInt / 60))
+        else
+            result := "M" + tf
+    result
+
+tfFormatted = formatTimeframe()
+
+if longEntryConfirmed
+    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":' + formatPrice(activeEntryPrice) + ',"stop":' + formatPrice(activeSL) + ',"tp":' + formatPrice(activeTP) + ',"strat":"RobReversal-' + syminfo.ticker + '-' + tfFormatted + '","timeframe":"' + tfFormatted + '"}'
+    alert(alertMsg, alert.freq_once_per_bar)
+
+if shortEntryConfirmed
+    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":' + formatPrice(activeEntryPrice) + ',"stop":' + formatPrice(activeSL) + ',"tp":' + formatPrice(activeTP) + ',"strat":"RobReversal-' + syminfo.ticker + '-' + tfFormatted + '","timeframe":"' + tfFormatted + '"}'
+    alert(alertMsg, alert.freq_once_per_bar)
+
+if justClosedTP
+    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + sideAtClose + '","entry":' + formatPrice(priceAtClose) + ',"strat":"RobReversal-' + syminfo.ticker + '-' + tfFormatted + '","timeframe":"' + tfFormatted + '"}'
+    alert(alertMsg, alert.freq_once_per_bar)
+    justClosedTP := false
+
+if justClosedSL
+    alertMsg = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + sideAtClose + '","entry":' + formatPrice(priceAtClose) + ',"strat":"RobReversal-' + syminfo.ticker + '-' + tfFormatted + '","timeframe":"' + tfFormatted + '"}'
+    alert(alertMsg, alert.freq_once_per_bar)
+    justClosedSL := false

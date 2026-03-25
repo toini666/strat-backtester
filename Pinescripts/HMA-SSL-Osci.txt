@@ -1,0 +1,806 @@
+//@version=6
+indicator("HMA-SSL-Osci", shorttitle="HMA-SSL-Osci", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ============================================
+// PARAMÈTRES INPUT
+// ============================================
+
+// --- HMA Ribbon ---
+grp_hma = "HMA RIBBON"
+i_emaLen     = input.int(7,    "Longueur EMA (Source)",        group=grp_hma, minval=1)
+i_hma1Len    = input.int(42,   "Longueur HMA Principale",      group=grp_hma, minval=1)
+i_hma2Len    = input.int(84,   "Longueur HMA Secondaire",      group=grp_hma, minval=1)
+i_ampMult    = input.float(2.0, "Multiplicateur d'Amplitude",  group=grp_hma, step=0.1, minval=0)
+i_timeOffset = input.int(-1,    "Offset (Vitesse Horizontale)", group=grp_hma, step=1, tooltip="Décale visuellement le canal HMA horizontalement. N'affecte pas les calculs.")
+
+// --- SSL ---
+grp_ssl   = "SSL (GATOR)"
+len_ssl   = input.int(60,    "Période SSL",                    group=grp_ssl)
+multy_ssl = input.float(0.2, "Multiplicateur Canal Keltner",   group=grp_ssl)
+bColorSSL = input.color(color.new(#00c3ff, 0), "Couleur SSL Haussière", group=grp_ssl)
+sColorSSL = input.color(color.new(#ff0062, 0), "Couleur SSL Baissière", group=grp_ssl)
+
+// --- 4Kings Oscillator ---
+grp_osc       = "4KINGS OSCILLATOR"
+simple int    mL = input.int(5,     "Hyper Wave Length", group=grp_osc, minval=1, maxval=21)
+simple string sT = input.string("SMA", "Signal Type",   group=grp_osc, options=["SMA", "EMA"])
+simple int    sL = input.int(3,     "Signal Length",     group=grp_osc, minval=2, maxval=10)
+
+// --- Smart Money Flow ---
+grp_mf      = "SMART MONEY FLOW"
+simple int mfL = input.int(35, "Money Flow Length", group=grp_mf, minval=10, maxval=55)
+simple int mfS = input.int(6,  "Money Flow Smooth", group=grp_mf, minval=2,  maxval=10)
+
+// --- Filtres Oscillateur ---
+grp_fil        = "FILTRES OSCILLATEUR"
+i_hwDirOn      = input.bool(true,  "① Activer sens HW",              group=grp_fil, tooltip="Long OK si dernière HW = crossover. Short OK si crossunder.")
+i_hwExtremeOn  = input.bool(true,  "② Activer extrêmes HW (cross)",  group=grp_fil, tooltip="Long interdit si valeur au cross > +N. Short interdit si < -N.")
+i_hwExtreme    = input.float(20.0, "   Niveau extrême (+/-)",        group=grp_fil, minval=0.0)
+i_sigExtremeOn = input.bool(true,  "③ Activer extrêmes SIG courant", group=grp_fil, tooltip="Long interdit si oscSig courant > +N. Short interdit si < -N. Même seuil que ②.")
+i_hwRangeOn    = input.bool(true,  "④ Activer range HW",             group=grp_fil, tooltip="Aucun trade si abs(HW au cross) <= N.")
+i_hwRange      = input.float(10.0, "   Niveau range (+/-)",          group=grp_fil, minval=0.0)
+i_cloudOn      = input.bool(true,  "⑤ Activer nuage MFI",            group=grp_fil, tooltip="Vérifie la position MFI par rapport à sa référence. Compensable par ⑥.")
+i_deltaOn      = input.bool(true,  "⑥ Activer deltas",               group=grp_fil, tooltip="Long OK si delta short non actif. Short OK si delta long non actif. Fallback pour ⑤.")
+i_cloudZeroOn  = input.bool(true,  "⑦ Activer nuage < 0 / > 0",      group=grp_fil, tooltip="Long OK si nuage MFI < 0. Short OK si nuage MFI > 0.")
+i_deltaExtOn   = input.bool(true,  "⑧ Activer extinction deltas",     group=grp_fil, tooltip="Long OK si delta short vient de s'éteindre. Short OK si delta long vient de s'éteindre.")
+
+// --- Gestion des risques ---
+grp_risk       = "GESTION DES RISQUES"
+i_tickBuffer   = input.int(0,      "Buffer SL (en ticks)",         group=grp_risk)
+i_rrPartial    = input.float(2.0,  "Risk/Reward TP Partiel",       group=grp_risk, minval=0.5, step=0.5)
+i_tpPoints     = input.float(50.0, "TP Points Fixes",              group=grp_risk, minval=1.0)
+i_maxSlPoints  = input.float(100.0,"Distance SL max (points)",     group=grp_risk, minval=1.0, tooltip="Trade ignoré si le SL (bas SSL) se trouve à plus de N points.")
+i_cooldownBars = input.int(1,      "Bougies d'attente post-close", group=grp_risk, minval=0)
+i_maxCandlePct = input.float(0.3,  "Taille max bougie Entry (%)",  group=grp_risk, step=0.1, minval=0.0, tooltip="Trade ignoré si abs(close - open) / close > N%. 0 = désactivé.")
+
+// --- Auto-Close ---
+grp_time     = "Auto-Close (Bruxelles)"
+i_autoCloseH = input.int(21, "Heure",   minval=0, maxval=23, group=grp_time, inline="autoclose")
+i_autoCloseM = input.int(0,  "Minute",  minval=0, maxval=59, group=grp_time, inline="autoclose")
+
+// --- Blackout ---
+grp_bo      = "Blackout (Bruxelles)"
+i_bo1On     = input.bool(false, "Blackout 1 actif", group=grp_bo, inline="bo1")
+i_bo1StartH = input.int(8,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo1")
+i_bo1StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo1")
+i_bo1EndH   = input.int(8,  "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo1e")
+i_bo1EndM   = input.int(5,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo1e")
+
+i_bo2On     = input.bool(false, "Blackout 2 actif", group=grp_bo, inline="bo2")
+i_bo2StartH = input.int(11, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo2")
+i_bo2StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo2")
+i_bo2EndH   = input.int(13, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo2e")
+i_bo2EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo2e")
+
+i_bo3On     = input.bool(false, "Blackout 3 actif", group=grp_bo, inline="bo3")
+i_bo3StartH = input.int(14, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo3")
+i_bo3StartM = input.int(30, "M",       minval=0, maxval=59, group=grp_bo, inline="bo3")
+i_bo3EndH   = input.int(14, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo3e")
+i_bo3EndM   = input.int(35, "M",       minval=0, maxval=59, group=grp_bo, inline="bo3e")
+
+i_bo4On     = input.bool(false, "Blackout 4 actif", group=grp_bo, inline="bo4")
+i_bo4StartH = input.int(15, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo4")
+i_bo4StartM = input.int(30, "M",       minval=0, maxval=59, group=grp_bo, inline="bo4")
+i_bo4EndH   = input.int(21, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo4e")
+i_bo4EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo4e")
+
+i_bo5On     = input.bool(true,  "Blackout 5 actif", group=grp_bo, inline="bo5")
+i_bo5StartH = input.int(21, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo5")
+i_bo5StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo5")
+i_bo5EndH   = input.int(23, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo5e")
+i_bo5EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo5e")
+
+i_bo6On     = input.bool(false, "Blackout 6 actif", group=grp_bo, inline="bo6")
+i_bo6StartH = input.int(23, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo6")
+i_bo6StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo6")
+i_bo6EndH   = input.int(23, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo6e")
+i_bo6EndM   = input.int(5,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo6e")
+
+// --- Tableau ---
+grp_tbl      = "TABLEAU"
+simple string i_tblPos  = input.string("top_right", "Position", group=grp_tbl,
+     options=["top_right","top_left","bottom_right","bottom_left",
+              "top_center","bottom_center","middle_right","middle_left","middle_center"])
+simple string i_tblSize = input.string("small", "Taille texte", group=grp_tbl,
+     options=["tiny","small","normal","large","huge"])
+
+// --- Configuration ---
+grp_main    = "CONFIGURATION"
+i_stratName = input.string("HMASSLOsci", "Nom de la stratégie", group=grp_main)
+
+// ============================================
+// TYPES & VARIABLES D'ÉTAT
+// ============================================
+
+type OscData
+    float sig
+    float sgD
+
+type MFIData
+    float   mfi
+    float[] blT
+    float[] brT
+
+var OscData osc = OscData.new(na, na)
+var MFIData mf  = MFIData.new(na, array.new<float>(1, na), array.new<float>(1, na))
+
+float oscSig     = na
+float oscSgD     = na
+float currentMfi = ta.sma(ta.mfi(hl2, mfL) - 50, mfS)
+
+var int   lastConfirmedHW      = 0
+var float lastConfirmedHWValue = na
+
+// State de position
+var bool  positionActive    = false
+var int   currentSide       = 0
+var float entryPrice        = na
+var float stopPrice         = na
+var float tpPrice           = na
+var int   lastActionBar     = -1
+var bool  tpPartialHit      = false
+var bool  hmaInTpHit        = false
+var int   lastCloseBarIndex = -9999
+
+var line lineEntry = na
+var line lineStop  = na
+var line lineTP    = na
+
+// ============================================
+// FONCTIONS UTILITAIRES
+// ============================================
+
+roundToTick(float price) =>
+    math.round(price / syminfo.mintick) * syminfo.mintick
+
+getTimeframe() =>
+    string tf = timeframe.period
+    float tfNum = str.tonumber(tf)
+    string result = if not na(tfNum)
+        int tfMinutes = int(tfNum)
+        tfMinutes >= 60 and tfMinutes % 60 == 0 ? "H" + str.tostring(tfMinutes / 60) : "M" + str.tostring(tfMinutes)
+    else if str.endswith(tf, "S")
+        "S" + str.substring(tf, 0, str.length(tf) - 1)
+    else if tf == "D"
+        "D1"
+    else if str.endswith(tf, "D")
+        "D" + str.substring(tf, 0, str.length(tf) - 1)
+    else if tf == "W"
+        "W1"
+    else if str.endswith(tf, "W")
+        "W" + str.substring(tf, 0, str.length(tf) - 1)
+    else if tf == "M"
+        "MO1"
+    else if str.endswith(tf, "M")
+        "MO" + str.substring(tf, 0, str.length(tf) - 1)
+    else
+        tf
+    result
+
+isInTimeSlot(int hh, int mm, int startH, int startM, int endH, int endM) =>
+    int curMin   = hh * 60 + mm
+    int startMin = startH * 60 + startM
+    int endMin   = endH * 60 + endM
+    bool endIsDayLastMinute = endH == 23 and endM == 59
+    if startMin <= endMin
+        curMin >= startMin and (endIsDayLastMinute ? curMin <= endMin : curMin < endMin)
+    else
+        curMin >= startMin or (endIsDayLastMinute ? curMin <= endMin : curMin < endMin)
+
+isBlackoutWindow() =>
+    int hh = hour(time_close, "Europe/Brussels")
+    int mm = minute(time_close, "Europe/Brussels")
+    bool b1 = i_bo1On and isInTimeSlot(hh, mm, i_bo1StartH, i_bo1StartM, i_bo1EndH, i_bo1EndM)
+    bool b2 = i_bo2On and isInTimeSlot(hh, mm, i_bo2StartH, i_bo2StartM, i_bo2EndH, i_bo2EndM)
+    bool b3 = i_bo3On and isInTimeSlot(hh, mm, i_bo3StartH, i_bo3StartM, i_bo3EndH, i_bo3EndM)
+    bool b4 = i_bo4On and isInTimeSlot(hh, mm, i_bo4StartH, i_bo4StartM, i_bo4EndH, i_bo4EndM)
+    bool b5 = i_bo5On and isInTimeSlot(hh, mm, i_bo5StartH, i_bo5StartM, i_bo5EndH, i_bo5EndM)
+    bool b6 = i_bo6On and isInTimeSlot(hh, mm, i_bo6StartH, i_bo6StartM, i_bo6EndH, i_bo6EndM)
+    b1 or b2 or b3 or b4 or b5 or b6
+
+isAutoCloseBar() =>
+    int openMin   = hour(time, "Europe/Brussels") * 60 + minute(time, "Europe/Brussels")
+    int closeMin  = hour(time_close, "Europe/Brussels") * 60 + minute(time_close, "Europe/Brussels")
+    int targetMin = i_autoCloseH * 60 + i_autoCloseM
+    closeMin >= openMin ? (targetMin >= openMin and targetMin <= closeMin) : (targetMin >= openMin or targetMin <= closeMin)
+
+method st(simple string src, float oscVal, simple int len) =>
+    float o = switch src
+        "SMA" => ta.sma(oscVal, len)
+        "EMA" => ta.ema(oscVal, len)
+    o
+
+bool inBlackout   = isBlackoutWindow()
+bool autoCloseBar = isAutoCloseBar()
+
+// ============================================
+// SSL CALCULATION (from Gator)
+// ============================================
+
+BBMC_ssl    = ta.wma(2 * ta.wma(close, len_ssl / 2) - ta.wma(close, len_ssl), math.round(math.sqrt(len_ssl)))
+rangema_ssl = ta.ema(ta.tr, len_ssl)
+upperk_ssl  = BBMC_ssl + rangema_ssl * multy_ssl
+lowerk_ssl  = BBMC_ssl - rangema_ssl * multy_ssl
+color_ssl   = close > upperk_ssl ? bColorSSL : close < lowerk_ssl ? sColorSSL : color.gray
+
+// ============================================
+// HMA CALCULATION
+// ============================================
+
+float srcEma  = ta.ema(close, i_emaLen)
+float rawHma1 = ta.hma(srcEma, i_hma1Len)
+float rawHma2 = ta.hma(srcEma, i_hma2Len)
+float hma1    = srcEma + (rawHma1 - srcEma) * i_ampMult
+float hma2    = srcEma + (rawHma2 - srcEma) * i_ampMult
+
+bool  canalGreen = hma1 > hma2
+float canalUpper = math.max(hma1, hma2)
+float canalLower = math.min(hma1, hma2)
+
+// ============================================
+// 4KINGS OSCILLATOR
+// ============================================
+
+calcOscillator() =>
+    float hi = ta.highest(mL)
+    float lo = ta.lowest(mL)
+    float av = ta.sma(hl2, mL)
+    osc.sig := ta.ema(ta.linreg((close - math.avg(hi, lo, av)) / (hi - lo) * 100, mL, 0), sL)
+    osc.sgD := sT.st(osc.sig, 2)
+
+calcMFI() =>
+    mf.mfi := currentMfi
+
+updateMFITracking() =>
+    if mf.mfi > 0
+        if mf.brT.size() > 1
+            mf.brT.pop()
+        if mf.blT.size() > mfL
+            mf.blT.pop()
+        if mf.mfi > mf.blT.avg()
+            mf.blT.unshift(mf.mfi)
+        else
+            float histMfi = currentMfi[mfL]
+            mf.blT.unshift(not na(histMfi) and histMfi > 0 ? histMfi : mf.mfi)
+    if mf.mfi < 0
+        if mf.blT.size() > 1
+            mf.blT.pop()
+        if mf.brT.size() > mfL
+            mf.brT.pop()
+        if mf.mfi < mf.blT.avg()
+            mf.brT.unshift(mf.mfi)
+        else
+            float histMfi = currentMfi[mfL]
+            mf.brT.unshift(not na(histMfi) and histMfi < 0 ? histMfi : mf.mfi)
+
+calcOscillator()
+calcMFI()
+oscSig := osc.sig
+oscSgD := osc.sgD
+updateMFITracking()
+
+// ============================================
+// CONDITIONS OSCILLATEUR (8 filtres)
+// ============================================
+
+bool hwCrossOver  = ta.crossover(oscSig,  oscSgD)
+bool hwCrossUnder = ta.crossunder(oscSig, oscSgD)
+
+if hwCrossOver
+    lastConfirmedHW      := 1
+    lastConfirmedHWValue := math.min(oscSig, oscSgD)
+if hwCrossUnder
+    lastConfirmedHW      := -1
+    lastConfirmedHWValue := math.max(oscSig, oscSgD)
+
+// ① Sens HW
+bool hwDirLongOk  = not i_hwDirOn or lastConfirmedHW == 1
+bool hwDirShortOk = not i_hwDirOn or lastConfirmedHW == -1
+
+// ② Extrêmes HW (valeur au dernier cross)
+bool hwExtremeLongOk  = not i_hwExtremeOn or na(lastConfirmedHWValue) or lastConfirmedHWValue <= i_hwExtreme
+bool hwExtremeShortOk = not i_hwExtremeOn or na(lastConfirmedHWValue) or lastConfirmedHWValue >= -i_hwExtreme
+
+// ③ Extrêmes SIG courant
+bool sigExtremeLongOk  = not i_sigExtremeOn or na(oscSig) or oscSig <= i_hwExtreme
+bool sigExtremeShortOk = not i_sigExtremeOn or na(oscSig) or oscSig >= -i_hwExtreme
+
+// ④ Range HW
+bool hwRangeOk = not i_hwRangeOn or na(lastConfirmedHWValue) or math.abs(lastConfirmedHWValue) > i_hwRange
+
+// ⑤ Nuage MFI
+float activeMfiRefLine  = mf.mfi > 0 ? mf.blT.avg() : mf.mfi < 0 ? mf.brT.avg() : na
+float activeMfiCloud    = mf.mfi
+bool  hasActiveMfiCloud = not na(activeMfiCloud) and not na(activeMfiRefLine) and activeMfiCloud != 0
+bool  cloudLongOk       = hasActiveMfiCloud and activeMfiRefLine < activeMfiCloud
+bool  cloudShortOk      = hasActiveMfiCloud and activeMfiRefLine > activeMfiCloud
+
+// ⑥ Deltas
+bool deltaLongOn  = oscSig > 0 and mf.mfi > 0
+bool deltaShortOn = oscSig < 0 and mf.mfi < 0
+bool deltaLongOk  = not i_deltaOn or not deltaShortOn
+bool deltaShortOk = not i_deltaOn or not deltaLongOn
+
+// ⑦ Nuage < 0 / > 0
+bool cloudZeroLongOk  = not i_cloudZeroOn or mf.mfi < 0
+bool cloudZeroShortOk = not i_cloudZeroOn or mf.mfi > 0
+
+// ⑧ Extinction deltas
+bool deltaExtLongOk  = not i_deltaExtOn or (deltaShortOn[1] and not deltaShortOn)
+bool deltaExtShortOk = not i_deltaExtOn or (deltaLongOn[1]  and not deltaLongOn)
+
+// ⑤+⑥ Gate combiné (OR)
+bool cloudOrDeltaLongOk  = not i_cloudOn or cloudLongOk  or (i_deltaOn and deltaLongOn)
+bool cloudOrDeltaShortOk = not i_cloudOn or cloudShortOk or (i_deltaOn and deltaShortOn)
+
+// Résultat oscillateur global
+bool oscAllLongOk  = hwDirLongOk  and hwExtremeLongOk  and sigExtremeLongOk  and hwRangeOk and cloudOrDeltaLongOk  and deltaLongOk  and cloudZeroLongOk  and deltaExtLongOk
+bool oscAllShortOk = hwDirShortOk and hwExtremeShortOk and sigExtremeShortOk and hwRangeOk and cloudOrDeltaShortOk and deltaShortOk and cloudZeroShortOk and deltaExtShortOk
+
+// ============================================
+// CONDITIONS D'ENTRÉE
+// ============================================
+
+// Long:
+//   - Canal HMA vert
+//   - Canal HMA au-dessus de la SSL (bas du canal > baseline SSL)
+//   - Close au-dessus du canal HMA ET au-dessus du canal SSL
+//   - Conditions oscillateur OK
+bool hmaAboveSSL    = canalLower > BBMC_ssl
+bool priceConfLong  = close > canalUpper and close > upperk_ssl
+
+// Short:
+//   - Canal HMA rouge
+//   - Canal HMA en-dessous de la SSL (haut du canal < baseline SSL)
+//   - Close en-dessous du canal HMA ET en-dessous du canal SSL
+//   - Conditions oscillateur OK
+bool hmaBelowSSL    = canalUpper < BBMC_ssl
+bool priceConfShort = close < canalLower and close < lowerk_ssl
+
+// Filtre taille de bougie (open → close)
+float candlePct    = close != 0 ? math.abs(close - open) / close * 100 : na
+bool  candleSizeOk = i_maxCandlePct == 0.0 or (not na(candlePct) and candlePct <= i_maxCandlePct)
+
+bool longSignal  = canalGreen     and hmaAboveSSL and priceConfLong  and oscAllLongOk  and candleSizeOk
+bool shortSignal = not canalGreen and hmaBelowSSL and priceConfShort and oscAllShortOk and candleSizeOk
+
+// ============================================
+// CALCUL SL & TP
+// ============================================
+
+// SL Long  : bas du canal SSL - buffer
+// SL Short : haut du canal SSL + buffer
+float slLong      = lowerk_ssl - (i_tickBuffer * syminfo.mintick)
+float slShort     = upperk_ssl + (i_tickBuffer * syminfo.mintick)
+float slDistLong  = close - slLong
+float slDistShort = slShort - close
+bool  slLongOk    = slDistLong  <= i_maxSlPoints
+bool  slShortOk   = slDistShort <= i_maxSlPoints
+
+// TP1 : RR*risque ou points fixes, le plus proche
+float calcEntryLong     = close
+float calcStopLong      = roundToTick(slLong)
+float riskL             = calcEntryLong - calcStopLong
+float calcTpLong        = calcEntryLong + riskL * i_rrPartial
+float calcPointsTpLong  = calcEntryLong + i_tpPoints
+
+float calcEntryShort    = close
+float calcStopShort     = roundToTick(slShort)
+float riskS             = calcStopShort - calcEntryShort
+float calcTpShort       = calcEntryShort - riskS * i_rrPartial
+float calcPointsTpShort = calcEntryShort - i_tpPoints
+
+bool cooldownOk = (bar_index - lastCloseBarIndex) >= i_cooldownBars
+
+bool finalLongEntry  = longSignal  and slLongOk  and cooldownOk
+bool finalShortEntry = shortSignal and slShortOk and cooldownOk
+
+// ============================================
+// GESTION DES POSITIONS
+// ============================================
+
+bool canAct = bar_index > lastActionBar
+
+// --- 0. CLÔTURE FORCÉE AUTO-CLOSE ---
+bool forceCloseTriggered = false
+bool forceCloseInProfit  = false
+int  forceCloseSide      = 0
+
+if positionActive and autoCloseBar and canAct
+    forceCloseTriggered := true
+    forceCloseSide      := currentSide
+    forceCloseInProfit  := currentSide == 1 ? close > entryPrice : close < entryPrice
+    positionActive      := false
+    currentSide         := 0
+    lastActionBar       := bar_index
+    lastCloseBarIndex   := bar_index
+    tpPartialHit        := false
+    hmaInTpHit          := false
+    canAct              := false
+    if not na(lineEntry)
+        line.delete(lineEntry)
+        lineEntry := na
+    if not na(lineStop)
+        line.delete(lineStop)
+        lineStop := na
+    if not na(lineTP)
+        line.delete(lineTP)
+        lineTP := na
+
+// --- 1. ENTRÉE LONGUE ---
+if not positionActive and finalLongEntry and canAct and not inBlackout
+    positionActive := true
+    currentSide    := 1
+    entryPrice     := roundToTick(calcEntryLong)
+    stopPrice      := roundToTick(calcStopLong)
+    tpPrice        := roundToTick(calcTpLong)
+    float tp1L     = roundToTick(math.min(calcTpLong, calcPointsTpLong))
+    lastActionBar  := bar_index
+    tpPartialHit   := false
+    hmaInTpHit     := false
+    lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue,   style=line.style_dotted, width=1)
+    lineStop  := line.new(bar_index, stopPrice,  bar_index + 1, stopPrice,  color=color.red,    style=line.style_dotted, width=1)
+    lineTP    := line.new(bar_index, tp1L,       bar_index + 1, tp1L,       color=color.green,  style=line.style_dotted, width=1)
+    alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+
+// --- 2. ENTRÉE COURTE ---
+else if not positionActive and finalShortEntry and canAct and not inBlackout
+    positionActive := true
+    currentSide    := -1
+    entryPrice     := roundToTick(calcEntryShort)
+    stopPrice      := roundToTick(calcStopShort)
+    tpPrice        := roundToTick(calcTpShort)
+    float tp1S     = roundToTick(math.max(calcTpShort, calcPointsTpShort))
+    lastActionBar  := bar_index
+    tpPartialHit   := false
+    hmaInTpHit     := false
+    lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue,   style=line.style_dotted, width=1)
+    lineStop  := line.new(bar_index, stopPrice,  bar_index + 1, stopPrice,  color=color.red,    style=line.style_dotted, width=1)
+    lineTP    := line.new(bar_index, tp1S,       bar_index + 1, tp1S,       color=color.green,  style=line.style_dotted, width=1)
+    alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+
+// --- 3. SORTIES ---
+bool hitStopLoss  = false
+bool hitCanalExit = false
+bool hitBreakeven = false
+
+bool exitedLong            = false
+bool exitedShort           = false
+bool wasStopLoss           = false
+bool wasBreakeven          = false
+bool wasCanalExit          = false
+bool wasInProfit           = false
+bool tpPartialJustHitLong  = false
+bool tpPartialJustHitShort = false
+bool hmaInTpJustHitLong    = false
+bool hmaInTpJustHitShort   = false
+
+float activeTp1Long  = roundToTick(math.min(tpPrice, entryPrice + i_tpPoints))
+float activeTp1Short = roundToTick(math.max(tpPrice, entryPrice - i_tpPoints))
+
+if positionActive and canAct and bar_index > lastActionBar
+    if currentSide == 1  // LONG
+        if low <= stopPrice and not tpPartialHit[1]
+            hitStopLoss := true
+        if tpPartialHit and low <= stopPrice and not hitStopLoss
+            hitBreakeven := true
+
+        if not tpPartialHit and high >= activeTp1Long
+            alert('{"ticker":"' + syminfo.ticker + '","type":"MOVEBE","side":"BUY","entry":' + str.tostring(roundToTick(activeTp1Long)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
+            tpPartialHit         := true
+            tpPartialJustHitLong := true
+            stopPrice            := entryPrice
+            if not na(lineTP)
+                line.delete(lineTP)
+                lineTP := na
+            if not na(lineStop)
+                line.delete(lineStop)
+            lineStop := line.new(bar_index, stopPrice, bar_index + 1, stopPrice, color=color.orange, style=line.style_dotted, width=1)
+
+        if tpPartialHit and not hmaInTpHit and close < canalUpper and close > canalLower
+            hmaInTpHit         := true
+            hmaInTpJustHitLong := true
+
+        // TP Final : clôture de l'autre côté du canal HMA (close < canalLower)
+        if close < canalLower and not hitBreakeven and not hitStopLoss
+            hitCanalExit := true
+
+        if tpPartialJustHitLong and not hitCanalExit
+            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(roundToTick(close)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+        if hmaInTpJustHitLong and not hitCanalExit
+            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"SELL","entry":' + str.tostring(roundToTick(close)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+
+    else if currentSide == -1  // SHORT
+        if high >= stopPrice and not tpPartialHit[1]
+            hitStopLoss := true
+        if tpPartialHit and high >= stopPrice and not hitStopLoss
+            hitBreakeven := true
+
+        if not tpPartialHit and low <= activeTp1Short
+            alert('{"ticker":"' + syminfo.ticker + '","type":"MOVEBE","side":"SELL","entry":' + str.tostring(roundToTick(activeTp1Short)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar)
+            tpPartialHit          := true
+            tpPartialJustHitShort := true
+            stopPrice             := entryPrice
+            if not na(lineTP)
+                line.delete(lineTP)
+                lineTP := na
+            if not na(lineStop)
+                line.delete(lineStop)
+            lineStop := line.new(bar_index, stopPrice, bar_index + 1, stopPrice, color=color.orange, style=line.style_dotted, width=1)
+
+        if tpPartialHit and not hmaInTpHit and close > canalLower and close < canalUpper
+            hmaInTpHit          := true
+            hmaInTpJustHitShort := true
+
+        // TP Final : clôture de l'autre côté du canal HMA (close > canalUpper)
+        if close > canalUpper and not hitBreakeven and not hitStopLoss
+            hitCanalExit := true
+
+        if tpPartialJustHitShort and not hitCanalExit
+            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(roundToTick(close)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+        if hmaInTpJustHitShort and not hitCanalExit
+            alert('{"ticker":"' + syminfo.ticker + '","type":"PARTIAL","side":"BUY","entry":' + str.tostring(roundToTick(close)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
+
+    bool closePosition = hitStopLoss or hitBreakeven or hitCanalExit
+
+    if closePosition
+        exitedLong   := currentSide == 1
+        exitedShort  := currentSide == -1
+        wasStopLoss  := hitStopLoss
+        wasBreakeven := hitBreakeven
+        wasCanalExit := hitCanalExit
+        wasInProfit  := currentSide == 1 ? close > entryPrice : close < entryPrice
+
+        string closeSide      = currentSide == 1 ? "SELL" : "BUY"
+        float  exitPrice      = hitStopLoss ? stopPrice : (hitBreakeven ? entryPrice : close)
+        string closeAlertJson = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + closeSide + '","entry":' + str.tostring(roundToTick(exitPrice)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}'
+        if hitCanalExit
+            alert(closeAlertJson, alert.freq_once_per_bar_close)
+        else
+            alert(closeAlertJson, alert.freq_once_per_bar)
+
+        positionActive    := false
+        currentSide       := 0
+        lastActionBar     := bar_index
+        lastCloseBarIndex := bar_index
+        tpPartialHit      := false
+        hmaInTpHit        := false
+        if not na(lineEntry)
+            line.delete(lineEntry)
+            lineEntry := na
+        if not na(lineStop)
+            line.delete(lineStop)
+            lineStop := na
+        if not na(lineTP)
+            line.delete(lineTP)
+            lineTP := na
+    else
+        if not na(lineEntry)
+            line.set_x2(lineEntry, bar_index + 1)
+        if not na(lineStop)
+            line.set_xy1(lineStop, bar_index, stopPrice)
+            line.set_xy2(lineStop, bar_index + 1, stopPrice)
+        if not na(lineTP)
+            line.set_x2(lineTP, bar_index + 1)
+
+// ============================================
+// VISUALISATION
+// ============================================
+
+// Canal HMA
+color hmaColor = canalGreen ? color.new(color.green, 0) : color.new(color.red, 0)
+p_hma1 = plot(hma1, "HMA Rapide", color=hmaColor, linewidth=1, offset=i_timeOffset)
+p_hma2 = plot(hma2, "HMA Lente",  color=hmaColor, linewidth=1, offset=i_timeOffset)
+fill(p_hma1, p_hma2, color=canalGreen ? color.new(color.green, 75) : color.new(color.red, 75), title="Canal HMA")
+
+// Canal SSL
+p_ssl_mid = plot(BBMC_ssl,   "SSL Baseline",      color=color_ssl, linewidth=2)
+p_ssl_up  = plot(upperk_ssl, "SSL Upper Channel", color=color_ssl, linewidth=1)
+p_ssl_lo  = plot(lowerk_ssl, "SSL Lower Channel", color=color_ssl, linewidth=1)
+fill(p_ssl_up, p_ssl_lo, color=color.new(color_ssl, 90), title="Canal SSL")
+
+// Entrées
+bool isNewLong  = positionActive and currentSide == 1  and not positionActive[1]
+bool isNewShort = positionActive and currentSide == -1 and not positionActive[1]
+plotshape(isNewLong,  title="Entry L", style=shape.circle, location=location.belowbar, color=color.green, size=size.tiny)
+plotshape(isNewShort, title="Entry S", style=shape.circle, location=location.abovebar, color=color.red,   size=size.tiny)
+
+// TP Partiel 1
+plotshape(tpPartialJustHitLong  ? high : na, "TP1 Long",  shape.xcross, location.abovebar, color.green,  size=size.tiny)
+plotshape(tpPartialJustHitShort ? low  : na, "TP1 Short", shape.xcross, location.belowbar, color.green,  size=size.tiny)
+
+// TP Partiel 2 (entrée dans le canal)
+plotshape(hmaInTpJustHitLong  ? high : na, "TP2 Long",  shape.xcross, location.abovebar, color.aqua, size=size.tiny)
+plotshape(hmaInTpJustHitShort ? low  : na, "TP2 Short", shape.xcross, location.belowbar, color.aqua, size=size.tiny)
+
+// Stop Loss
+plotshape(exitedLong  and wasStopLoss ? low  : na, "SL Long",  shape.xcross, location.belowbar, color.red,    size=size.tiny)
+plotshape(exitedShort and wasStopLoss ? high : na, "SL Short", shape.xcross, location.abovebar, color.red,    size=size.tiny)
+
+// Break-Even
+plotshape(exitedLong  and wasBreakeven ? high : na, "BE Long",  shape.xcross, location.abovebar, color.orange, size=size.tiny)
+plotshape(exitedShort and wasBreakeven ? low  : na, "BE Short", shape.xcross, location.belowbar, color.orange, size=size.tiny)
+
+// TP Final (exit canal)
+color canalExitColor = wasInProfit ? color.green : color.red
+plotshape(exitedLong  and wasCanalExit ? high : na, "Canal Exit Long",  shape.xcross, location.abovebar, canalExitColor, size=size.tiny)
+plotshape(exitedShort and wasCanalExit ? low  : na, "Canal Exit Short", shape.xcross, location.belowbar, canalExitColor, size=size.tiny)
+
+// Clôture forcée
+color forceCloseColor = forceCloseInProfit ? color.green : color.red
+plotshape(forceCloseTriggered and forceCloseSide == 1  ? high : na, "Force Close L", shape.xcross, location.abovebar, forceCloseColor, size=size.tiny)
+plotshape(forceCloseTriggered and forceCloseSide == -1 ? low  : na, "Force Close S", shape.xcross, location.belowbar, forceCloseColor, size=size.tiny)
+
+// ============================================
+// STATUS TABLE
+// ============================================
+
+f_icon(bool cond) => cond ? "✓" : "✗"
+f_bg(bool cond)   => cond ? color.new(color.green, 30) : color.new(color.red, 30)
+f_bgNa()          => color.new(color.gray, 60)
+
+TXT_WHITE = color.white
+HDR_BG    = color.new(color.navy, 20)
+RES_BG_OK = color.new(color.green, 15)
+RES_BG_KO = color.new(color.red,   35)
+SEP_BG    = color.new(color.gray,  80)
+
+var table tbl = table.new(
+     position     = i_tblPos,
+     columns      = 3,
+     rows         = 21,
+     bgcolor      = color.new(color.black, 20),
+     border_color = color.new(color.gray, 50),
+     border_width = 1,
+     frame_color  = color.new(color.gray, 30),
+     frame_width  = 1)
+
+if barstate.islast
+    // ── En-têtes ──────────────────────────────────────────
+    table.cell(tbl, 0, 0, "Condition",  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(tbl, 1, 0, "▲ LONG",    text_color=color.new(color.lime, 10), text_size=i_tblSize, bgcolor=HDR_BG)
+    table.cell(tbl, 2, 0, "▼ SHORT",   text_color=color.new(color.red,  10), text_size=i_tblSize, bgcolor=HDR_BG)
+
+    // ── Blackout ──────────────────────────────────────────
+    table.cell(tbl, 0, 1, "Blackout", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 1, f_icon(not inBlackout), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(not inBlackout))
+    table.cell(tbl, 2, 1, f_icon(not inBlackout), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(not inBlackout))
+
+    // ── Canal HMA ─────────────────────────────────────────
+    string canalDir = canalGreen ? "HMA vert ↑" : "HMA rouge ↓"
+    table.cell(tbl, 0, 2, canalDir, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 2, f_icon(canalGreen),     text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(canalGreen))
+    table.cell(tbl, 2, 2, f_icon(not canalGreen), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(not canalGreen))
+
+    // ── HMA vs SSL ────────────────────────────────────────
+    table.cell(tbl, 0, 3, "HMA vs SSL", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 3, f_icon(hmaAboveSSL),  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(hmaAboveSSL))
+    table.cell(tbl, 2, 3, f_icon(hmaBelowSSL),  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(hmaBelowSSL))
+
+    // ── Prix (close vs canal + SSL) ───────────────────────
+    table.cell(tbl, 0, 4, "Prix confirmation", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 4, f_icon(priceConfLong),  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(priceConfLong))
+    table.cell(tbl, 2, 4, f_icon(priceConfShort), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(priceConfShort))
+
+    // ── ① Sens HW ─────────────────────────────────────────
+    string hwDirStr = na(lastConfirmedHWValue)
+         ? "① Sens HW (—)"
+         : lastConfirmedHW == 1
+             ? "① Sens HW (▲ " + str.tostring(math.round(lastConfirmedHWValue, 1)) + ")"
+             : "① Sens HW (▼ " + str.tostring(math.round(lastConfirmedHWValue, 1)) + ")"
+    table.cell(tbl, 0, 5, hwDirStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 5, i_hwDirOn ? f_icon(hwDirLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwDirOn ? f_bg(hwDirLongOk)  : f_bgNa())
+    table.cell(tbl, 2, 5, i_hwDirOn ? f_icon(hwDirShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwDirOn ? f_bg(hwDirShortOk) : f_bgNa())
+
+    // ── ② Extrêmes HW ────────────────────────────────────
+    string hwExtStr = "② HW Extrême (±" + str.tostring(i_hwExtreme, "#") + ")"
+         + (na(lastConfirmedHWValue) ? " —" : " = " + str.tostring(math.round(lastConfirmedHWValue, 1)))
+    table.cell(tbl, 0, 6, hwExtStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 6, i_hwExtremeOn ? f_icon(hwExtremeLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwExtremeOn ? f_bg(hwExtremeLongOk)  : f_bgNa())
+    table.cell(tbl, 2, 6, i_hwExtremeOn ? f_icon(hwExtremeShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwExtremeOn ? f_bg(hwExtremeShortOk) : f_bgNa())
+
+    // ── ③ Extrêmes SIG ───────────────────────────────────
+    string sigExtStr = "③ SIG Extrême (±" + str.tostring(i_hwExtreme, "#") + ")"
+         + (na(oscSig) ? " —" : " = " + str.tostring(math.round(oscSig, 1)))
+    table.cell(tbl, 0, 7, sigExtStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 7, i_sigExtremeOn ? f_icon(sigExtremeLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_sigExtremeOn ? f_bg(sigExtremeLongOk)  : f_bgNa())
+    table.cell(tbl, 2, 7, i_sigExtremeOn ? f_icon(sigExtremeShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_sigExtremeOn ? f_bg(sigExtremeShortOk) : f_bgNa())
+
+    // ── ④ Range HW ────────────────────────────────────────
+    string hwRngStr = "④ HW Range (±" + str.tostring(i_hwRange, "#") + ")"
+         + (na(lastConfirmedHWValue) ? " —" : " |" + str.tostring(math.round(math.abs(lastConfirmedHWValue), 1)) + "|")
+    table.cell(tbl, 0, 8, hwRngStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 8, i_hwRangeOn ? f_icon(hwRangeOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwRangeOn ? f_bg(hwRangeOk) : f_bgNa())
+    table.cell(tbl, 2, 8, i_hwRangeOn ? f_icon(hwRangeOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwRangeOn ? f_bg(hwRangeOk) : f_bgNa())
+
+    // ── ⑤ Nuage MFI ──────────────────────────────────────
+    string mfiCurStr  = not na(activeMfiCloud)   ? str.tostring(math.round(activeMfiCloud,   1)) : "—"
+    string mfiRefStr  = not na(activeMfiRefLine) ? str.tostring(math.round(activeMfiRefLine, 1)) : "—"
+    string cloudStr   = "⑤ Nuage (" + mfiCurStr + " / " + mfiRefStr + ")"
+    color cloudBgL = not i_cloudOn ? f_bgNa()
+         : cloudLongOk                     ? color.new(color.green,  30)
+         : (i_deltaOn and deltaLongOn)      ? color.new(color.orange, 30)
+         : color.new(color.red, 30)
+    color cloudBgS = not i_cloudOn ? f_bgNa()
+         : cloudShortOk                    ? color.new(color.green,  30)
+         : (i_deltaOn and deltaShortOn)     ? color.new(color.orange, 30)
+         : color.new(color.red, 30)
+    string cloudIconL = not i_cloudOn ? "—" : cloudLongOk  ? "✓" : (i_deltaOn and deltaLongOn)  ? "~" : "✗"
+    string cloudIconS = not i_cloudOn ? "—" : cloudShortOk ? "✓" : (i_deltaOn and deltaShortOn) ? "~" : "✗"
+    table.cell(tbl, 0, 9, cloudStr,   text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 9, cloudIconL, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=cloudBgL)
+    table.cell(tbl, 2, 9, cloudIconS, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=cloudBgS)
+
+    // ── ⑥ Deltas ─────────────────────────────────────────
+    string sigValStr = not na(oscSig) ? str.tostring(math.round(oscSig, 1)) : "—"
+    string mfiValStr = not na(activeMfiCloud) ? str.tostring(math.round(activeMfiCloud, 1)) : "—"
+    string deltaStr  = "⑥ Deltas (sig " + sigValStr + " / mfi " + mfiValStr + ")"
+    table.cell(tbl, 0, 10, deltaStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 10, i_deltaOn ? f_icon(deltaLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_deltaOn ? f_bg(deltaLongOk)  : f_bgNa())
+    table.cell(tbl, 2, 10, i_deltaOn ? f_icon(deltaShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_deltaOn ? f_bg(deltaShortOk) : f_bgNa())
+
+    // ── ⑦ Nuage < 0 / > 0 ────────────────────────────────
+    string cloudZeroStr = "⑦ Nuage < 0 / > 0 (" + (not na(activeMfiCloud) ? str.tostring(math.round(activeMfiCloud, 1)) : "—") + ")"
+    table.cell(tbl, 0, 11, cloudZeroStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 11, i_cloudZeroOn ? f_icon(cloudZeroLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_cloudZeroOn ? f_bg(cloudZeroLongOk)  : f_bgNa())
+    table.cell(tbl, 2, 11, i_cloudZeroOn ? f_icon(cloudZeroShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_cloudZeroOn ? f_bg(cloudZeroShortOk) : f_bgNa())
+
+    // ── ⑧ Extinction deltas ──────────────────────────────
+    bool deltaShortWasOn = deltaShortOn[1]
+    bool deltaLongWasOn  = deltaLongOn[1]
+    string deltaExtLStr = "⑧ Ext. Δ (" + (deltaShortWasOn and not deltaShortOn ? "↓S" : deltaShortOn ? "S" : "—") + ")"
+    string deltaExtSStr = "⑧ Ext. Δ (" + (deltaLongWasOn  and not deltaLongOn  ? "↓L" : deltaLongOn  ? "L" : "—") + ")"
+    table.cell(tbl, 0, 12, "⑧ Extinction deltas", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 12, i_deltaExtOn ? f_icon(deltaExtLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_deltaExtOn ? f_bg(deltaExtLongOk)  : f_bgNa())
+    table.cell(tbl, 2, 12, i_deltaExtOn ? f_icon(deltaExtShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_deltaExtOn ? f_bg(deltaExtShortOk) : f_bgNa())
+
+    // ── Distance SL ───────────────────────────────────────
+    string slLongStr  = na(slDistLong)  ? "—" : str.tostring(slDistLong,  "#.#") + " pts"
+    string slShortStr = na(slDistShort) ? "—" : str.tostring(slDistShort, "#.#") + " pts"
+    table.cell(tbl, 0, 13, "SL Distance (max " + str.tostring(i_maxSlPoints, "#") + ")", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 13, slLongStr,  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(slLongOk))
+    table.cell(tbl, 2, 13, slShortStr, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(slShortOk))
+
+    // ── Filtre taille bougie ──────────────────────────────
+    string candleStr = i_maxCandlePct == 0.0 ? "Bougie (OFF)" : "Bougie (max " + str.tostring(i_maxCandlePct, "#.##") + "%)"
+    string candleVal = not na(candlePct) ? str.tostring(candlePct, "#.##") + "%" : "—"
+    table.cell(tbl, 0, 14, candleStr + " = " + candleVal, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 14, i_maxCandlePct == 0.0 ? "—" : f_icon(candleSizeOk), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_maxCandlePct == 0.0 ? f_bgNa() : f_bg(candleSizeOk))
+    table.cell(tbl, 2, 14, i_maxCandlePct == 0.0 ? "—" : f_icon(candleSizeOk), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_maxCandlePct == 0.0 ? f_bgNa() : f_bg(candleSizeOk))
+
+    // ── Séparateur ────────────────────────────────────────
+    table.cell(tbl, 0, 15, "", bgcolor=SEP_BG, text_size=size.tiny)
+    table.cell(tbl, 1, 15, "", bgcolor=SEP_BG, text_size=size.tiny)
+    table.cell(tbl, 2, 15, "", bgcolor=SEP_BG, text_size=size.tiny)
+
+    // ── Résultat global ───────────────────────────────────
+    table.cell(tbl, 0, 16, "RÉSULTAT",                                                              text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(tbl, 1, 16, finalLongEntry  ? "✓ LONG"  : "✗", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=finalLongEntry  ? RES_BG_OK : RES_BG_KO)
+    table.cell(tbl, 2, 16, finalShortEntry ? "✓ SHORT" : "✗", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=finalShortEntry ? RES_BG_OK : RES_BG_KO)
+
+    // ── Position active ───────────────────────────────────
+    string posStatus = positionActive ? (currentSide == 1 ? "LONG actif" : "SHORT actif") : "—"
+    table.cell(tbl, 0, 17, "Position", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(tbl, 1, 17, positionActive and currentSide == 1  ? posStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == 1  ? color.new(color.green, 30) : f_bgNa())
+    table.cell(tbl, 2, 17, positionActive and currentSide == -1 ? posStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == -1 ? color.new(color.red,   30) : f_bgNa())
+
+    // ── TP1 Partiel (RR / points) ─────────────────────────
+    string tp1Status = tpPartialHit ? "✓ HIT → BE" : (positionActive ? "pending" : "—")
+    color  tp1Color  = tpPartialHit ? color.new(color.green, 30) : (positionActive ? color.new(color.gray, 50) : f_bgNa())
+    table.cell(tbl, 0, 18, "TP1 (RR/pts → BE)", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(tbl, 1, 18, positionActive and currentSide == 1  ? tp1Status : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == 1  ? tp1Color : f_bgNa())
+    table.cell(tbl, 2, 18, positionActive and currentSide == -1 ? tp1Status : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == -1 ? tp1Color : f_bgNa())
+
+    // ── TP2 Partiel (entrée dans le canal HMA) ────────────
+    string tp2Status = hmaInTpHit ? "✓ HIT" : (tpPartialHit ? "pending" : "—")
+    color  tp2Color  = hmaInTpHit ? color.new(color.aqua, 30) : (tpPartialHit ? color.new(color.gray, 50) : f_bgNa())
+    table.cell(tbl, 0, 19, "TP2 (entrée canal)", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(tbl, 1, 19, positionActive and currentSide == 1  ? tp2Status : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == 1  ? tp2Color : f_bgNa())
+    table.cell(tbl, 2, 19, positionActive and currentSide == -1 ? tp2Status : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == -1 ? tp2Color : f_bgNa())
+
+    // ── TP Final (autre côté canal) ───────────────────────
+    string tpFinalStatus = not positionActive ? "—" : (tpPartialHit ? "actif" : "après TP1")
+    color  tpFinalColor  = not positionActive ? f_bgNa() : (tpPartialHit ? color.new(color.lime, 40) : color.new(color.gray, 50))
+    table.cell(tbl, 0, 20, "TP Final (autre côté)", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(tbl, 1, 20, positionActive and currentSide == 1  ? tpFinalStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == 1  ? tpFinalColor : f_bgNa())
+    table.cell(tbl, 2, 20, positionActive and currentSide == -1 ? tpFinalStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == -1 ? tpFinalColor : f_bgNa())
