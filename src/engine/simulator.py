@@ -280,6 +280,11 @@ def simulate(
     np_canal_upper = _canal_upper_s.values if _canal_upper_s is not None else None
     has_canal_exit = np_canal_lower is not None and np_canal_upper is not None
 
+    # Optional SSL baseline for TP2 trigger (overrides inside-canal TP2 logic)
+    _ssl_baseline_s = signals.get("ssl_baseline")
+    np_ssl_baseline = _ssl_baseline_s.values if _ssl_baseline_s is not None else None
+    has_ssl_tp2 = np_ssl_baseline is not None
+
     # Optional Supertrend series (for trailing SL and reversal close)
     _st_s = signals.get("supertrend")
     _st_trend_s = signals.get("supertrend_trend")
@@ -485,6 +490,9 @@ def simulate(
 
     def _get_partial_exit_size(ratio: float) -> float:
         if pos is None or pos.remaining_size <= 0:
+            return 0.0
+
+        if ratio <= 0:
             return 0.0
 
         if pos.remaining_size <= 1.0:
@@ -934,8 +942,18 @@ def simulate(
             cu = np_canal_upper[bar_idx] if bar_idx < len(np_canal_upper) else np.nan
             if not np.isnan(cl) and not np.isnan(cu):
                 if not config.inverse_canal_exit and not has_fixed_tp2 and config.tp2_partial_pct > 0 and pos.tp1_hit and not pos.tp2_hit:
-                    inside_canal = close_price > cl and close_price < cu
-                    if inside_canal:
+                    if has_ssl_tp2:
+                        ssl_base = np_ssl_baseline[bar_idx] if bar_idx < len(np_ssl_baseline) else np.nan
+                        tp2_triggered = (
+                            not np.isnan(ssl_base)
+                            and (
+                                (pos.side == 1 and close_price < ssl_base)
+                                or (pos.side == -1 and close_price > ssl_base)
+                            )
+                        )
+                    else:
+                        tp2_triggered = close_price > cl and close_price < cu
+                    if tp2_triggered:
                         exited = _partial_exit(close_price, config.tp2_partial_pct, "TP2_Canal", exit_bar_time, exit_exec_time)
                         if exited > 0:
                             pos.tp2_hit = True

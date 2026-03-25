@@ -224,6 +224,25 @@ class MarketDataStore:
             existing = pd.read_csv(csv_1m_path, index_col="Date")
             existing.index = pd.to_datetime(existing.index, utc=True)
             existing.index = existing.index.tz_convert(BRUSSELS_TZ)
+
+            # On contract rolls, keep the existing symbol history authoritative up
+            # to its last known bar. The new contract may overlap the same local
+            # timestamps (for example when the download starts a day earlier), but
+            # those overlapping bars must not overwrite the prior contract's close
+            # of session data.
+            dataset_entry = None
+            for entry in self._load_index():
+                if entry.get("symbol") == symbol:
+                    dataset_entry = entry
+                    break
+            if dataset_entry and dataset_entry.get("contract_id") != contract_id:
+                existing_end = pd.Timestamp(dataset_entry["end_date"])
+                if existing_end.tzinfo is None:
+                    existing_end = existing_end.tz_localize(BRUSSELS_TZ)
+                else:
+                    existing_end = existing_end.tz_convert(BRUSSELS_TZ)
+                df = df[df.index > existing_end]
+
             df = pd.concat([existing, df])
             df = df[~df.index.duplicated(keep="last")]
             df.sort_index(ascending=True, inplace=True)

@@ -19,8 +19,8 @@ Entry (Short):
   - All 8 oscillator filters pass
 
 SL:   lowerk_ssl - tick_buffer (Long) / upperk_ssl + tick_buffer (Short)
-TP1:  min(entry + risk*rrPartial, entry+tpPoints) — intrabar touch execution
-TP2:  Canal re-entry partial at bar close (handled by simulator canal logic)
+TP1:  min(entry + risk*rrPartial, entry+tpPoints) — bar_close_if_touched execution
+TP2:  Close crosses SSL baseline partial at bar close (long: close < bbmc_ssl, short: close > bbmc_ssl)
 Exit: Close below canalLower (long) or above canalUpper (short) — simulator canal logic
 """
 
@@ -43,9 +43,9 @@ class HMASSLOsci(Strategy):
     manual_exit = True
     use_simulator = True
     simulator_settings = {
-        # TP1 fires immediately (intrabar) when price touches the level.
-        # After TP1, SL moves to entry; breakeven fires on subsequent intrabar checks.
-        "tp1_execution_mode": "touch",
+        # TP1 fires at bar close when the bar has touched the level (intrabar check,
+        # but execution deferred to bar close).
+        "tp1_execution_mode": "bar_close_if_touched",
     }
 
     default_params = {
@@ -121,17 +121,33 @@ class HMASSLOsci(Strategy):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _hma_with_rounded_sqrt(close: pd.Series, length: int) -> pd.Series:
+        """Manual HMA variant used by the SSL baseline in PineScript.
+
+        The SSL script computes:
+            ta.wma(2 * ta.wma(close, len/2) - ta.wma(close, len), round(sqrt(len)))
+        which differs from Pine's ta.hma() for lengths whose sqrt is non-integer.
+        """
+        half_length = int(length / 2)
+        sqrt_length = int(round(math.sqrt(length)))
+        wmaf = ta.wma(close, length=half_length)
+        wmas = ta.wma(close, length=length)
+        return ta.wma(2 * wmaf - wmas, length=sqrt_length)
+
+    @staticmethod
     def _compute_ssl(close, high, low, length, mult):
         """Compute SSL Keltner channel.
 
         Replicates PineScript:
-            BBMC_ssl    = ta.wma(2*ta.wma(close, length/2) - ta.wma(close, length), sqrt(length))
-                        = ta.hma(close, length)
+            BBMC_ssl    = ta.wma(
+                              2*ta.wma(close, length/2) - ta.wma(close, length),
+                              math.round(math.sqrt(length))
+                          )
             rangema_ssl = ta.ema(ta.tr, length)
             upperk_ssl  = BBMC_ssl + rangema_ssl * mult
             lowerk_ssl  = BBMC_ssl - rangema_ssl * mult
         """
-        bbmc = ta.hma(close, length=length)
+        bbmc = HMASSLOsci._hma_with_rounded_sqrt(close, length)
         tr = ta.true_range(high, low, close)
         rangema = ta.ema(tr, length=length)
         upper = bbmc + rangema * mult
@@ -643,6 +659,14 @@ class HMASSLOsci(Strategy):
                 "sl_short": sl_short_arr,
                 "tp1_long": tp1_long_arr,
                 "tp1_short": tp1_short_arr,
+                # Persist effective canal/SSL params in the debug export so a CSV
+                # can be matched back to the exact indicator configuration.
+                "param_ema_len": ema_len,
+                "param_hma1_len": hma1_len,
+                "param_hma2_len": hma2_len,
+                "param_amp_mult": amp_mult,
+                "param_ssl_len": ssl_len,
+                "param_ssl_mult": ssl_mult,
             },
             index=data.index,
         )
@@ -654,9 +678,11 @@ class HMASSLOsci(Strategy):
             "sl_short": pd.Series(sl_short_arr, index=data.index),
             "tp1_long": pd.Series(tp1_long_arr, index=data.index),
             "tp1_short": pd.Series(tp1_short_arr, index=data.index),
-            # Canal series drive TP2 (re-entry) and final exit in the simulator.
+            # Canal series drive final exit in the simulator.
             "canal_lower": canal_lower_s,
             "canal_upper": canal_upper_s,
+            # SSL baseline: TP2 partial triggers when close crosses it (long: below, short: above).
+            "ssl_baseline": bbmc_s,
             # ema_main / ema_secondary required by simulator API; canal logic takes
             # priority so these are not used for exit decisions.
             "ema_main": src_ema,
