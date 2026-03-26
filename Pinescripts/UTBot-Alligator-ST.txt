@@ -133,7 +133,10 @@ isBlackoutWindow() =>
     b1 or b2 or b3 or b4 or b5 or b6
 
 isAutoCloseBar() =>
-    hour(time_close, "Europe/Brussels") == i_autoCloseH and minute(time_close, "Europe/Brussels") == i_autoCloseM
+    int curMin   = hour(time_close, "Europe/Brussels") * 60 + minute(time_close, "Europe/Brussels")
+    int prevMin  = hour(time_close[1], "Europe/Brussels") * 60 + minute(time_close[1], "Europe/Brussels")
+    int closeMin = i_autoCloseH * 60 + i_autoCloseM
+    curMin >= closeMin and prevMin < closeMin
 
 // SMMA pour l'Alligator
 smma(float src, int length) =>

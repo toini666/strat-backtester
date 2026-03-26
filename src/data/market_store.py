@@ -30,7 +30,7 @@ SYMBOL_CONTRACTS = {
     "MES": "CON.F.US.MES.M26",
     "MYM": "CON.F.US.MYM.M26",
     "MGC": "CON.F.US.MGC.J26",
-    "MBT": "CON.F.US.MBT.H26",
+    "MBT": "CON.F.US.MBT.J26",
     "M2K": "CON.F.US.M2K.M26",
     "MCL": "CON.F.US.MCLE.K26",
 }

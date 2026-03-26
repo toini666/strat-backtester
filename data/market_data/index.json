@@ -134,11 +134,11 @@
   {
     "id": "5b1715e9-052f-48bd-8a37-860df8a414da",
     "symbol": "MBT",
-    "contract_id": "CON.F.US.MBT.H26",
+    "contract_id": "CON.F.US.MBT.J26",
     "start_date": "2026-01-15 00:00:00+01:00",
-    "end_date": "2026-03-20 21:59:00+01:00",
-    "bar_count_1m": 62680,
-    "total_size_mb": 8.0,
+    "end_date": "2026-03-27 00:04:00+01:00",
+    "bar_count_1m": 67572,
+    "total_size_mb": 8.57,
     "timeframes": [
       "1m",
       "2m",
@@ -148,7 +148,7 @@
       "15m"
     ],
     "timezone": "Europe/Brussels",
-    "updated_at": "2026-03-21T00:25:03.381513",
+    "updated_at": "2026-03-26T23:05:48.218824",
     "contract_segments": [
       {
         "contract": "CON.F.US.MBT.F26",
@@ -166,7 +166,13 @@
         "contract": "CON.F.US.MBT.H26",
         "label": "H26",
         "from": "2026-03-02",
-        "to": "2026-03-20"
+        "to": "2026-03-24"
+      },
+      {
+        "contract": "CON.F.US.MBT.J26",
+        "label": "J26",
+        "from": "2026-03-24",
+        "to": "2026-03-27"
       }
     ]
   },

@@ -52,6 +52,7 @@ i_tpPoints     = input.float(50.0, "TP Points Fixes",              group=grp_ris
 i_maxSlPoints  = input.float(100.0,"Distance SL max (points)",     group=grp_risk, minval=1.0, tooltip="Trade ignoré si le SL (bas SSL) se trouve à plus de N points.")
 i_cooldownBars = input.int(1,      "Bougies d'attente post-close", group=grp_risk, minval=0)
 i_maxCandlePct = input.float(0.3,  "Taille max bougie Entry (%)",  group=grp_risk, step=0.1, minval=0.0, tooltip="Trade ignoré si abs(close - open) / close > N%. 0 = désactivé.")
+i_tp2PartialOn = input.bool(true,  "Activer TP2 Partiel (retour dans canal HMA)", group=grp_risk, tooltip="Si activé, envoie une alerte PARTIAL quand le prix revient dans le canal HMA après le TP1.")
 
 // --- Auto-Close ---
 grp_time     = "Auto-Close (Bruxelles)"
@@ -497,7 +498,7 @@ if positionActive and canAct and bar_index > lastActionBar
                 line.delete(lineStop)
             lineStop := line.new(bar_index, stopPrice, bar_index + 1, stopPrice, color=color.orange, style=line.style_dotted, width=1)
 
-        if tpPartialHit and not hmaInTpHit and close < canalUpper and close > canalLower
+        if i_tp2PartialOn and tpPartialHit and not hmaInTpHit and close < BBMC_ssl
             hmaInTpHit         := true
             hmaInTpJustHitLong := true
 
@@ -528,7 +529,7 @@ if positionActive and canAct and bar_index > lastActionBar
                 line.delete(lineStop)
             lineStop := line.new(bar_index, stopPrice, bar_index + 1, stopPrice, color=color.orange, style=line.style_dotted, width=1)
 
-        if tpPartialHit and not hmaInTpHit and close > canalLower and close < canalUpper
+        if i_tp2PartialOn and tpPartialHit and not hmaInTpHit and close > BBMC_ssl
             hmaInTpHit          := true
             hmaInTpJustHitShort := true
 
@@ -794,7 +795,7 @@ if barstate.islast
     // ── TP2 Partiel (entrée dans le canal HMA) ────────────
     string tp2Status = hmaInTpHit ? "✓ HIT" : (tpPartialHit ? "pending" : "—")
     color  tp2Color  = hmaInTpHit ? color.new(color.aqua, 30) : (tpPartialHit ? color.new(color.gray, 50) : f_bgNa())
-    table.cell(tbl, 0, 19, "TP2 (entrée canal)", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(tbl, 0, 19, "TP2 (cross SSL baseline)", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
     table.cell(tbl, 1, 19, positionActive and currentSide == 1  ? tp2Status : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == 1  ? tp2Color : f_bgNa())
     table.cell(tbl, 2, 19, positionActive and currentSide == -1 ? tp2Status : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == -1 ? tp2Color : f_bgNa())
 

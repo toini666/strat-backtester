@@ -68,6 +68,26 @@ All data comes from local CSV files via `market_store.py`. The store holds 1-min
 - **Historical backfill**: Databento OHLCV-1m CSVs (one-time import per ticker). Requires front-month contract resolution from multi-contract data. See agent memory for full import procedure.
 - **Ongoing updates**: Topstep API via `save_bars()`, which handles merge, timezone conversion, and timeframe recomposition automatically.
 
+### Contract Switches (Rollovers)
+
+When a futures contract expires and the front-month rolls to the next contract:
+
+1. **Write a one-time script** (see `scripts/contract_switch_MBT_J26.py` as template) that:
+   - Fetches the remaining bars for the **old contract** (from last known bar to the day before the switch closes)
+   - Saves with `save_bars(symbol, OLD_CONTRACT_ID, data)` — appends to existing data, same contract
+   - Fetches bars for the **new contract** starting from the **first bar of the new session** (CME open = 17:00 EDT = 22:00 UTC when Brussels is CET/UTC+1, or 21:00 UTC when Brussels is CEST/UTC+2)
+   - Saves with `save_bars(symbol, NEW_CONTRACT_ID, data)` — `save_bars` detects the contract change, appends only bars after `existing_end`, and adds a new segment to `contract_segments`
+
+2. **Update `SYMBOL_CONTRACTS`** in `src/data/market_store.py` to point to the new contract ID.
+
+3. **CME month codes**: F=Jan, G=Feb, H=Mar, J=Apr, K=May, M=Jun, N=Jul, Q=Aug, U=Sep, V=Oct, X=Nov, Z=Dec
+
+**Time reference for contract switch dates:**
+- Brussels UTC offset: CET=UTC+1 (Oct→last Sunday March), CEST=UTC+2 (last Sunday March→Oct)
+- US EDT/EST offset: EDT=UTC-4 (2nd Sunday Mar→1st Sunday Nov), EST=UTC-5
+- CME opens at 17:00 EDT / 18:00 EST = 22:00 UTC (summer, Brussels CEST) or 22:00 UTC (winter, Brussels CET)
+- The gap between the last H26 bar and first J26 bar is the inter-session gap (e.g., 21:58 Brussels → 23:00 Brussels)
+
 **CSV format**: `Date,Open,High,Low,Close,Volume` with `Date` as Brussels tz-aware timestamps. CSVs may contain mixed UTC offsets (+01:00 winter / +02:00 summer) — `market_store.py` reads them via `pd.to_datetime(utc=True)` then `tz_convert('Europe/Brussels')`.
 
 ### 2. Timeframe Recomposition (`src/data/recompose.py`)
