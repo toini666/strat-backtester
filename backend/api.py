@@ -58,8 +58,9 @@ STRATEGY_WARMUP_BARS = {
     "EMA9Scalp": 150,       # EMA(7)→28 + MFI(35)+smooth(6)+cloud→76 + oscillator margin
     "UTBotAlligatorST": 120, # SMMA(13)+offset(8)→~60 + ATR(10) + margin
     "HMAOsci": 250,         # EMA(7)→28 + HMA(84)→135 + MFI(35)→41 + margin
-    "HMASSLOsci": 250,      # EMA(7)→28 + HMA(84)→135 + EMA(60) SSL rangema→240 + margin
-    "RobReversal": 150,     # EMA(13)→52 + MFI(35)+cloud(35)→112 + margin
+    "HMASSLOsci": 250,          # EMA(7)→28 + HMA(84)→135 + EMA(60) SSL rangema→240 + margin
+    "EMABreakHMASSLOsc": 250,  # EMA(13)→52 + EMA(60) SSL rangema→240 + margin
+    "RobReversal": 150,         # EMA(13)→52 + MFI(35)+cloud(35)→112 + margin
 }
 DEFAULT_WARMUP_BARS = 200
 BACKTEST_TZ = "Europe/Brussels"
