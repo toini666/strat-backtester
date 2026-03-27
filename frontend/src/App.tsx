@@ -13,6 +13,8 @@ import {
   type BacktestEngineSettings,
   DEFAULT_BACKTEST_ENGINE_SETTINGS,
 } from './api';
+
+type BacktestContext = { symbol: string; interval: string; start: string; end: string };
 import './App.css';
 
 // Components
@@ -64,6 +66,11 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [error, setError] = useState('');
+
+  // Previous run comparison — tracks metrics from the last completed run (same context only)
+  const [previousMetrics, setPreviousMetrics] = useState<BacktestMetrics | null>(null);
+  const currentResultContextRef = useRef<BacktestContext | null>(null);
+  const filteredResultRef = useRef<BacktestResult | null>(null);
 
   // Auto-update mode: when enabled, parameter changes trigger automatic resimulation
   const [autoUpdate, setAutoUpdate] = useState(false);
@@ -167,6 +174,19 @@ function App() {
 
   const runBacktest = async () => {
     if (!selectedStrategy || !selectedSymbol) return;
+
+    const newContext: BacktestContext = { symbol: selectedSymbol, interval, start: startDatetime, end: endDatetime };
+
+    // Promote current filtered metrics to "previous" if context matches
+    const ctx = currentResultContextRef.current;
+    const fr = filteredResultRef.current;
+    if (fr && ctx && ctx.symbol === newContext.symbol && ctx.interval === newContext.interval &&
+        ctx.start === newContext.start && ctx.end === newContext.end) {
+      setPreviousMetrics({ ...fr.metrics });
+    } else {
+      setPreviousMetrics(null);
+    }
+
     setLoading(true);
     setError('');
     setResult(null);
@@ -185,6 +205,7 @@ function App() {
         engineSettings,
       );
       setResult(res);
+      currentResultContextRef.current = newContext;
       // Track which strategy params were used for signal generation
       lastSignalParamsRef.current = JSON.stringify(params);
     } catch (err: unknown) {
@@ -194,6 +215,22 @@ function App() {
       setLoading(false);
     }
   };
+
+  // Keep filteredResultRef in sync so async handlers can read the latest value
+  useEffect(() => {
+    filteredResultRef.current = filteredResult;
+  }, [filteredResult]);
+
+  // Clear previous metrics when the backtest context changes (ticker, timeframe, or date range)
+  useEffect(() => {
+    const ctx = currentResultContextRef.current;
+    if (!ctx) return;
+    if (selectedSymbol !== ctx.symbol || interval !== ctx.interval ||
+        startDatetime !== ctx.start || endDatetime !== ctx.end) {
+      setPreviousMetrics(null);
+      currentResultContextRef.current = null;
+    }
+  }, [selectedSymbol, interval, startDatetime, endDatetime]);
 
   // Auto-update: debounced re-run when parameters change.
   // - Strategy params change → full backtest (re-generates signals)
@@ -215,6 +252,18 @@ function App() {
     autoUpdateTimer.current = setTimeout(async () => {
       const p = autoUpdateRef.current;
       if (!p.selectedStrategy || !p.selectedSymbol) return;
+
+      const newContext: BacktestContext = { symbol: p.selectedSymbol, interval: p.interval, start: p.startDatetime, end: p.endDatetime };
+
+      // Promote current filtered metrics to "previous" if context matches
+      const ctx = currentResultContextRef.current;
+      const fr = filteredResultRef.current;
+      if (fr && ctx && ctx.symbol === newContext.symbol && ctx.interval === newContext.interval &&
+          ctx.start === newContext.start && ctx.end === newContext.end) {
+        setPreviousMetrics({ ...fr.metrics });
+      } else {
+        setPreviousMetrics(null);
+      }
 
       // Determine if strategy params changed (need full backtest)
       const currentParamsKey = JSON.stringify(p.params);
@@ -250,6 +299,7 @@ function App() {
           );
         }
         setResult(res);
+        currentResultContextRef.current = newContext;
         setError('');
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
@@ -582,6 +632,7 @@ function App() {
             initialEquity={initialEquity}
             autoUpdate={autoUpdate}
             autoUpdateLoading={autoUpdateLoading}
+            previousMetrics={previousMetrics}
           />
         </div>
       )}

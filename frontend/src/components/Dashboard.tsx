@@ -7,7 +7,7 @@ import { DailyPnlCalendar } from './DailyPnlCalendar';
 import { TradesTable } from './TradesTable';
 import { TradeAnalytics } from './TradeAnalytics';
 import { SessionAnalytics } from './SessionAnalytics';
-import { type BacktestResult } from '../api';
+import { type BacktestResult, type BacktestMetrics } from '../api';
 
 interface DashboardProps {
     filteredResult: BacktestResult | null;
@@ -17,6 +17,15 @@ interface DashboardProps {
     initialEquity?: number;
     autoUpdate?: boolean;
     autoUpdateLoading?: boolean;
+    previousMetrics?: BacktestMetrics | null;
+}
+
+function computeDelta(current: number, previous: number, suffix: string, higherIsBetter: boolean): { label: string; color: string } {
+    const delta = current - previous;
+    const sign = delta > 0 ? '+' : '';
+    const isBetter = higherIsBetter ? delta > 0 : delta < 0;
+    const color = delta === 0 ? 'text-gray-500' : isBetter ? 'text-green-400' : 'text-red-400';
+    return { label: `${sign}${delta.toFixed(suffix === '' ? 0 : 2)}${suffix}`, color };
 }
 
 export function Dashboard({
@@ -27,6 +36,7 @@ export function Dashboard({
     initialEquity,
     autoUpdate = false,
     autoUpdateLoading = false,
+    previousMetrics = null,
 }: DashboardProps) {
 
     // All hooks must be called unconditionally (before any early return)
@@ -69,6 +79,11 @@ export function Dashboard({
 
     const { metrics, equity_curve, trades } = filteredResult;
 
+    const returnDelta = previousMetrics ? computeDelta(metrics.total_return, previousMetrics.total_return, '%', true) : null;
+    const winRateDelta = previousMetrics ? computeDelta(metrics.win_rate, previousMetrics.win_rate, '%', true) : null;
+    const tradesDelta = previousMetrics ? computeDelta(metrics.total_trades, previousMetrics.total_trades, '', true) : null;
+    const drawdownDelta = previousMetrics ? computeDelta(metrics.max_drawdown, previousMetrics.max_drawdown, '%', false) : null;
+
     return (
         <div className="space-y-6 animate-fadeIn pb-10" role="main" aria-label="Backtest results">
 
@@ -76,9 +91,9 @@ export function Dashboard({
             {autoUpdate && showStickyMetrics && createPortal(
                 <div className="fixed top-0 left-0 right-0 z-50 bg-gray-900/95 backdrop-blur-md border-b border-gray-700/60 shadow-2xl">
                     <div className="max-w-screen-2xl mx-auto px-8 py-3.5 flex items-center gap-8">
-                        <div className="flex items-center gap-2 text-emerald-400 text-sm font-semibold shrink-0">
+                        <div className={`flex items-center gap-2 text-sm font-semibold shrink-0 ${autoUpdateLoading ? 'text-amber-400' : 'text-emerald-400'}`}>
                             <RefreshCw className={`w-4 h-4 ${autoUpdateLoading ? 'animate-spin' : ''}`} />
-                            Auto-Update
+                            {autoUpdateLoading ? 'Updating...' : 'Auto-Update'}
                         </div>
                         <div className="flex items-baseline gap-10 flex-1 justify-center">
                             {/* Return */}
@@ -91,18 +106,27 @@ export function Dashboard({
                                 <span className={`text-xs font-mono ${metrics.total_return >= 0 ? 'text-green-400/50' : 'text-red-400/50'}`}>
                                     {metrics.total_return >= 0 ? '+' : '-'}${Math.abs(metrics.total_return / 100 * (initialEquity || 50000)).toFixed(2)}
                                 </span>
+                                {returnDelta && (
+                                    <span className={`text-xs font-mono ${returnDelta.color}`}>{returnDelta.label}</span>
+                                )}
                             </div>
                             {/* Win Rate */}
                             <div className="flex items-baseline gap-2">
                                 <Activity className="w-4 h-4 self-center text-blue-400" />
                                 <span className="text-xs text-gray-500 uppercase tracking-wide">Win Rate</span>
                                 <span className="text-lg font-bold font-mono text-blue-400">{metrics.win_rate.toFixed(1)}%</span>
+                                {winRateDelta && (
+                                    <span className={`text-xs font-mono ${winRateDelta.color}`}>{winRateDelta.label}</span>
+                                )}
                             </div>
                             {/* Trades */}
                             <div className="flex items-baseline gap-2">
                                 <Clock className="w-4 h-4 self-center text-orange-400" />
                                 <span className="text-xs text-gray-500 uppercase tracking-wide">Trades</span>
                                 <span className="text-lg font-bold font-mono text-orange-400">{metrics.total_trades}</span>
+                                {tradesDelta && (
+                                    <span className={`text-xs font-mono ${tradesDelta.color}`}>{tradesDelta.label}</span>
+                                )}
                             </div>
                             {/* Max DD */}
                             <div className="flex items-baseline gap-2">
@@ -112,6 +136,9 @@ export function Dashboard({
                                 <span className="text-xs font-mono text-red-400/50">
                                     -${(metrics.max_drawdown / 100 * (initialEquity || 50000)).toFixed(2)}
                                 </span>
+                                {drawdownDelta && (
+                                    <span className={`text-xs font-mono ${drawdownDelta.color}`}>{drawdownDelta.label}</span>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -137,18 +164,24 @@ export function Dashboard({
                     color={metrics.total_return >= 0 ? "text-green-400" : "text-red-400"}
                     subValue={`${metrics.total_return >= 0 ? '+' : '-'}$${Math.abs(metrics.total_return / 100 * (initialEquity || 50000)).toFixed(2)}`}
                     subColor={metrics.total_return >= 0 ? "text-green-400" : "text-red-400"}
+                    deltaLabel={returnDelta?.label}
+                    deltaColor={returnDelta?.color}
                 />
                 <KpiCard
                     label="Win Rate"
                     value={`${metrics.win_rate.toFixed(2)}%`}
                     icon={Activity}
                     color="text-blue-400"
+                    deltaLabel={winRateDelta?.label}
+                    deltaColor={winRateDelta?.color}
                 />
                 <KpiCard
                     label="Total Trades"
                     value={metrics.total_trades.toString()}
                     icon={Clock}
                     color="text-orange-400"
+                    deltaLabel={tradesDelta?.label}
+                    deltaColor="text-gray-400"
                 />
                 <KpiCard
                     label="Max Drawdown"
@@ -157,6 +190,8 @@ export function Dashboard({
                     color="text-red-400"
                     subValue={`-$${(metrics.max_drawdown / 100 * (initialEquity || 50000)).toFixed(2)}`}
                     subColor="text-red-400"
+                    deltaLabel={drawdownDelta?.label}
+                    deltaColor={drawdownDelta?.color}
                 />
             </div>
 

@@ -7,11 +7,11 @@ indicator("HMA-SSL-Osci", shorttitle="HMA-SSL-Osci", overlay=true, max_lines_cou
 
 // --- HMA Ribbon ---
 grp_hma = "HMA RIBBON"
-i_emaLen     = input.int(7,    "Longueur EMA (Source)",        group=grp_hma, minval=1)
-i_hma1Len    = input.int(42,   "Longueur HMA Principale",      group=grp_hma, minval=1)
-i_hma2Len    = input.int(84,   "Longueur HMA Secondaire",      group=grp_hma, minval=1)
+i_emaLen     = input.int(13,    "Longueur EMA (Source)",        group=grp_hma, minval=1)
+i_hma1Len    = input.int(13,   "Longueur HMA Principale",      group=grp_hma, minval=1)
+i_hma2Len    = input.int(21,   "Longueur HMA Secondaire",      group=grp_hma, minval=1)
 i_ampMult    = input.float(2.0, "Multiplicateur d'Amplitude",  group=grp_hma, step=0.1, minval=0)
-i_timeOffset = input.int(-1,    "Offset (Vitesse Horizontale)", group=grp_hma, step=1, tooltip="Décale visuellement le canal HMA horizontalement. N'affecte pas les calculs.")
+i_timeOffset = input.int(0,    "Offset (Vitesse Horizontale)", group=grp_hma, step=1, tooltip="Décale visuellement le canal HMA horizontalement. N'affecte pas les calculs.")
 
 // --- SSL ---
 grp_ssl   = "SSL (GATOR)"
@@ -41,18 +41,19 @@ i_hwRangeOn    = input.bool(true,  "④ Activer range HW",             group=grp
 i_hwRange      = input.float(10.0, "   Niveau range (+/-)",          group=grp_fil, minval=0.0)
 i_cloudOn      = input.bool(true,  "⑤ Activer nuage MFI",            group=grp_fil, tooltip="Vérifie la position MFI par rapport à sa référence. Compensable par ⑥.")
 i_deltaOn      = input.bool(true,  "⑥ Activer deltas",               group=grp_fil, tooltip="Long OK si delta short non actif. Short OK si delta long non actif. Fallback pour ⑤.")
-i_cloudZeroOn  = input.bool(true,  "⑦ Activer nuage < 0 / > 0",      group=grp_fil, tooltip="Long OK si nuage MFI < 0. Short OK si nuage MFI > 0.")
-i_deltaExtOn   = input.bool(true,  "⑧ Activer extinction deltas",     group=grp_fil, tooltip="Long OK si delta short vient de s'éteindre. Short OK si delta long vient de s'éteindre.")
+i_cloudZeroOn  = input.bool(false,  "⑦ Activer nuage < 0 / > 0",      group=grp_fil, tooltip="Long OK si nuage MFI < 0. Short OK si nuage MFI > 0.")
+i_deltaExtOn   = input.bool(false,  "⑧ Activer extinction deltas",     group=grp_fil, tooltip="Long OK si delta short vient de s'éteindre. Short OK si delta long vient de s'éteindre.")
 
 // --- Gestion des risques ---
 grp_risk       = "GESTION DES RISQUES"
 i_tickBuffer   = input.int(0,      "Buffer SL (en ticks)",         group=grp_risk)
-i_rrPartial    = input.float(2.0,  "Risk/Reward TP Partiel",       group=grp_risk, minval=0.5, step=0.5)
-i_tpPoints     = input.float(50.0, "TP Points Fixes",              group=grp_risk, minval=1.0)
-i_maxSlPoints  = input.float(100.0,"Distance SL max (points)",     group=grp_risk, minval=1.0, tooltip="Trade ignoré si le SL (bas SSL) se trouve à plus de N points.")
+i_rrPartial    = input.float(50.0,  "Risk/Reward TP Partiel",       group=grp_risk, minval=0.5, step=0.5)
+i_tpPoints     = input.float(500.0, "TP Points Fixes",              group=grp_risk, minval=1.0)
+i_maxSlPoints  = input.float(300.0,"Distance SL max (points)",     group=grp_risk, minval=1.0, tooltip="Trade ignoré si le SL (bas SSL) se trouve à plus de N points.")
 i_cooldownBars = input.int(1,      "Bougies d'attente post-close", group=grp_risk, minval=0)
-i_maxCandlePct = input.float(0.3,  "Taille max bougie Entry (%)",  group=grp_risk, step=0.1, minval=0.0, tooltip="Trade ignoré si abs(close - open) / close > N%. 0 = désactivé.")
-i_tp2PartialOn = input.bool(true,  "Activer TP2 Partiel (retour dans canal HMA)", group=grp_risk, tooltip="Si activé, envoie une alerte PARTIAL quand le prix revient dans le canal HMA après le TP1.")
+i_maxCandlePct = input.float(0.9,  "Taille max bougie Entry (%)",  group=grp_risk, step=0.1, minval=0.0, tooltip="Trade ignoré si abs(close - open) / close > N%. 0 = désactivé.")
+i_tp2PartialOn = input.bool(false,  "Activer TP2 Partiel (retour dans canal HMA)", group=grp_risk, tooltip="Si activé, envoie une alerte PARTIAL quand le prix revient dans le canal HMA après le TP1.")
+simple string i_exitMode = input.string("Break HMA", "Mode de clôture TP Final", group=grp_risk, options=["Break HMA", "Inversion HMA"], tooltip="Break HMA : clôture quand le prix sort de l'autre côté du canal. Inversion HMA : clôture quand le canal change de couleur.")
 
 // --- Auto-Close ---
 grp_time     = "Auto-Close (Bruxelles)"
@@ -61,35 +62,35 @@ i_autoCloseM = input.int(0,  "Minute",  minval=0, maxval=59, group=grp_time, inl
 
 // --- Blackout ---
 grp_bo      = "Blackout (Bruxelles)"
-i_bo1On     = input.bool(false, "Blackout 1 actif", group=grp_bo, inline="bo1")
-i_bo1StartH = input.int(8,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo1")
+i_bo1On     = input.bool(true, "Blackout 1 actif", group=grp_bo, inline="bo1")
+i_bo1StartH = input.int(1,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo1")
 i_bo1StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo1")
-i_bo1EndH   = input.int(8,  "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo1e")
-i_bo1EndM   = input.int(5,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo1e")
+i_bo1EndH   = input.int(2,  "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo1e")
+i_bo1EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo1e")
 
-i_bo2On     = input.bool(false, "Blackout 2 actif", group=grp_bo, inline="bo2")
-i_bo2StartH = input.int(11, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo2")
+i_bo2On     = input.bool(true, "Blackout 2 actif", group=grp_bo, inline="bo2")
+i_bo2StartH = input.int(3, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo2")
 i_bo2StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo2")
-i_bo2EndH   = input.int(13, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo2e")
+i_bo2EndH   = input.int(6, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo2e")
 i_bo2EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo2e")
 
-i_bo3On     = input.bool(false, "Blackout 3 actif", group=grp_bo, inline="bo3")
-i_bo3StartH = input.int(14, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo3")
-i_bo3StartM = input.int(30, "M",       minval=0, maxval=59, group=grp_bo, inline="bo3")
-i_bo3EndH   = input.int(14, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo3e")
-i_bo3EndM   = input.int(35, "M",       minval=0, maxval=59, group=grp_bo, inline="bo3e")
+i_bo3On     = input.bool(true, "Blackout 3 actif", group=grp_bo, inline="bo3")
+i_bo3StartH = input.int(8, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo3")
+i_bo3StartM = input.int(0, "M",       minval=0, maxval=59, group=grp_bo, inline="bo3")
+i_bo3EndH   = input.int(9, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo3e")
+i_bo3EndM   = input.int(0, "M",       minval=0, maxval=59, group=grp_bo, inline="bo3e")
 
-i_bo4On     = input.bool(false, "Blackout 4 actif", group=grp_bo, inline="bo4")
-i_bo4StartH = input.int(15, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo4")
-i_bo4StartM = input.int(30, "M",       minval=0, maxval=59, group=grp_bo, inline="bo4")
-i_bo4EndH   = input.int(21, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo4e")
+i_bo4On     = input.bool(true, "Blackout 4 actif", group=grp_bo, inline="bo4")
+i_bo4StartH = input.int(10, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo4")
+i_bo4StartM = input.int(0, "M",       minval=0, maxval=59, group=grp_bo, inline="bo4")
+i_bo4EndH   = input.int(18, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo4e")
 i_bo4EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo4e")
 
 i_bo5On     = input.bool(true,  "Blackout 5 actif", group=grp_bo, inline="bo5")
 i_bo5StartH = input.int(21, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo5")
 i_bo5StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo5")
 i_bo5EndH   = input.int(23, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo5e")
-i_bo5EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo5e")
+i_bo5EndM   = input.int(59,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo5e")
 
 i_bo6On     = input.bool(false, "Blackout 6 actif", group=grp_bo, inline="bo6")
 i_bo6StartH = input.int(23, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo6")
@@ -396,6 +397,9 @@ bool cooldownOk = (bar_index - lastCloseBarIndex) >= i_cooldownBars
 bool finalLongEntry  = longSignal  and slLongOk  and cooldownOk
 bool finalShortEntry = shortSignal and slShortOk and cooldownOk
 
+bool hmaFlipUp   = canalGreen and not canalGreen[1]
+bool hmaFlipDown = not canalGreen and canalGreen[1]
+
 // ============================================
 // GESTION DES POSITIONS
 // ============================================
@@ -502,8 +506,9 @@ if positionActive and canAct and bar_index > lastActionBar
             hmaInTpHit         := true
             hmaInTpJustHitLong := true
 
-        // TP Final : clôture de l'autre côté du canal HMA (close < canalLower)
-        if close < canalLower and not hitBreakeven and not hitStopLoss
+        // TP Final : clôture selon le mode sélectionné
+        bool exitCondLong = i_exitMode == "Break HMA" ? close < canalLower : hmaFlipDown
+        if exitCondLong and not hitBreakeven and not hitStopLoss
             hitCanalExit := true
 
         if tpPartialJustHitLong and not hitCanalExit
@@ -533,8 +538,9 @@ if positionActive and canAct and bar_index > lastActionBar
             hmaInTpHit          := true
             hmaInTpJustHitShort := true
 
-        // TP Final : clôture de l'autre côté du canal HMA (close > canalUpper)
-        if close > canalUpper and not hitBreakeven and not hitStopLoss
+        // TP Final : clôture selon le mode sélectionné
+        bool exitCondShort = i_exitMode == "Break HMA" ? close > canalUpper : hmaFlipUp
+        if exitCondShort and not hitBreakeven and not hitStopLoss
             hitCanalExit := true
 
         if tpPartialJustHitShort and not hitCanalExit
@@ -802,6 +808,15 @@ if barstate.islast
     // ── TP Final (autre côté canal) ───────────────────────
     string tpFinalStatus = not positionActive ? "—" : (tpPartialHit ? "actif" : "après TP1")
     color  tpFinalColor  = not positionActive ? f_bgNa() : (tpPartialHit ? color.new(color.lime, 40) : color.new(color.gray, 50))
-    table.cell(tbl, 0, 20, "TP Final (autre côté)", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
+    string tpFinalLabel  = i_exitMode == "Break HMA" ? "TP Final (break canal)" : "TP Final (inversion HMA)"
+    table.cell(tbl, 0, 20, tpFinalLabel, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
     table.cell(tbl, 1, 20, positionActive and currentSide == 1  ? tpFinalStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == 1  ? tpFinalColor : f_bgNa())
     table.cell(tbl, 2, 20, positionActive and currentSide == -1 ? tpFinalStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == -1 ? tpFinalColor : f_bgNa())
+
+// ============================================
+// ALERTES INDÉPENDANTES (alertcondition)
+// ============================================
+
+alertcondition(hmaFlipUp,   title="HMA Inversion Haussière", message="HMA Canal: inversion haussière (rouge → vert)")
+alertcondition(hmaFlipDown, title="HMA Inversion Baissière", message="HMA Canal: inversion baissière (vert → rouge)")
+alertcondition(hmaFlipUp or hmaFlipDown, title="HMA Inversion (toutes directions)", message="HMA Canal: inversion détectée")

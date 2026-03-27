@@ -311,6 +311,19 @@ export function Sidebar({
             );
         }
 
+        if (key === 'exit_mode') {
+            return (
+                <select
+                    className="input-base"
+                    value={String(value)}
+                    onChange={(event) => handleParamChange(key, event.target.value)}
+                >
+                    <option value="break_hma">Break HMA</option>
+                    <option value="inversion_hma">Inversion HMA</option>
+                </select>
+            );
+        }
+
         if (typeof value === 'string') {
             return (
                 <input

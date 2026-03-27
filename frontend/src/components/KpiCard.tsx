@@ -7,9 +7,11 @@ interface KpiCardProps {
     color?: string;
     subValue?: string;
     subColor?: string;
+    deltaLabel?: string;
+    deltaColor?: string;
 }
 
-export function KpiCard({ label, value, icon: Icon, color, subValue, subColor }: KpiCardProps) {
+export function KpiCard({ label, value, icon: Icon, color, subValue, subColor, deltaLabel, deltaColor }: KpiCardProps) {
     const iconColorClass = color || 'text-gray-400';
 
     return (
@@ -27,6 +29,11 @@ export function KpiCard({ label, value, icon: Icon, color, subValue, subColor }:
                         </span>
                     )}
                 </div>
+                {deltaLabel && (
+                    <div className={`text-xs font-mono mt-0.5 ${deltaColor || 'text-gray-500'}`}>
+                        {deltaLabel} vs prev
+                    </div>
+                )}
             </div>
         </div>
     );

@@ -84,6 +84,8 @@ class HMASSLOsci(Strategy):
         "max_candle_pct": 0.3,    # 0 = disabled
         "tp1_partial_pct": 0.25,
         "tp2_partial_pct": 0.25,
+        # Exit mode: "break_hma" (close breaks canal) or "inversion_hma" (canal color changes)
+        "exit_mode": "break_hma",
         # Injected by engine
         "tick_size": 0.25,
     }
@@ -114,6 +116,7 @@ class HMASSLOsci(Strategy):
         settings = self.simulator_settings.copy()
         settings["tp1_partial_pct"] = p.get("tp1_partial_pct", 0.25)
         settings["tp2_partial_pct"] = p.get("tp2_partial_pct", 0.25)
+        settings["canal_exit_mode"] = p.get("exit_mode", "break_hma")
         return settings
 
     # ------------------------------------------------------------------
@@ -681,6 +684,7 @@ class HMASSLOsci(Strategy):
             # Canal series drive final exit in the simulator.
             "canal_lower": canal_lower_s,
             "canal_upper": canal_upper_s,
+            "canal_green": canal_green_s,
             # SSL baseline: TP2 partial triggers when close crosses it (long: below, short: above).
             "ssl_baseline": bbmc_s,
             # ema_main / ema_secondary required by simulator API; canal logic takes
