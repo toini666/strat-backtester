@@ -84,8 +84,8 @@ class HMASSLOsci(Strategy):
         "max_candle_pct": 0.3,    # 0 = disabled
         "tp1_partial_pct": 0.25,
         "tp2_partial_pct": 0.25,
-        # Exit mode: "break_hma" (close breaks canal) or "inversion_hma" (canal color changes)
-        "exit_mode": "break_hma",
+        # Exit mode: "both_hma" (break OR inversion), "break_hma" (close breaks canal), "inversion_hma" (canal color changes)
+        "exit_mode": "both_hma",
         # Injected by engine
         "tick_size": 0.25,
     }

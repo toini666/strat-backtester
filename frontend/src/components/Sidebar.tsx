@@ -318,6 +318,7 @@ export function Sidebar({
                     value={String(value)}
                     onChange={(event) => handleParamChange(key, event.target.value)}
                 >
+                    <option value="both_hma">Break ou Inversion HMA</option>
                     <option value="break_hma">Break HMA</option>
                     <option value="inversion_hma">Inversion HMA</option>
                 </select>

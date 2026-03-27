@@ -60,7 +60,7 @@ class SimulatorConfig:
     no_sl_after_tp1: bool = False  # if True, intra-bar SL/BE disabled after TP1 (exit only via close-based logic)
     tp1_full_exit: bool = False          # if True, TP1 closes entire position (no partial); no breakeven move
     inverse_canal_exit: bool = False     # if True, LONG exits when close>upper, SHORT exits when close<lower
-    canal_exit_mode: str = "break_hma"   # "break_hma" (default) or "inversion_hma" (exit on color change)
+    canal_exit_mode: str = "both_hma"    # "both_hma" (default), "break_hma", or "inversion_hma"
 
     daily_win_limit_enabled: bool = False
     daily_win_limit: float = 500.0
@@ -938,13 +938,15 @@ def simulate(
                     return True
 
         # Canal-based exits (HMA channel): replaces EMA cross logic when present.
-        # "break_hma": Long exits when close < canalLower, Short exits when close > canalUpper.
+        # "break_hma":    Long exits when close < canalLower, Short exits when close > canalUpper.
         # "inversion_hma": Long exits when canal turns red (canal_green=False), Short when canal turns green.
+        # "both_hma":     Either condition triggers exit (break OR inversion).
         # inverse_canal_exit (legacy bool): Long exits when close > canalUpper, Short when close < canalLower.
         if has_canal_exit:
             cl = np_canal_lower[bar_idx] if bar_idx < len(np_canal_lower) else np.nan
             cu = np_canal_upper[bar_idx] if bar_idx < len(np_canal_upper) else np.nan
-            is_inversion_mode = config.canal_exit_mode == "inversion_hma"
+            is_inversion_mode = config.canal_exit_mode in ("inversion_hma", "both_hma")
+            is_break_mode = config.canal_exit_mode in ("break_hma", "both_hma")
             if not np.isnan(cl) and not np.isnan(cu):
                 if not config.inverse_canal_exit and not is_inversion_mode and not has_fixed_tp2 and config.tp2_partial_pct > 0 and pos.tp1_hit and not pos.tp2_hit:
                     if has_ssl_tp2:
@@ -963,15 +965,7 @@ def simulate(
                         if exited > 0:
                             pos.tp2_hit = True
                 if pos is not None:
-                    if is_inversion_mode and np_canal_green is not None and bar_idx < len(np_canal_green):
-                        cg = bool(np_canal_green[bar_idx])
-                        if pos.side == 1 and not cg:
-                            _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
-                            return True
-                        elif pos.side == -1 and cg:
-                            _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
-                            return True
-                    elif config.inverse_canal_exit:
+                    if config.inverse_canal_exit:
                         if pos.side == 1 and close_price > cu:
                             _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
                             return True
@@ -979,12 +973,23 @@ def simulate(
                             _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
                             return True
                     else:
-                        if pos.side == 1 and close_price < cl:
-                            _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
-                            return True
-                        elif pos.side == -1 and close_price > cu:
-                            _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
-                            return True
+                        # Inversion check: exit when canal changes color
+                        if is_inversion_mode and np_canal_green is not None and bar_idx < len(np_canal_green):
+                            cg = bool(np_canal_green[bar_idx])
+                            if pos.side == 1 and not cg:
+                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                return True
+                            elif pos.side == -1 and cg:
+                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                return True
+                        # Break check: exit when close crosses canal boundary
+                        if is_break_mode:
+                            if pos.side == 1 and close_price < cl:
+                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                return True
+                            elif pos.side == -1 and close_price > cu:
+                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                return True
             return pos is None
 
         ema_val = np_ema[bar_idx] if bar_idx < len(np_ema) else np.nan

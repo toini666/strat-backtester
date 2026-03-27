@@ -1,24 +1,27 @@
 //@version=6
-indicator("HMA-SSL-Osci", shorttitle="HMA-SSL-Osci", overlay=true, max_lines_count=500, max_labels_count=500)
+indicator("EMA-Break-HMA-SSL-Osc", shorttitle="EBO-HMA-SSL", overlay=true, max_lines_count=500, max_labels_count=500)
 
 // ============================================
 // PARAMÈTRES INPUT
 // ============================================
 
+// --- EMA ---
+grp_ema      = "EMA"
+i_emaLen     = input.int(13,   "EMA Principale Length",              group=grp_ema, minval=1)
+
 // --- HMA Ribbon ---
-grp_hma = "HMA RIBBON"
-i_emaLen     = input.int(13,    "Longueur EMA (Source)",        group=grp_hma, minval=1)
-i_hma1Len    = input.int(13,   "Longueur HMA Principale",      group=grp_hma, minval=1)
-i_hma2Len    = input.int(21,   "Longueur HMA Secondaire",      group=grp_hma, minval=1)
-i_ampMult    = input.float(2.0, "Multiplicateur d'Amplitude",  group=grp_hma, step=0.1, minval=0)
-i_timeOffset = input.int(0,    "Offset (Vitesse Horizontale)", group=grp_hma, step=1, tooltip="Décale visuellement le canal HMA horizontalement. N'affecte pas les calculs.")
+grp_hma      = "HMA RIBBON"
+i_hma1Len    = input.int(13,   "Longueur HMA Principale",            group=grp_hma, minval=1)
+i_hma2Len    = input.int(21,   "Longueur HMA Secondaire",            group=grp_hma, minval=1)
+i_ampMult    = input.float(2.0,"Multiplicateur d'Amplitude",         group=grp_hma, step=0.1, minval=0)
+i_timeOffset = input.int(0,    "Offset (Vitesse Horizontale)",       group=grp_hma, step=1)
 
 // --- SSL ---
-grp_ssl   = "SSL (GATOR)"
-len_ssl   = input.int(60,    "Période SSL",                    group=grp_ssl)
-multy_ssl = input.float(0.2, "Multiplicateur Canal Keltner",   group=grp_ssl)
-bColorSSL = input.color(color.new(#00c3ff, 0), "Couleur SSL Haussière", group=grp_ssl)
-sColorSSL = input.color(color.new(#ff0062, 0), "Couleur SSL Baissière", group=grp_ssl)
+grp_ssl      = "SSL (GATOR)"
+len_ssl      = input.int(60,    "Période SSL",                       group=grp_ssl)
+multy_ssl    = input.float(0.2, "Multiplicateur Canal Keltner",      group=grp_ssl)
+bColorSSL    = input.color(color.new(#00c3ff, 0), "Couleur SSL Haussière", group=grp_ssl)
+sColorSSL    = input.color(color.new(#ff0062, 0), "Couleur SSL Baissière", group=grp_ssl)
 
 // --- 4Kings Oscillator ---
 grp_osc       = "4KINGS OSCILLATOR"
@@ -31,29 +34,33 @@ grp_mf      = "SMART MONEY FLOW"
 simple int mfL = input.int(35, "Money Flow Length", group=grp_mf, minval=10, maxval=55)
 simple int mfS = input.int(6,  "Money Flow Smooth", group=grp_mf, minval=2,  maxval=10)
 
+// --- Filtres Break ---
+grp_brk              = "FILTRES BREAK"
+i_breakWaitBars      = input.int(3,    "Bougies supp. après Break",              group=grp_brk, minval=0, maxval=50, tooltip="Nombre de bougies supplémentaires après le break EMA pour valider toutes les autres conditions. 0 = bougie du break uniquement.")
+i_maxCandlePct       = input.float(0.4,"Taille max bougie Break (%)",            group=grp_brk, step=0.1, minval=0.0, tooltip="0 = désactivé. Filtre les bougies de break dont abs(open-close)/close dépasse ce %.")
+i_cooldownBars       = input.int(1,    "Bougies d'attente post-close",           group=grp_brk, minval=0)
+
 // --- Filtres Oscillateur ---
 grp_fil        = "FILTRES OSCILLATEUR"
 i_hwDirOn      = input.bool(true,  "① Activer sens HW",              group=grp_fil, tooltip="Long OK si dernière HW = crossover. Short OK si crossunder.")
 i_hwExtremeOn  = input.bool(true,  "② Activer extrêmes HW (cross)",  group=grp_fil, tooltip="Long interdit si valeur au cross > +N. Short interdit si < -N.")
 i_hwExtreme    = input.float(20.0, "   Niveau extrême (+/-)",        group=grp_fil, minval=0.0)
-i_sigExtremeOn = input.bool(true,  "③ Activer extrêmes SIG courant", group=grp_fil, tooltip="Long interdit si oscSig courant > +N. Short interdit si < -N. Même seuil que ②.")
-i_hwRangeOn    = input.bool(true,  "④ Activer range HW",             group=grp_fil, tooltip="Aucun trade si abs(HW au cross) <= N.")
+i_sigExtremeOn = input.bool(false,  "③ Activer extrêmes SIG courant", group=grp_fil, tooltip="Long interdit si oscSig courant > +N. Short interdit si < -N. Même seuil que ②.")
+i_hwRangeOn    = input.bool(false,  "④ Activer range HW",             group=grp_fil, tooltip="Aucun trade si abs(HW au cross) <= N.")
 i_hwRange      = input.float(10.0, "   Niveau range (+/-)",          group=grp_fil, minval=0.0)
-i_cloudOn      = input.bool(true,  "⑤ Activer nuage MFI",            group=grp_fil, tooltip="Vérifie la position MFI par rapport à sa référence. Compensable par ⑥.")
-i_deltaOn      = input.bool(true,  "⑥ Activer deltas",               group=grp_fil, tooltip="Long OK si delta short non actif. Short OK si delta long non actif. Fallback pour ⑤.")
-i_cloudZeroOn  = input.bool(false,  "⑦ Activer nuage < 0 / > 0",      group=grp_fil, tooltip="Long OK si nuage MFI < 0. Short OK si nuage MFI > 0.")
-i_deltaExtOn   = input.bool(false,  "⑧ Activer extinction deltas",     group=grp_fil, tooltip="Long OK si delta short vient de s'éteindre. Short OK si delta long vient de s'éteindre.")
+i_cloudOn      = input.bool(false,  "⑤ Activer nuage MFI",            group=grp_fil, tooltip="Vérifie la position MFI par rapport à sa référence. Compensable par ⑥.")
+i_deltaOn      = input.bool(false,  "⑥ Activer deltas",               group=grp_fil, tooltip="Long OK si delta short non actif. Short OK si delta long non actif. Fallback pour ⑤.")
+i_cloudZeroOn  = input.bool(false, "⑦ Activer nuage < 0 / > 0",      group=grp_fil, tooltip="Long OK si nuage MFI < 0. Short OK si nuage MFI > 0.")
+i_deltaExtOn   = input.bool(false, "⑧ Activer extinction deltas",     group=grp_fil, tooltip="Long OK si delta short vient de s'éteindre. Short OK si delta long vient de s'éteindre.")
 
 // --- Gestion des risques ---
 grp_risk       = "GESTION DES RISQUES"
-i_tickBuffer   = input.int(0,      "Buffer SL (en ticks)",         group=grp_risk)
-i_rrPartial    = input.float(50.0,  "Risk/Reward TP Partiel",       group=grp_risk, minval=0.5, step=0.5)
-i_tpPoints     = input.float(500.0, "TP Points Fixes",              group=grp_risk, minval=1.0)
-i_maxSlPoints  = input.float(300.0,"Distance SL max (points)",     group=grp_risk, minval=1.0, tooltip="Trade ignoré si le SL (bas SSL) se trouve à plus de N points.")
-i_cooldownBars = input.int(1,      "Bougies d'attente post-close", group=grp_risk, minval=0)
-i_maxCandlePct = input.float(0.9,  "Taille max bougie Entry (%)",  group=grp_risk, step=0.1, minval=0.0, tooltip="Trade ignoré si abs(close - open) / close > N%. 0 = désactivé.")
-i_tp2PartialOn = input.bool(false,  "Activer TP2 Partiel (retour dans canal HMA)", group=grp_risk, tooltip="Si activé, envoie une alerte PARTIAL quand le prix revient dans le canal HMA après le TP1.")
-simple string i_exitMode = input.string("Break ou Inversion", "Mode de clôture TP Final", group=grp_risk, options=["Break ou Inversion", "Break HMA", "Inversion HMA"], tooltip="Break ou Inversion : clôture dès que l'un des deux signaux se déclenche. Break HMA : clôture quand le prix sort de l'autre côté du canal. Inversion HMA : clôture quand le canal change de couleur.")
+i_tickBuffer   = input.int(0,       "Buffer SL (en ticks)",                     group=grp_risk)
+i_rrPartial    = input.float(50.0,  "Risk/Reward TP Partiel",                   group=grp_risk, minval=0.5, step=0.5)
+i_tpPoints     = input.float(500.0, "TP Points Fixes",                          group=grp_risk, minval=1.0)
+i_maxSlPoints  = input.float(300.0, "Distance SL max (points)",                 group=grp_risk, minval=1.0, tooltip="Trade ignoré si le SL (bas SSL) se trouve à plus de N points.")
+i_tp2PartialOn = input.bool(false,  "Activer TP2 Partiel (cross SSL baseline)", group=grp_risk, tooltip="Si activé, envoie une alerte PARTIAL quand le prix croise la baseline SSL après le TP1.")
+i_exitHmaMode  = input.string("L'un ou l'autre", "Mode clôture HMA",              group=grp_risk, options=["Break HMA", "Switch Couleur", "L'un ou l'autre"], tooltip="Break HMA = clôture de l'autre côté du canal. Switch Couleur = clôture sur inversion de couleur. L'un ou l'autre = premier des deux.")
 
 // --- Auto-Close ---
 grp_time     = "Auto-Close (Bruxelles)"
@@ -62,27 +69,27 @@ i_autoCloseM = input.int(0,  "Minute",  minval=0, maxval=59, group=grp_time, inl
 
 // --- Blackout ---
 grp_bo      = "Blackout (Bruxelles)"
-i_bo1On     = input.bool(true, "Blackout 1 actif", group=grp_bo, inline="bo1")
+i_bo1On     = input.bool(false, "Blackout 1 actif", group=grp_bo, inline="bo1")
 i_bo1StartH = input.int(1,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo1")
 i_bo1StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo1")
 i_bo1EndH   = input.int(2,  "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo1e")
 i_bo1EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo1e")
 
-i_bo2On     = input.bool(true, "Blackout 2 actif", group=grp_bo, inline="bo2")
-i_bo2StartH = input.int(3, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo2")
+i_bo2On     = input.bool(false, "Blackout 2 actif", group=grp_bo, inline="bo2")
+i_bo2StartH = input.int(3,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo2")
 i_bo2StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo2")
-i_bo2EndH   = input.int(6, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo2e")
+i_bo2EndH   = input.int(6,  "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo2e")
 i_bo2EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo2e")
 
-i_bo3On     = input.bool(true, "Blackout 3 actif", group=grp_bo, inline="bo3")
-i_bo3StartH = input.int(8, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo3")
-i_bo3StartM = input.int(0, "M",       minval=0, maxval=59, group=grp_bo, inline="bo3")
-i_bo3EndH   = input.int(9, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo3e")
-i_bo3EndM   = input.int(0, "M",       minval=0, maxval=59, group=grp_bo, inline="bo3e")
+i_bo3On     = input.bool(false, "Blackout 3 actif", group=grp_bo, inline="bo3")
+i_bo3StartH = input.int(8,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo3")
+i_bo3StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo3")
+i_bo3EndH   = input.int(9,  "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo3e")
+i_bo3EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo3e")
 
-i_bo4On     = input.bool(true, "Blackout 4 actif", group=grp_bo, inline="bo4")
+i_bo4On     = input.bool(false, "Blackout 4 actif", group=grp_bo, inline="bo4")
 i_bo4StartH = input.int(10, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo4")
-i_bo4StartM = input.int(0, "M",       minval=0, maxval=59, group=grp_bo, inline="bo4")
+i_bo4StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo4")
 i_bo4EndH   = input.int(18, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo4e")
 i_bo4EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo4e")
 
@@ -90,7 +97,7 @@ i_bo5On     = input.bool(true,  "Blackout 5 actif", group=grp_bo, inline="bo5")
 i_bo5StartH = input.int(21, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo5")
 i_bo5StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo5")
 i_bo5EndH   = input.int(23, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo5e")
-i_bo5EndM   = input.int(59,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo5e")
+i_bo5EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo5e")
 
 i_bo6On     = input.bool(false, "Blackout 6 actif", group=grp_bo, inline="bo6")
 i_bo6StartH = input.int(23, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo6")
@@ -108,7 +115,7 @@ simple string i_tblSize = input.string("small", "Taille texte", group=grp_tbl,
 
 // --- Configuration ---
 grp_main    = "CONFIGURATION"
-i_stratName = input.string("HMASSLOsci", "Nom de la stratégie", group=grp_main)
+i_stratName = input.string("EBOHMASSLOsc", "Nom de la stratégie", group=grp_main)
 
 // ============================================
 // TYPES & VARIABLES D'ÉTAT
@@ -143,6 +150,16 @@ var int   lastActionBar     = -1
 var bool  tpPartialHit      = false
 var bool  hmaInTpHit        = false
 var int   lastCloseBarIndex = -9999
+
+// Tracking break EMA
+var int   barsSinceLongBreak    = 9999
+var int   barsSinceShortBreak   = 9999
+var float lastBreakLongLow      = na
+var float lastBreakShortHigh    = na
+var float lastBreakLongSizePct  = na
+var float lastBreakShortSizePct = na
+var bool  lastBreakLongSizeOk   = false
+var bool  lastBreakShortSizeOk  = false
 
 var line lineEntry = na
 var line lineStop  = na
@@ -216,7 +233,7 @@ bool inBlackout   = isBlackoutWindow()
 bool autoCloseBar = isAutoCloseBar()
 
 // ============================================
-// SSL CALCULATION (from Gator)
+// SSL CALCULATION
 // ============================================
 
 BBMC_ssl    = ta.wma(2 * ta.wma(close, len_ssl / 2) - ta.wma(close, len_ssl), math.round(math.sqrt(len_ssl)))
@@ -226,14 +243,15 @@ lowerk_ssl  = BBMC_ssl - rangema_ssl * multy_ssl
 color_ssl   = close > upperk_ssl ? bColorSSL : close < lowerk_ssl ? sColorSSL : color.gray
 
 // ============================================
-// HMA CALCULATION
+// HMA & EMA CALCULATION
 // ============================================
 
-float srcEma  = ta.ema(close, i_emaLen)
-float rawHma1 = ta.hma(srcEma, i_hma1Len)
-float rawHma2 = ta.hma(srcEma, i_hma2Len)
-float hma1    = srcEma + (rawHma1 - srcEma) * i_ampMult
-float hma2    = srcEma + (rawHma2 - srcEma) * i_ampMult
+float emaMain = ta.ema(close, i_emaLen)
+
+float rawHma1 = ta.hma(emaMain, i_hma1Len)
+float rawHma2 = ta.hma(emaMain, i_hma2Len)
+float hma1    = emaMain + (rawHma1 - emaMain) * i_ampMult
+float hma2    = emaMain + (rawHma2 - emaMain) * i_ampMult
 
 bool  canalGreen = hma1 > hma2
 float canalUpper = math.max(hma1, hma2)
@@ -340,38 +358,50 @@ bool oscAllLongOk  = hwDirLongOk  and hwExtremeLongOk  and sigExtremeLongOk  and
 bool oscAllShortOk = hwDirShortOk and hwExtremeShortOk and sigExtremeShortOk and hwRangeOk and cloudOrDeltaShortOk and deltaShortOk and cloudZeroShortOk and deltaExtShortOk
 
 // ============================================
-// CONDITIONS D'ENTRÉE
+// EMA BREAK DETECTION
 // ============================================
 
-// Long:
-//   - Canal HMA vert
-//   - Canal HMA au-dessus de la SSL (bas du canal > baseline SSL)
-//   - Close au-dessus du canal HMA ET au-dessus du canal SSL
-//   - Conditions oscillateur OK
-bool hmaAboveSSL    = canalLower > BBMC_ssl
-bool priceConfLong  = close > canalUpper and close > upperk_ssl
+barsSinceLongBreak  += 1
+barsSinceShortBreak += 1
 
-// Short:
-//   - Canal HMA rouge
-//   - Canal HMA en-dessous de la SSL (haut du canal < baseline SSL)
-//   - Close en-dessous du canal HMA ET en-dessous du canal SSL
-//   - Conditions oscillateur OK
-bool hmaBelowSSL    = canalUpper < BBMC_ssl
-bool priceConfShort = close < canalLower and close < lowerk_ssl
+float candlePct        = close != 0 ? math.abs(close - open) / close * 100 : na
+bool  breakCandleSizeOk = i_maxCandlePct == 0.0 or (not na(candlePct) and candlePct <= i_maxCandlePct)
 
-// Filtre taille de bougie (open → close)
-float candlePct    = close != 0 ? math.abs(close - open) / close * 100 : na
-bool  candleSizeOk = i_maxCandlePct == 0.0 or (not na(candlePct) and candlePct <= i_maxCandlePct)
+// Long: bougie haussière qui ouvre sous l'EMA principale et clôture au-dessus
+bool emaBreakLongRaw  = close > open and open < emaMain and close > emaMain
+// Short: bougie baissière qui ouvre au-dessus de l'EMA principale et clôture en-dessous
+bool emaBreakShortRaw = close < open and open > emaMain and close < emaMain
 
-bool longSignal  = canalGreen     and hmaAboveSSL and priceConfLong  and oscAllLongOk  and candleSizeOk
-bool shortSignal = not canalGreen and hmaBelowSSL and priceConfShort and oscAllShortOk and candleSizeOk
+if emaBreakLongRaw
+    barsSinceLongBreak     := 0
+    lastBreakLongLow       := low
+    lastBreakLongSizePct   := candlePct
+    lastBreakLongSizeOk    := breakCandleSizeOk
+    barsSinceShortBreak    := 9999
+
+if emaBreakShortRaw
+    barsSinceShortBreak    := 0
+    lastBreakShortHigh     := high
+    lastBreakShortSizePct  := candlePct
+    lastBreakShortSizeOk   := breakCandleSizeOk
+    barsSinceLongBreak     := 9999
 
 // ============================================
-// CALCUL SL & TP
+// CONDITIONS D'ENTRÉE COMBINÉES
 // ============================================
 
-// SL Long  : bas du canal SSL - buffer
-// SL Short : haut du canal SSL + buffer
+// EMA principale au-dessus de toutes les lignes SSL (long) / en-dessous de toutes (short)
+bool emaAboveSSL = emaMain > upperk_ssl
+bool emaBelowSSL = emaMain < lowerk_ssl
+
+// Cooldown
+bool cooldownOk = (bar_index - lastCloseBarIndex) >= i_cooldownBars
+
+// Break en fenêtre valide avec taille ok
+bool storedLongBreakOk  = barsSinceLongBreak  <= i_breakWaitBars and lastBreakLongSizeOk
+bool storedShortBreakOk = barsSinceShortBreak <= i_breakWaitBars and lastBreakShortSizeOk
+
+// SL basé sur SSL
 float slLong      = lowerk_ssl - (i_tickBuffer * syminfo.mintick)
 float slShort     = upperk_ssl + (i_tickBuffer * syminfo.mintick)
 float slDistLong  = close - slLong
@@ -379,7 +409,19 @@ float slDistShort = slShort - close
 bool  slLongOk    = slDistLong  <= i_maxSlPoints
 bool  slShortOk   = slDistShort <= i_maxSlPoints
 
-// TP1 : RR*risque ou points fixes, le plus proche
+bool longEntry  = false
+bool shortEntry = false
+
+// Long: break EMA récent + EMA au-dessus SSL + canal HMA vert + filtres oscillateur
+if storedLongBreakOk and emaAboveSSL and canalGreen and oscAllLongOk and slLongOk and cooldownOk
+    longEntry          := true
+    barsSinceLongBreak := 9999
+
+if storedShortBreakOk and emaBelowSSL and not canalGreen and oscAllShortOk and slShortOk and cooldownOk
+    shortEntry          := true
+    barsSinceShortBreak := 9999
+
+// Calcul TP/SL
 float calcEntryLong     = close
 float calcStopLong      = roundToTick(slLong)
 float riskL             = calcEntryLong - calcStopLong
@@ -391,14 +433,6 @@ float calcStopShort     = roundToTick(slShort)
 float riskS             = calcStopShort - calcEntryShort
 float calcTpShort       = calcEntryShort - riskS * i_rrPartial
 float calcPointsTpShort = calcEntryShort - i_tpPoints
-
-bool cooldownOk = (bar_index - lastCloseBarIndex) >= i_cooldownBars
-
-bool finalLongEntry  = longSignal  and slLongOk  and cooldownOk
-bool finalShortEntry = shortSignal and slShortOk and cooldownOk
-
-bool hmaFlipUp   = canalGreen and not canalGreen[1]
-bool hmaFlipDown = not canalGreen and canalGreen[1]
 
 // ============================================
 // GESTION DES POSITIONS
@@ -433,7 +467,7 @@ if positionActive and autoCloseBar and canAct
         lineTP := na
 
 // --- 1. ENTRÉE LONGUE ---
-if not positionActive and finalLongEntry and canAct and not inBlackout
+if not positionActive and longEntry and canAct and not inBlackout
     positionActive := true
     currentSide    := 1
     entryPrice     := roundToTick(calcEntryLong)
@@ -443,13 +477,13 @@ if not positionActive and finalLongEntry and canAct and not inBlackout
     lastActionBar  := bar_index
     tpPartialHit   := false
     hmaInTpHit     := false
-    lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue,   style=line.style_dotted, width=1)
-    lineStop  := line.new(bar_index, stopPrice,  bar_index + 1, stopPrice,  color=color.red,    style=line.style_dotted, width=1)
-    lineTP    := line.new(bar_index, tp1L,       bar_index + 1, tp1L,       color=color.green,  style=line.style_dotted, width=1)
+    lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue,  style=line.style_dotted, width=1)
+    lineStop  := line.new(bar_index, stopPrice,  bar_index + 1, stopPrice,  color=color.red,   style=line.style_dotted, width=1)
+    lineTP    := line.new(bar_index, tp1L,       bar_index + 1, tp1L,       color=color.green, style=line.style_dotted, width=1)
     alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
 
 // --- 2. ENTRÉE COURTE ---
-else if not positionActive and finalShortEntry and canAct and not inBlackout
+else if not positionActive and shortEntry and canAct and not inBlackout
     positionActive := true
     currentSide    := -1
     entryPrice     := roundToTick(calcEntryShort)
@@ -459,9 +493,9 @@ else if not positionActive and finalShortEntry and canAct and not inBlackout
     lastActionBar  := bar_index
     tpPartialHit   := false
     hmaInTpHit     := false
-    lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue,   style=line.style_dotted, width=1)
-    lineStop  := line.new(bar_index, stopPrice,  bar_index + 1, stopPrice,  color=color.red,    style=line.style_dotted, width=1)
-    lineTP    := line.new(bar_index, tp1S,       bar_index + 1, tp1S,       color=color.green,  style=line.style_dotted, width=1)
+    lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue,  style=line.style_dotted, width=1)
+    lineStop  := line.new(bar_index, stopPrice,  bar_index + 1, stopPrice,  color=color.red,   style=line.style_dotted, width=1)
+    lineTP    := line.new(bar_index, tp1S,       bar_index + 1, tp1S,       color=color.green, style=line.style_dotted, width=1)
     alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
 
 // --- 3. SORTIES ---
@@ -506,9 +540,13 @@ if positionActive and canAct and bar_index > lastActionBar
             hmaInTpHit         := true
             hmaInTpJustHitLong := true
 
-        // TP Final : clôture selon le mode sélectionné
-        bool exitCondLong = i_exitMode == "Break HMA" ? close < canalLower : i_exitMode == "Inversion HMA" ? hmaFlipDown : (close < canalLower or hmaFlipDown)
-        if exitCondLong and not hitBreakeven and not hitStopLoss
+        // TP Final selon mode clôture HMA
+        bool hmaBreakLong   = close < canalLower
+        bool hmaColorLong   = not canalGreen and canalGreen[1]
+        bool hmaExitLong    = i_exitHmaMode == "Break HMA"      ? hmaBreakLong :
+                              i_exitHmaMode == "Switch Couleur" ? hmaColorLong :
+                              hmaBreakLong or hmaColorLong
+        if hmaExitLong and not hitBreakeven and not hitStopLoss
             hitCanalExit := true
 
         if tpPartialJustHitLong and not hitCanalExit
@@ -538,9 +576,13 @@ if positionActive and canAct and bar_index > lastActionBar
             hmaInTpHit          := true
             hmaInTpJustHitShort := true
 
-        // TP Final : clôture selon le mode sélectionné
-        bool exitCondShort = i_exitMode == "Break HMA" ? close > canalUpper : i_exitMode == "Inversion HMA" ? hmaFlipUp : (close > canalUpper or hmaFlipUp)
-        if exitCondShort and not hitBreakeven and not hitStopLoss
+        // TP Final selon mode clôture HMA
+        bool hmaBreakShort  = close > canalUpper
+        bool hmaColorShort  = canalGreen and not canalGreen[1]
+        bool hmaExitShort   = i_exitHmaMode == "Break HMA"      ? hmaBreakShort :
+                              i_exitHmaMode == "Switch Couleur" ? hmaColorShort :
+                              hmaBreakShort or hmaColorShort
+        if hmaExitShort and not hitBreakeven and not hitStopLoss
             hitCanalExit := true
 
         if tpPartialJustHitShort and not hitCanalExit
@@ -594,6 +636,9 @@ if positionActive and canAct and bar_index > lastActionBar
 // VISUALISATION
 // ============================================
 
+// EMA
+plot(emaMain, "EMA Principale", color=color.new(color.yellow, 20), linewidth=2)
+
 // Canal HMA
 color hmaColor = canalGreen ? color.new(color.green, 0) : color.new(color.red, 0)
 p_hma1 = plot(hma1, "HMA Rapide", color=hmaColor, linewidth=1, offset=i_timeOffset)
@@ -613,10 +658,10 @@ plotshape(isNewLong,  title="Entry L", style=shape.circle, location=location.bel
 plotshape(isNewShort, title="Entry S", style=shape.circle, location=location.abovebar, color=color.red,   size=size.tiny)
 
 // TP Partiel 1
-plotshape(tpPartialJustHitLong  ? high : na, "TP1 Long",  shape.xcross, location.abovebar, color.green,  size=size.tiny)
-plotshape(tpPartialJustHitShort ? low  : na, "TP1 Short", shape.xcross, location.belowbar, color.green,  size=size.tiny)
+plotshape(tpPartialJustHitLong  ? high : na, "TP1 Long",  shape.xcross, location.abovebar, color.green, size=size.tiny)
+plotshape(tpPartialJustHitShort ? low  : na, "TP1 Short", shape.xcross, location.belowbar, color.green, size=size.tiny)
 
-// TP Partiel 2 (entrée dans le canal)
+// TP Partiel 2
 plotshape(hmaInTpJustHitLong  ? high : na, "TP2 Long",  shape.xcross, location.abovebar, color.aqua, size=size.tiny)
 plotshape(hmaInTpJustHitShort ? low  : na, "TP2 Short", shape.xcross, location.belowbar, color.aqua, size=size.tiny)
 
@@ -664,30 +709,42 @@ var table tbl = table.new(
 
 if barstate.islast
     // ── En-têtes ──────────────────────────────────────────
-    table.cell(tbl, 0, 0, "Condition",  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
-    table.cell(tbl, 1, 0, "▲ LONG",    text_color=color.new(color.lime, 10), text_size=i_tblSize, bgcolor=HDR_BG)
-    table.cell(tbl, 2, 0, "▼ SHORT",   text_color=color.new(color.red,  10), text_size=i_tblSize, bgcolor=HDR_BG)
+    table.cell(tbl, 0, 0, "Condition", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(tbl, 1, 0, "▲ LONG",   text_color=color.new(color.lime, 10), text_size=i_tblSize, bgcolor=HDR_BG)
+    table.cell(tbl, 2, 0, "▼ SHORT",  text_color=color.new(color.red,  10), text_size=i_tblSize, bgcolor=HDR_BG)
 
     // ── Blackout ──────────────────────────────────────────
     table.cell(tbl, 0, 1, "Blackout", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
     table.cell(tbl, 1, 1, f_icon(not inBlackout), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(not inBlackout))
     table.cell(tbl, 2, 1, f_icon(not inBlackout), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(not inBlackout))
 
+    // ── EMA Break ─────────────────────────────────────────
+    string breakLStr = barsSinceLongBreak  == 9999 ? "✗" : (barsSinceLongBreak  == 0 ? "✓ BREAK" : "⏳ " + str.tostring(barsSinceLongBreak)  + "/" + str.tostring(i_breakWaitBars))
+    string breakSStr = barsSinceShortBreak == 9999 ? "✗" : (barsSinceShortBreak == 0 ? "✓ BREAK" : "⏳ " + str.tostring(barsSinceShortBreak) + "/" + str.tostring(i_breakWaitBars))
+    table.cell(tbl, 0, 2, "EMA Break", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 2, breakLStr, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=storedLongBreakOk  ? f_bg(true) : f_bg(barsSinceLongBreak  <= i_breakWaitBars))
+    table.cell(tbl, 2, 2, breakSStr, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=storedShortBreakOk ? f_bg(true) : f_bg(barsSinceShortBreak <= i_breakWaitBars))
+
+    // ── Taille bougie break ───────────────────────────────
+    string candleLbl    = i_maxCandlePct == 0.0 ? "Bougie Break (OFF)" : "Bougie Break (max " + str.tostring(i_maxCandlePct, "#.##") + "%)"
+    string candleBreakL = barsSinceLongBreak  <= i_breakWaitBars and not na(lastBreakLongSizePct)  ? str.tostring(lastBreakLongSizePct,  "#.##") + "%" : (not na(candlePct) ? str.tostring(candlePct, "#.##") + "%" : "—")
+    string candleBreakS = barsSinceShortBreak <= i_breakWaitBars and not na(lastBreakShortSizePct) ? str.tostring(lastBreakShortSizePct, "#.##") + "%" : (not na(candlePct) ? str.tostring(candlePct, "#.##") + "%" : "—")
+    bool   candleLOk    = barsSinceLongBreak  <= i_breakWaitBars ? lastBreakLongSizeOk  : breakCandleSizeOk
+    bool   candleSOk    = barsSinceShortBreak <= i_breakWaitBars ? lastBreakShortSizeOk : breakCandleSizeOk
+    table.cell(tbl, 0, 3, candleLbl,    text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 3, i_maxCandlePct == 0.0 ? "—" : candleBreakL, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_maxCandlePct == 0.0 ? f_bgNa() : f_bg(candleLOk))
+    table.cell(tbl, 2, 3, i_maxCandlePct == 0.0 ? "—" : candleBreakS, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_maxCandlePct == 0.0 ? f_bgNa() : f_bg(candleSOk))
+
+    // ── EMA vs SSL ────────────────────────────────────────
+    table.cell(tbl, 0, 4, "EMA vs SSL", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 4, f_icon(emaAboveSSL), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(emaAboveSSL))
+    table.cell(tbl, 2, 4, f_icon(emaBelowSSL), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(emaBelowSSL))
+
     // ── Canal HMA ─────────────────────────────────────────
     string canalDir = canalGreen ? "HMA vert ↑" : "HMA rouge ↓"
-    table.cell(tbl, 0, 2, canalDir, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
-    table.cell(tbl, 1, 2, f_icon(canalGreen),     text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(canalGreen))
-    table.cell(tbl, 2, 2, f_icon(not canalGreen), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(not canalGreen))
-
-    // ── HMA vs SSL ────────────────────────────────────────
-    table.cell(tbl, 0, 3, "HMA vs SSL", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
-    table.cell(tbl, 1, 3, f_icon(hmaAboveSSL),  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(hmaAboveSSL))
-    table.cell(tbl, 2, 3, f_icon(hmaBelowSSL),  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(hmaBelowSSL))
-
-    // ── Prix (close vs canal + SSL) ───────────────────────
-    table.cell(tbl, 0, 4, "Prix confirmation", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
-    table.cell(tbl, 1, 4, f_icon(priceConfLong),  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(priceConfLong))
-    table.cell(tbl, 2, 4, f_icon(priceConfShort), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(priceConfShort))
+    table.cell(tbl, 0, 5, canalDir, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 5, f_icon(canalGreen),     text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(canalGreen))
+    table.cell(tbl, 2, 5, f_icon(not canalGreen), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(not canalGreen))
 
     // ── ① Sens HW ─────────────────────────────────────────
     string hwDirStr = na(lastConfirmedHWValue)
@@ -695,85 +752,68 @@ if barstate.islast
          : lastConfirmedHW == 1
              ? "① Sens HW (▲ " + str.tostring(math.round(lastConfirmedHWValue, 1)) + ")"
              : "① Sens HW (▼ " + str.tostring(math.round(lastConfirmedHWValue, 1)) + ")"
-    table.cell(tbl, 0, 5, hwDirStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
-    table.cell(tbl, 1, 5, i_hwDirOn ? f_icon(hwDirLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwDirOn ? f_bg(hwDirLongOk)  : f_bgNa())
-    table.cell(tbl, 2, 5, i_hwDirOn ? f_icon(hwDirShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwDirOn ? f_bg(hwDirShortOk) : f_bgNa())
+    table.cell(tbl, 0, 6, hwDirStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 6, i_hwDirOn ? f_icon(hwDirLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwDirOn ? f_bg(hwDirLongOk)  : f_bgNa())
+    table.cell(tbl, 2, 6, i_hwDirOn ? f_icon(hwDirShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwDirOn ? f_bg(hwDirShortOk) : f_bgNa())
 
     // ── ② Extrêmes HW ────────────────────────────────────
     string hwExtStr = "② HW Extrême (±" + str.tostring(i_hwExtreme, "#") + ")"
          + (na(lastConfirmedHWValue) ? " —" : " = " + str.tostring(math.round(lastConfirmedHWValue, 1)))
-    table.cell(tbl, 0, 6, hwExtStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
-    table.cell(tbl, 1, 6, i_hwExtremeOn ? f_icon(hwExtremeLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwExtremeOn ? f_bg(hwExtremeLongOk)  : f_bgNa())
-    table.cell(tbl, 2, 6, i_hwExtremeOn ? f_icon(hwExtremeShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwExtremeOn ? f_bg(hwExtremeShortOk) : f_bgNa())
+    table.cell(tbl, 0, 7, hwExtStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 7, i_hwExtremeOn ? f_icon(hwExtremeLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwExtremeOn ? f_bg(hwExtremeLongOk)  : f_bgNa())
+    table.cell(tbl, 2, 7, i_hwExtremeOn ? f_icon(hwExtremeShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwExtremeOn ? f_bg(hwExtremeShortOk) : f_bgNa())
 
     // ── ③ Extrêmes SIG ───────────────────────────────────
     string sigExtStr = "③ SIG Extrême (±" + str.tostring(i_hwExtreme, "#") + ")"
          + (na(oscSig) ? " —" : " = " + str.tostring(math.round(oscSig, 1)))
-    table.cell(tbl, 0, 7, sigExtStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
-    table.cell(tbl, 1, 7, i_sigExtremeOn ? f_icon(sigExtremeLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_sigExtremeOn ? f_bg(sigExtremeLongOk)  : f_bgNa())
-    table.cell(tbl, 2, 7, i_sigExtremeOn ? f_icon(sigExtremeShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_sigExtremeOn ? f_bg(sigExtremeShortOk) : f_bgNa())
+    table.cell(tbl, 0, 8, sigExtStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 8, i_sigExtremeOn ? f_icon(sigExtremeLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_sigExtremeOn ? f_bg(sigExtremeLongOk)  : f_bgNa())
+    table.cell(tbl, 2, 8, i_sigExtremeOn ? f_icon(sigExtremeShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_sigExtremeOn ? f_bg(sigExtremeShortOk) : f_bgNa())
 
     // ── ④ Range HW ────────────────────────────────────────
     string hwRngStr = "④ HW Range (±" + str.tostring(i_hwRange, "#") + ")"
          + (na(lastConfirmedHWValue) ? " —" : " |" + str.tostring(math.round(math.abs(lastConfirmedHWValue), 1)) + "|")
-    table.cell(tbl, 0, 8, hwRngStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
-    table.cell(tbl, 1, 8, i_hwRangeOn ? f_icon(hwRangeOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwRangeOn ? f_bg(hwRangeOk) : f_bgNa())
-    table.cell(tbl, 2, 8, i_hwRangeOn ? f_icon(hwRangeOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwRangeOn ? f_bg(hwRangeOk) : f_bgNa())
+    table.cell(tbl, 0, 9, hwRngStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 9, i_hwRangeOn ? f_icon(hwRangeOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwRangeOn ? f_bg(hwRangeOk) : f_bgNa())
+    table.cell(tbl, 2, 9, i_hwRangeOn ? f_icon(hwRangeOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_hwRangeOn ? f_bg(hwRangeOk) : f_bgNa())
 
     // ── ⑤ Nuage MFI ──────────────────────────────────────
     string mfiCurStr  = not na(activeMfiCloud)   ? str.tostring(math.round(activeMfiCloud,   1)) : "—"
     string mfiRefStr  = not na(activeMfiRefLine) ? str.tostring(math.round(activeMfiRefLine, 1)) : "—"
     string cloudStr   = "⑤ Nuage (" + mfiCurStr + " / " + mfiRefStr + ")"
-    color cloudBgL = not i_cloudOn ? f_bgNa()
-         : cloudLongOk                     ? color.new(color.green,  30)
-         : (i_deltaOn and deltaLongOn)      ? color.new(color.orange, 30)
-         : color.new(color.red, 30)
-    color cloudBgS = not i_cloudOn ? f_bgNa()
-         : cloudShortOk                    ? color.new(color.green,  30)
-         : (i_deltaOn and deltaShortOn)     ? color.new(color.orange, 30)
-         : color.new(color.red, 30)
+    color cloudBgL = not i_cloudOn ? f_bgNa() : cloudLongOk  ? color.new(color.green, 30) : (i_deltaOn and deltaLongOn)  ? color.new(color.orange, 30) : color.new(color.red, 30)
+    color cloudBgS = not i_cloudOn ? f_bgNa() : cloudShortOk ? color.new(color.green, 30) : (i_deltaOn and deltaShortOn) ? color.new(color.orange, 30) : color.new(color.red, 30)
     string cloudIconL = not i_cloudOn ? "—" : cloudLongOk  ? "✓" : (i_deltaOn and deltaLongOn)  ? "~" : "✗"
     string cloudIconS = not i_cloudOn ? "—" : cloudShortOk ? "✓" : (i_deltaOn and deltaShortOn) ? "~" : "✗"
-    table.cell(tbl, 0, 9, cloudStr,   text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
-    table.cell(tbl, 1, 9, cloudIconL, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=cloudBgL)
-    table.cell(tbl, 2, 9, cloudIconS, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=cloudBgS)
+    table.cell(tbl, 0, 10, cloudStr,   text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 10, cloudIconL, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=cloudBgL)
+    table.cell(tbl, 2, 10, cloudIconS, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=cloudBgS)
 
     // ── ⑥ Deltas ─────────────────────────────────────────
     string sigValStr = not na(oscSig) ? str.tostring(math.round(oscSig, 1)) : "—"
     string mfiValStr = not na(activeMfiCloud) ? str.tostring(math.round(activeMfiCloud, 1)) : "—"
     string deltaStr  = "⑥ Deltas (sig " + sigValStr + " / mfi " + mfiValStr + ")"
-    table.cell(tbl, 0, 10, deltaStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
-    table.cell(tbl, 1, 10, i_deltaOn ? f_icon(deltaLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_deltaOn ? f_bg(deltaLongOk)  : f_bgNa())
-    table.cell(tbl, 2, 10, i_deltaOn ? f_icon(deltaShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_deltaOn ? f_bg(deltaShortOk) : f_bgNa())
+    table.cell(tbl, 0, 11, deltaStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 11, i_deltaOn ? f_icon(deltaLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_deltaOn ? f_bg(deltaLongOk)  : f_bgNa())
+    table.cell(tbl, 2, 11, i_deltaOn ? f_icon(deltaShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_deltaOn ? f_bg(deltaShortOk) : f_bgNa())
 
     // ── ⑦ Nuage < 0 / > 0 ────────────────────────────────
     string cloudZeroStr = "⑦ Nuage < 0 / > 0 (" + (not na(activeMfiCloud) ? str.tostring(math.round(activeMfiCloud, 1)) : "—") + ")"
-    table.cell(tbl, 0, 11, cloudZeroStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
-    table.cell(tbl, 1, 11, i_cloudZeroOn ? f_icon(cloudZeroLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_cloudZeroOn ? f_bg(cloudZeroLongOk)  : f_bgNa())
-    table.cell(tbl, 2, 11, i_cloudZeroOn ? f_icon(cloudZeroShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_cloudZeroOn ? f_bg(cloudZeroShortOk) : f_bgNa())
+    table.cell(tbl, 0, 12, cloudZeroStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 12, i_cloudZeroOn ? f_icon(cloudZeroLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_cloudZeroOn ? f_bg(cloudZeroLongOk)  : f_bgNa())
+    table.cell(tbl, 2, 12, i_cloudZeroOn ? f_icon(cloudZeroShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_cloudZeroOn ? f_bg(cloudZeroShortOk) : f_bgNa())
 
     // ── ⑧ Extinction deltas ──────────────────────────────
-    bool deltaShortWasOn = deltaShortOn[1]
-    bool deltaLongWasOn  = deltaLongOn[1]
-    string deltaExtLStr = "⑧ Ext. Δ (" + (deltaShortWasOn and not deltaShortOn ? "↓S" : deltaShortOn ? "S" : "—") + ")"
-    string deltaExtSStr = "⑧ Ext. Δ (" + (deltaLongWasOn  and not deltaLongOn  ? "↓L" : deltaLongOn  ? "L" : "—") + ")"
-    table.cell(tbl, 0, 12, "⑧ Extinction deltas", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
-    table.cell(tbl, 1, 12, i_deltaExtOn ? f_icon(deltaExtLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_deltaExtOn ? f_bg(deltaExtLongOk)  : f_bgNa())
-    table.cell(tbl, 2, 12, i_deltaExtOn ? f_icon(deltaExtShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_deltaExtOn ? f_bg(deltaExtShortOk) : f_bgNa())
+    table.cell(tbl, 0, 13, "⑧ Extinction deltas", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 13, i_deltaExtOn ? f_icon(deltaExtLongOk)  : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_deltaExtOn ? f_bg(deltaExtLongOk)  : f_bgNa())
+    table.cell(tbl, 2, 13, i_deltaExtOn ? f_icon(deltaExtShortOk) : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_deltaExtOn ? f_bg(deltaExtShortOk) : f_bgNa())
 
     // ── Distance SL ───────────────────────────────────────
     string slLongStr  = na(slDistLong)  ? "—" : str.tostring(slDistLong,  "#.#") + " pts"
     string slShortStr = na(slDistShort) ? "—" : str.tostring(slDistShort, "#.#") + " pts"
-    table.cell(tbl, 0, 13, "SL Distance (max " + str.tostring(i_maxSlPoints, "#") + ")", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
-    table.cell(tbl, 1, 13, slLongStr,  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(slLongOk))
-    table.cell(tbl, 2, 13, slShortStr, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(slShortOk))
-
-    // ── Filtre taille bougie ──────────────────────────────
-    string candleStr = i_maxCandlePct == 0.0 ? "Bougie (OFF)" : "Bougie (max " + str.tostring(i_maxCandlePct, "#.##") + "%)"
-    string candleVal = not na(candlePct) ? str.tostring(candlePct, "#.##") + "%" : "—"
-    table.cell(tbl, 0, 14, candleStr + " = " + candleVal, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
-    table.cell(tbl, 1, 14, i_maxCandlePct == 0.0 ? "—" : f_icon(candleSizeOk), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_maxCandlePct == 0.0 ? f_bgNa() : f_bg(candleSizeOk))
-    table.cell(tbl, 2, 14, i_maxCandlePct == 0.0 ? "—" : f_icon(candleSizeOk), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=i_maxCandlePct == 0.0 ? f_bgNa() : f_bg(candleSizeOk))
+    table.cell(tbl, 0, 14, "SL Distance (max " + str.tostring(i_maxSlPoints, "#") + ")", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(tbl, 1, 14, slLongStr,  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(slLongOk))
+    table.cell(tbl, 2, 14, slShortStr, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(slShortOk))
 
     // ── Séparateur ────────────────────────────────────────
     table.cell(tbl, 0, 15, "", bgcolor=SEP_BG, text_size=size.tiny)
@@ -781,9 +821,9 @@ if barstate.islast
     table.cell(tbl, 2, 15, "", bgcolor=SEP_BG, text_size=size.tiny)
 
     // ── Résultat global ───────────────────────────────────
-    table.cell(tbl, 0, 16, "RÉSULTAT",                                                              text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
-    table.cell(tbl, 1, 16, finalLongEntry  ? "✓ LONG"  : "✗", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=finalLongEntry  ? RES_BG_OK : RES_BG_KO)
-    table.cell(tbl, 2, 16, finalShortEntry ? "✓ SHORT" : "✗", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=finalShortEntry ? RES_BG_OK : RES_BG_KO)
+    table.cell(tbl, 0, 16, "RÉSULTAT", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(tbl, 1, 16, longEntry  ? "✓ LONG"  : "✗", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=longEntry  ? RES_BG_OK : RES_BG_KO)
+    table.cell(tbl, 2, 16, shortEntry ? "✓ SHORT" : "✗", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=shortEntry ? RES_BG_OK : RES_BG_KO)
 
     // ── Position active ───────────────────────────────────
     string posStatus = positionActive ? (currentSide == 1 ? "LONG actif" : "SHORT actif") : "—"
@@ -791,31 +831,33 @@ if barstate.islast
     table.cell(tbl, 1, 17, positionActive and currentSide == 1  ? posStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == 1  ? color.new(color.green, 30) : f_bgNa())
     table.cell(tbl, 2, 17, positionActive and currentSide == -1 ? posStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == -1 ? color.new(color.red,   30) : f_bgNa())
 
-    // ── TP1 Partiel (RR / points) ─────────────────────────
+    // ── TP1 Partiel ────────────────────────────────────────
     string tp1Status = tpPartialHit ? "✓ HIT → BE" : (positionActive ? "pending" : "—")
     color  tp1Color  = tpPartialHit ? color.new(color.green, 30) : (positionActive ? color.new(color.gray, 50) : f_bgNa())
     table.cell(tbl, 0, 18, "TP1 (RR/pts → BE)", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
     table.cell(tbl, 1, 18, positionActive and currentSide == 1  ? tp1Status : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == 1  ? tp1Color : f_bgNa())
     table.cell(tbl, 2, 18, positionActive and currentSide == -1 ? tp1Status : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == -1 ? tp1Color : f_bgNa())
 
-    // ── TP2 Partiel (entrée dans le canal HMA) ────────────
+    // ── TP2 Partiel ────────────────────────────────────────
     string tp2Status = hmaInTpHit ? "✓ HIT" : (tpPartialHit ? "pending" : "—")
     color  tp2Color  = hmaInTpHit ? color.new(color.aqua, 30) : (tpPartialHit ? color.new(color.gray, 50) : f_bgNa())
     table.cell(tbl, 0, 19, "TP2 (cross SSL baseline)", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
     table.cell(tbl, 1, 19, positionActive and currentSide == 1  ? tp2Status : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == 1  ? tp2Color : f_bgNa())
     table.cell(tbl, 2, 19, positionActive and currentSide == -1 ? tp2Status : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == -1 ? tp2Color : f_bgNa())
 
-    // ── TP Final (autre côté canal) ───────────────────────
+    // ── TP Final ───────────────────────────────────────────
     string tpFinalStatus = not positionActive ? "—" : (tpPartialHit ? "actif" : "après TP1")
     color  tpFinalColor  = not positionActive ? f_bgNa() : (tpPartialHit ? color.new(color.lime, 40) : color.new(color.gray, 50))
-    string tpFinalLabel  = i_exitMode == "Break HMA" ? "TP Final (break canal)" : i_exitMode == "Inversion HMA" ? "TP Final (inversion HMA)" : "TP Final (break ou inversion)"
-    table.cell(tbl, 0, 20, tpFinalLabel, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(tbl, 0, 20, "TP Final (côté / inv. HMA)", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
     table.cell(tbl, 1, 20, positionActive and currentSide == 1  ? tpFinalStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == 1  ? tpFinalColor : f_bgNa())
     table.cell(tbl, 2, 20, positionActive and currentSide == -1 ? tpFinalStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == -1 ? tpFinalColor : f_bgNa())
 
 // ============================================
-// ALERTES INDÉPENDANTES (alertcondition)
+// ALERTES INDÉPENDANTES
 // ============================================
+
+bool hmaFlipUp   = canalGreen and not canalGreen[1]
+bool hmaFlipDown = not canalGreen and canalGreen[1]
 
 alertcondition(hmaFlipUp,   title="HMA Inversion Haussière", message="HMA Canal: inversion haussière (rouge → vert)")
 alertcondition(hmaFlipDown, title="HMA Inversion Baissière", message="HMA Canal: inversion baissière (vert → rouge)")
