@@ -6,10 +6,6 @@ import {
   type AvailableDataset,
   type Trade,
   type BacktestMetrics,
-  type OptimizationResponse,
-  type OptimizationResultItem,
-  type ParameterRangeInput,
-  type OptimizationRunDetail,
   type BacktestEngineSettings,
   DEFAULT_BACKTEST_ENGINE_SETTINGS,
 } from './api';
@@ -21,22 +17,22 @@ import './App.css';
 import { Layout } from './components/Layout';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
-import { OptimizationConfig } from './components/OptimizationConfig';
-import { OptimizationResults } from './components/OptimizationResults';
-import { OptimizationHistory } from './components/OptimizationHistory';
+// Optimization components preserved for future use:
+// import { OptimizationConfig } from './components/OptimizationConfig';
+// import { OptimizationResults } from './components/OptimizationResults';
+// import { OptimizationHistory } from './components/OptimizationHistory';
 import { MarketDataPanel } from './components/MarketDataPanel';
+import { FavoritesPage } from './components/FavoritesPage';
 
 // Type for strategy parameters
 type StrategyParams = Record<string, number | string | boolean>;
 
 // App modes
-type AppMode = 'backtest' | 'optimization' | 'data';
-type OptimizationView = 'config' | 'results';
+type AppMode = 'backtest' | 'optimization' | 'data' | 'favorites';
 
 function App() {
   // Mode state
   const [mode, setMode] = useState<AppMode>('backtest');
-  const [optimizationView, setOptimizationView] = useState<OptimizationView>('config');
 
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [selectedStrategy, setSelectedStrategy] = useState<Strategy | null>(null);
@@ -57,7 +53,6 @@ function App() {
 
   // Trade Filters
   const [maxContracts, setMaxContracts] = useState(50);
-  const [, setBlockMarketOpen] = useState(true);
   const [engineSettings, setEngineSettings] = useState<BacktestEngineSettings>({
     ...DEFAULT_BACKTEST_ENGINE_SETTINGS,
     blackout_windows: DEFAULT_BACKTEST_ENGINE_SETTINGS.blackout_windows.map((window) => ({ ...window })),
@@ -83,44 +78,7 @@ function App() {
   // Derived state
   const [filteredResult, setFilteredResult] = useState<BacktestResult | null>(null);
 
-  // Optimization state
-  const [optimizationResult, setOptimizationResult] = useState<OptimizationResponse | null>(null);
-  const [optimizationLoading, setOptimizationLoading] = useState(false);
-  const [lastOptimizationConfig, setLastOptimizationConfig] = useState<{
-    ticker: string;
-    source: 'Yahoo' | 'Topstep';
-    contractId: string | null;
-    interval: string;
-    days: number;
-    initialEquity: number;
-    riskPerTrade: number;
-    maxContracts: number;
-    blockMarketOpen: boolean;
-    startDate?: string;
-    endDate?: string;
-    topstepLiveMode?: boolean;
-  } | null>(null);
-
-  // Config to reuse for optimization
-  const [configToReuse, setConfigToReuse] = useState<{
-    strategyName: string;
-    ticker: string;
-    source: 'Yahoo' | 'Topstep';
-    contractId: string | null;
-    interval: string;
-    days: number;
-    parameters: ParameterRangeInput[];
-    sessions: string[];
-    initialEquity: number;
-    riskPerTrade: number;
-    maxContracts: number;
-    blockMarketOpen: boolean;
-    startDate?: string;
-    endDate?: string;
-    topstepLiveMode?: boolean;
-    maxDrawdownLimit?: number;
-    minWinRate?: number;
-  } | null>(null);
+  // Optimization state — preserved for future use when optimization UI is re-enabled
 
   // Load strategies and available data on mount
   useEffect(() => {
@@ -370,143 +328,24 @@ function App() {
   }, [result, selectedSessions, initialEquity, calculateMetrics]);
 
 
-  // Optimization handlers
-  const handleRunOptimization = useCallback(async (config: {
-    strategyName: string;
-    ticker: string;
-    source: 'Yahoo' | 'Topstep';
-    contractId: string | null;
-    interval: string;
-    days: number;
-    parameters: ParameterRangeInput[];
-    sessions: string[];
-    initialEquity: number;
-    riskPerTrade: number;
-    maxContracts: number;
-    blockMarketOpen: boolean;
-    startDate?: string;
-    endDate?: string;
-    topstepLiveMode?: boolean;
-    maxDrawdownLimit?: number;
-    minWinRate?: number;
-  }) => {
-    setOptimizationLoading(true);
-    setError('');
+  // Optimization handlers — preserved as comments for future use when optimization UI is re-enabled
 
-    try {
-      const res = await api.runOptimization({
-        ...config,
-        maxWorkers: 4
-      });
-      setOptimizationResult(res);
-      setOptimizationView('results');
-      setLastOptimizationConfig({
-        ticker: config.ticker,
-        source: config.source,
-        contractId: config.contractId,
-        interval: config.interval,
-        days: config.days,
-        initialEquity: config.initialEquity,
-        riskPerTrade: config.riskPerTrade,
-        maxContracts: config.maxContracts,
-        blockMarketOpen: config.blockMarketOpen,
-        startDate: config.startDate,
-        endDate: config.endDate,
-        topstepLiveMode: config.topstepLiveMode
-      });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message);
-    } finally {
-      setOptimizationLoading(false);
-    }
-  }, []);
-
-  const handleSelectOptimizationResult = useCallback((result: OptimizationResultItem) => {
-    const strat = strategies.find(s => s.name === optimizationResult?.strategy_name);
+  const handleLoadFavoritePreset = useCallback((preset: import('./api').BacktestPreset) => {
+    const strat = strategies.find(s => s.name === preset.strategyName);
     if (strat) {
-      setSelectedStrategy(strat);
-
-      const newParams = { ...strat.default_params };
-      Object.entries(result.parameters).forEach(([key, value]) => {
-        newParams[key] = value;
-      });
-      setParams(newParams);
-
-      setSelectedSessions(result.sessions);
-
-      if (lastOptimizationConfig) {
-        setInterval(lastOptimizationConfig.interval);
-        setInitialEquity(lastOptimizationConfig.initialEquity);
-        setRiskPerTrade(lastOptimizationConfig.riskPerTrade * 100);
-        setMaxContracts(lastOptimizationConfig.maxContracts);
-        setBlockMarketOpen(lastOptimizationConfig.blockMarketOpen);
-      }
-
-      setMode('backtest');
-      setResult(null);
-      setFilteredResult(null);
+      selectStrategy(strat);
+      setTimeout(() => setParams({ ...strat.default_params, ...preset.params }), 0);
     }
-  }, [strategies, optimizationResult, lastOptimizationConfig]);
-
-  const handleBackFromResults = useCallback(() => {
-    setOptimizationView('config');
-  }, []);
-
-  const handleLoadHistoryRun = useCallback((run: OptimizationRunDetail) => {
-    const response: OptimizationResponse = {
-      id: run.id,
-      strategy_name: run.strategy_name,
-      total_combinations: run.total_combinations,
-      completed: run.total_combinations,
-      top_results: run.top_results,
-      errors: 0
-    };
-    setOptimizationResult(response);
-    setOptimizationView('results');
-
-    setLastOptimizationConfig({
-      ticker: run.ticker,
-      source: run.source as 'Yahoo' | 'Topstep',
-      contractId: run.contract_id,
-      interval: run.interval,
-      days: run.days,
-      initialEquity: run.initial_equity || 50000,
-      riskPerTrade: run.risk_per_trade !== undefined ? run.risk_per_trade : 0.01,
-      maxContracts: 50,
-      blockMarketOpen: true,
-      startDate: run.start_date,
-      endDate: run.end_date,
-      topstepLiveMode: run.topstep_live_mode !== undefined ? run.topstep_live_mode : true
-    });
-  }, []);
-
-  const handleReuseHistoryConfig = useCallback((run: OptimizationRunDetail) => {
-    const liveMode = run.topstep_live_mode !== undefined ? run.topstep_live_mode : true;
-
-    setConfigToReuse({
-      strategyName: run.strategy_name,
-      ticker: run.ticker || 'BTC-USD',
-      source: run.source as 'Yahoo' | 'Topstep',
-      contractId: run.contract_id,
-      interval: run.interval,
-      days: run.days,
-      parameters: run.parameters || [],
-      sessions: run.sessions_tested,
-      initialEquity: run.initial_equity || 50000,
-      riskPerTrade: run.risk_per_trade !== undefined ? run.risk_per_trade : 0.01,
-      maxContracts: 50,
-      blockMarketOpen: true,
-      startDate: run.start_date,
-      endDate: run.end_date,
-      topstepLiveMode: liveMode,
-      maxDrawdownLimit: run.max_drawdown_limit,
-      minWinRate: run.min_win_rate,
-    });
-
-    setOptimizationResult(null);
-    setOptimizationView('config');
-  }, []);
+    setSelectedSymbol(preset.symbol);
+    setInterval(preset.interval);
+    setStartDatetime(preset.startDatetime);
+    setEndDatetime(preset.endDatetime);
+    setInitialEquity(preset.initialEquity);
+    setRiskPerTrade(preset.riskPerTrade);
+    setMaxContracts(preset.maxContracts);
+    setEngineSettings(JSON.parse(JSON.stringify(preset.engineSettings)));
+    setMode('backtest');
+  }, [strategies, selectStrategy]);
 
   return (
     <Layout>
@@ -523,12 +362,16 @@ function App() {
             Backtest
           </button>
           <button
-            onClick={() => {
-              setMode('optimization');
-              if (!optimizationResult) {
-                setOptimizationView('config');
-              }
-            }}
+            onClick={() => setMode('favorites')}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'favorites'
+              ? 'bg-amber-500 text-white shadow-lg shadow-amber-900/30'
+              : 'text-gray-400 hover:text-gray-300'
+              }`}
+          >
+            Favorites
+          </button>
+          <button
+            onClick={() => setMode('optimization')}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'optimization'
               ? 'bg-purple-600 text-white shadow-lg'
               : 'text-gray-400 hover:text-gray-300'
@@ -547,33 +390,6 @@ function App() {
           </button>
         </div>
 
-        {mode === 'optimization' && optimizationResult && (
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-500">
-              {optimizationView === 'results'
-                ? `Viewing optimization results for ${optimizationResult?.strategy_name}`
-                : `Results available for ${optimizationResult?.strategy_name}`}
-            </span>
-            <button
-              onClick={() => {
-                setOptimizationResult(null);
-                setLastOptimizationConfig(null);
-                setOptimizationView('config');
-              }}
-              className="text-xs px-3 py-1 rounded bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-300 transition-colors"
-            >
-              Reset
-            </button>
-            {optimizationView === 'config' && (
-              <button
-                onClick={() => setOptimizationView('results')}
-                className="text-xs px-3 py-1 rounded bg-purple-800 text-purple-300 hover:bg-purple-700 hover:text-purple-200 transition-colors"
-              >
-                View Results
-              </button>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Error Display */}
@@ -642,56 +458,42 @@ function App() {
         <MarketDataPanel />
       )}
 
+      {/* Favorites Mode */}
+      {mode === 'favorites' && (
+        <FavoritesPage onLoadPreset={handleLoadFavoritePreset} />
+      )}
+
       {/* Optimization Mode */}
       {mode === 'optimization' && (
-        <>
-          {optimizationView === 'config' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <OptimizationConfig
-                strategies={strategies}
-                contracts={[]}
-                onRunOptimization={handleRunOptimization}
-                loading={optimizationLoading}
-                onContractsNeeded={() => {}}
-                initialConfig={configToReuse}
-              />
-
-              <div className="lg:col-span-2 space-y-6">
-                <div className="glass-panel rounded-xl p-6">
-                  <div className="flex flex-col items-center justify-center text-center py-4">
-                    <div className="w-16 h-16 rounded-full bg-purple-600/20 flex items-center justify-center mb-4">
-                      <svg className="w-8 h-8 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                      </svg>
-                    </div>
-                    <h3 className="text-lg font-semibold text-gray-300 mb-2">Parameter Optimization</h3>
-                    <p className="text-gray-500 text-sm max-w-md">
-                      Test multiple parameter combinations and session configurations to find the optimal strategy settings.
-                    </p>
-                  </div>
-                </div>
-
-                <OptimizationHistory
-                  onLoadRun={handleLoadHistoryRun}
-                  onReuseRun={handleReuseHistoryConfig}
-                />
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="glass-panel rounded-2xl p-16 flex flex-col items-center text-center max-w-lg w-full">
+            <div className="relative mb-8">
+              <div className="w-20 h-20 rounded-full bg-purple-600/15 border border-purple-500/20 flex items-center justify-center">
+                <svg className="w-10 h-10 text-purple-400/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </div>
+              <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-amber-500/80 border-2 border-[#0B0F19] flex items-center justify-center">
+                <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
               </div>
             </div>
-          )}
-
-          {optimizationView === 'results' && optimizationResult && (
-            <OptimizationResults
-              results={optimizationResult.top_results}
-              strategyName={optimizationResult.strategy_name}
-              totalCombinations={optimizationResult.total_combinations}
-              completed={optimizationResult.completed}
-              errors={optimizationResult.errors}
-              config={lastOptimizationConfig || undefined}
-              onSelectResult={handleSelectOptimizationResult}
-              onBack={handleBackFromResults}
-            />
-          )}
-        </>
+            <h2 className="text-2xl font-bold bg-gradient-to-r from-purple-400 via-indigo-400 to-blue-400 bg-clip-text text-transparent mb-3">
+              Coming Soon
+            </h2>
+            <p className="text-gray-500 text-sm leading-relaxed">
+              Le module d'optimisation est en cours de refonte.<br />
+              Il sera disponible dans une prochaine version.
+            </p>
+            <div className="mt-8 flex items-center gap-2">
+              <div className="w-1.5 h-1.5 rounded-full bg-purple-500/50 animate-pulse" />
+              <div className="w-1.5 h-1.5 rounded-full bg-purple-500/50 animate-pulse" style={{ animationDelay: '0.2s' }} />
+              <div className="w-1.5 h-1.5 rounded-full bg-purple-500/50 animate-pulse" style={{ animationDelay: '0.4s' }} />
+            </div>
+          </div>
+        </div>
       )}
     </Layout>
   );

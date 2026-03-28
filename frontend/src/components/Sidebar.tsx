@@ -1,16 +1,11 @@
-import { useState, useEffect, useMemo, useRef, type Dispatch, type SetStateAction } from 'react';
-import { Check, ClipboardCopy, Clock3, Database, Lock, Pencil, Play, RefreshCw, Settings, ShieldAlert, Star, ChevronDown, ChevronUp, Trash2, RotateCcw, Upload } from 'lucide-react';
-import { ConfirmModal } from './ui/Modal';
+import { useState, useMemo, type Dispatch, type SetStateAction } from 'react';
+import { Clock3, Database, Lock, Play, RefreshCw, Settings, ShieldAlert, Star } from 'lucide-react';
 import {
     type AvailableDataset,
     type BacktestEngineSettings,
     type BacktestPreset,
     type Strategy,
-    loadPresets,
-    loadPresetsLocal,
     savePreset,
-    deletePreset as deletePresetFromStorage,
-    renamePreset,
 } from '../api';
 
 type StrategyParamValue = number | string | boolean;
@@ -97,22 +92,7 @@ export function Sidebar({
     autoUpdateLoading,
     hasResult,
 }: SidebarProps) {
-    // Favorites state — load from localStorage instantly, then refresh from backend
-    const [presets, setPresets] = useState<BacktestPreset[]>(() => loadPresetsLocal());
-    const [favoritesOpen, setFavoritesOpen] = useState(false);
     const [saveConfirm, setSaveConfirm] = useState(false);
-    const [renamingId, setRenamingId] = useState<string | null>(null);
-    const [renameValue, setRenameValue] = useState('');
-    const renameInputRef = useRef<HTMLInputElement>(null);
-    const [copiedId, setCopiedId] = useState<string | null>(null);
-    const [importOpen, setImportOpen] = useState(false);
-    const [importText, setImportText] = useState('');
-    const [importError, setImportError] = useState('');
-    const [deleteConfirmPreset, setDeleteConfirmPreset] = useState<BacktestPreset | null>(null);
-
-    useEffect(() => {
-        loadPresets().then(setPresets);
-    }, []);
 
     const selectedDataset = useMemo(() => {
         return availableData.find((dataset) => dataset.symbol === selectedSymbol) || null;
@@ -175,86 +155,9 @@ export function Sidebar({
             params: { ...params },
             engineSettings: JSON.parse(JSON.stringify(engineSettings)),
         };
-        const updated = await savePreset(preset);
-        setPresets(updated);
+        await savePreset(preset);
         setSaveConfirm(true);
         setTimeout(() => setSaveConfirm(false), 2000);
-    };
-
-    const handleDeletePreset = async (id: string) => {
-        const updated = await deletePresetFromStorage(id);
-        setPresets(updated);
-        setDeleteConfirmPreset(null);
-    };
-
-    const startRenaming = (preset: BacktestPreset) => {
-        setRenamingId(preset.id);
-        setRenameValue(preset.name);
-        setTimeout(() => renameInputRef.current?.select(), 0);
-    };
-
-    const commitRename = async (id: string) => {
-        const trimmed = renameValue.trim();
-        if (trimmed) {
-            const updated = await renamePreset(id, trimmed);
-            setPresets(updated);
-        }
-        setRenamingId(null);
-    };
-
-    const handleCopyPreset = (preset: BacktestPreset) => {
-        navigator.clipboard.writeText(JSON.stringify(preset, null, 2));
-        setCopiedId(preset.id);
-        setTimeout(() => setCopiedId(null), 2000);
-    };
-
-    const handleImportPreset = async () => {
-        setImportError('');
-        let parsed: BacktestPreset;
-        try {
-            parsed = JSON.parse(importText);
-        } catch {
-            setImportError('JSON invalide');
-            return;
-        }
-        if (!parsed.strategyName || !parsed.symbol || !parsed.params) {
-            setImportError('Preset incomplet (strategyName, symbol ou params manquant)');
-            return;
-        }
-        // Assign a fresh id and timestamp to avoid collisions
-        const fresh: BacktestPreset = {
-            ...parsed,
-            id: crypto.randomUUID(),
-            createdAt: new Date().toISOString(),
-        };
-        const updated = await savePreset(fresh);
-        setPresets(updated);
-        setImportText('');
-        setImportOpen(false);
-    };
-
-    const handleLoadPreset = (preset: BacktestPreset) => {
-        // Strategy
-        const strategy = strategies.find((s) => s.name === preset.strategyName);
-        if (strategy) {
-            selectStrategy(strategy);
-            // Merge strategy defaults with preset params so new params added after
-            // the preset was saved still appear with their default values.
-            setTimeout(() => setParams({ ...strategy.default_params, ...preset.params }), 0);
-        }
-        // Data
-        setSelectedSymbol(preset.symbol);
-        setInterval(preset.interval);
-        setStartDatetime(preset.startDatetime);
-        setEndDatetime(preset.endDatetime);
-        // Risk
-        setInitialEquity(preset.initialEquity);
-        setRiskPerTrade(preset.riskPerTrade);
-        setMaxContracts(preset.maxContracts);
-        // Engine
-        setEngineSettings(JSON.parse(JSON.stringify(preset.engineSettings)));
-
-        setFavoritesOpen(false);
     };
 
     const renderParamInput = (key: string, value: StrategyParamValue) => {
@@ -700,128 +603,6 @@ export function Sidebar({
                 </div>
             </div>
 
-            {/* Favorites panel */}
-            <div className="glass-panel rounded-xl overflow-hidden">
-                <div className="flex items-center justify-between px-5 py-3">
-                    <button
-                        onClick={() => setFavoritesOpen(!favoritesOpen)}
-                        className="flex items-center gap-2 text-sm font-medium text-amber-400 hover:text-amber-300 transition-colors"
-                    >
-                        <Star className="w-4 h-4 fill-amber-400" />
-                        Favorites ({presets.length})
-                        {favoritesOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                    </button>
-                    <button
-                        onClick={() => { setImportOpen(!importOpen); setImportError(''); setImportText(''); }}
-                        className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors py-1 px-2 rounded-md hover:bg-gray-700/40"
-                        title="Import a preset from JSON"
-                    >
-                        <Upload className="w-3.5 h-3.5" />
-                        Import
-                    </button>
-                </div>
-
-                {importOpen && (
-                    <div className="border-t border-gray-700/50 px-4 py-3 space-y-2">
-                        <textarea
-                            value={importText}
-                            onChange={(e) => { setImportText(e.target.value); setImportError(''); }}
-                            placeholder="Colle le JSON du preset ici..."
-                            className="w-full h-24 text-xs text-gray-200 bg-gray-800/60 border border-gray-600 rounded-lg px-3 py-2 outline-none focus:border-amber-400/60 resize-none font-mono"
-                        />
-                        {importError && <p className="text-xs text-red-400">{importError}</p>}
-                        <div className="flex gap-2 justify-end">
-                            <button
-                                onClick={() => { setImportOpen(false); setImportText(''); setImportError(''); }}
-                                className="text-xs px-3 py-1.5 rounded-md text-gray-400 hover:bg-gray-700/40 transition-colors"
-                            >
-                                Annuler
-                            </button>
-                            <button
-                                onClick={handleImportPreset}
-                                disabled={!importText.trim()}
-                                className="text-xs px-3 py-1.5 rounded-md bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
-                                Ajouter
-                            </button>
-                        </div>
-                    </div>
-                )}
-
-                {favoritesOpen && presets.length > 0 && (
-                    <div className="border-t border-gray-700/50 max-h-64 overflow-y-auto">
-                        {presets.map((preset) => (
-                            <div
-                                key={preset.id}
-                                className="flex items-center justify-between px-5 py-3 border-b border-gray-800/50 last:border-b-0 hover:bg-gray-800/20 transition-colors group"
-                            >
-                                <div className="min-w-0 flex-1">
-                                    {renamingId === preset.id ? (
-                                        <input
-                                            ref={renameInputRef}
-                                            value={renameValue}
-                                            onChange={(e) => setRenameValue(e.target.value)}
-                                            onBlur={() => commitRename(preset.id)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter') commitRename(preset.id);
-                                                if (e.key === 'Escape') setRenamingId(null);
-                                            }}
-                                            className="w-full text-sm text-gray-100 bg-gray-700/60 border border-amber-400/50 rounded px-2 py-0.5 outline-none focus:border-amber-400"
-                                            autoFocus
-                                        />
-                                    ) : (
-                                        <div className="text-sm text-gray-200 font-medium truncate">{preset.name}</div>
-                                    )}
-                                    <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-3 flex-wrap">
-                                        <span>${preset.initialEquity.toLocaleString()} / {preset.riskPerTrade}%</span>
-                                        <span>{preset.startDatetime.replace('T', ' ')} - {preset.endDatetime.replace('T', ' ')}</span>
-                                        <span className="text-gray-600">{new Date(preset.createdAt).toLocaleDateString()}</span>
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-1 ml-3 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button
-                                        onClick={() => handleLoadPreset(preset)}
-                                        className="p-1.5 rounded-md text-blue-400 hover:bg-blue-500/10 transition-colors"
-                                        title="Load preset"
-                                    >
-                                        <RotateCcw className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button
-                                        onClick={() => startRenaming(preset)}
-                                        className="p-1.5 rounded-md text-amber-400 hover:bg-amber-500/10 transition-colors"
-                                        title="Rename preset"
-                                    >
-                                        <Pencil className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button
-                                        onClick={() => handleCopyPreset(preset)}
-                                        className="p-1.5 rounded-md text-green-400 hover:bg-green-500/10 transition-colors"
-                                        title="Copy preset JSON"
-                                    >
-                                        {copiedId === preset.id
-                                            ? <Check className="w-3.5 h-3.5" />
-                                            : <ClipboardCopy className="w-3.5 h-3.5" />}
-                                    </button>
-                                    <button
-                                        onClick={() => setDeleteConfirmPreset(preset)}
-                                        className="p-1.5 rounded-md text-red-400 hover:bg-red-500/10 transition-colors"
-                                        title="Delete preset"
-                                    >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
-
-                {favoritesOpen && presets.length === 0 && !importOpen && (
-                    <div className="border-t border-gray-700/50 px-5 py-4 text-xs text-gray-500 text-center">
-                        Aucun preset sauvegardé
-                    </div>
-                )}
-            </div>
-
             {/* Action buttons */}
             <div className="flex gap-3">
                 {!autoUpdate && (
@@ -907,16 +688,6 @@ export function Sidebar({
             )}
         </div>
 
-        <ConfirmModal
-            isOpen={deleteConfirmPreset !== null}
-            onClose={() => setDeleteConfirmPreset(null)}
-            onConfirm={() => deleteConfirmPreset && handleDeletePreset(deleteConfirmPreset.id)}
-            title="Supprimer le preset"
-            message={`Supprimer "${deleteConfirmPreset?.name}" ? Cette action est irréversible.`}
-            confirmText="Supprimer"
-            cancelText="Annuler"
-            variant="danger"
-        />
         </>
     );
 }

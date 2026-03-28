@@ -48,7 +48,7 @@ export function EquityChart({ data }: EquityChartProps) {
                             }}
                             itemStyle={{ color: '#60A5FA' }}
                             labelStyle={{ color: '#9CA3AF', marginBottom: '0.25rem' }}
-                            formatter={(value: number) => [`$${value.toFixed(2)}`, 'Equity']}
+                            formatter={(value: number | undefined) => [`$${(value ?? 0).toFixed(2)}`, 'Equity']}
                         />
                         <Line
                             type="monotone"

@@ -155,7 +155,6 @@ export function TradesTable({ trades, selectedSessions, onSessionsChange }: Trad
 
     // Scroll-to-top
     const tableTopRef = useRef<HTMLDivElement>(null);
-    const tableBodyRef = useRef<HTMLDivElement>(null);
     const [showScrollTop, setShowScrollTop] = useState(false);
 
     useEffect(() => {

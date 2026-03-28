@@ -51,7 +51,7 @@ function PnlValue({ value, prefix }: { value: number; prefix?: string }) {
     );
 }
 
-export function TradeAnalytics({ trades, initialEquity = 50000 }: TradeAnalyticsProps) {
+export function TradeAnalytics({ trades }: TradeAnalyticsProps) {
     const [expanded, setExpanded] = useState(false);
 
     const analytics = useMemo(() => {

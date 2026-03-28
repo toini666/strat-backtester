@@ -24,7 +24,7 @@ export function Layout({ children }: LayoutProps) {
                     </div>
                     <div className="flex items-center gap-3">
                         <div className="px-3 py-1 rounded-full bg-gray-800/50 border border-gray-700 text-xs text-gray-400 font-mono">
-                            v1.3-beta
+                            version 2.0
                         </div>
                     </div>
                 </header>
