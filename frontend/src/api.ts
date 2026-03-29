@@ -163,6 +163,14 @@ export interface MultiBacktestResult {
 
 // --- Backtest Presets (Favorites) ---
 
+/** Snapshot of the 4 key metrics saved with a preset */
+export interface PresetMetrics {
+    total_return: number;   // %
+    win_rate: number;       // %
+    total_trades: number;
+    max_drawdown: number;   // %
+}
+
 /** Single-config preset (legacy format) */
 export interface SingleBacktestPreset {
     id: string;
@@ -183,6 +191,8 @@ export interface SingleBacktestPreset {
     params: Record<string, number | string | boolean>;
     // Engine
     engineSettings: BacktestEngineSettings;
+    // Backtest metrics snapshot (optional — absent on old presets)
+    metrics?: PresetMetrics;
 }
 
 /** Multi-config preset */
@@ -205,6 +215,8 @@ export interface MultiBacktestPreset {
         maxContracts: number;
         engineSettings: BacktestEngineSettings;
     }>;
+    // Backtest metrics snapshot (optional — absent on old presets)
+    metrics?: PresetMetrics;
 }
 
 export type BacktestPreset = SingleBacktestPreset | MultiBacktestPreset;

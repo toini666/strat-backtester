@@ -316,7 +316,7 @@ export function Dashboard({
             <TradeAnalytics trades={trades} initialEquity={initialEquity} />
 
             {/* Session Analytics */}
-            <SessionAnalytics trades={trades} initialEquity={initialEquity} />
+            <SessionAnalytics trades={trades} initialEquity={initialEquity} multiMode={isMulti} />
         </div>
     );
 }

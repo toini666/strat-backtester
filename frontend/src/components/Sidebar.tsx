@@ -4,6 +4,7 @@ import {
     type AvailableDataset,
     type BacktestEngineSettings,
     type BacktestMode,
+    type BacktestMetrics,
     type MultiBacktestPreset,
     type SingleBacktestPreset,
     type Strategy,
@@ -19,6 +20,8 @@ interface SidebarProps {
     setSelectedSymbol: (v: string) => void;
     /** When true, symbol dropdown is shown but disabled (multi_strat slot 2) */
     symbolLocked?: boolean;
+    /** In multi_asset mode: the symbol already chosen by the other slot (to prevent duplicates) */
+    otherSymbol?: string;
     interval: string;
     setInterval: (v: string) => void;
     startDatetime: string;
@@ -56,6 +59,10 @@ interface SidebarProps {
     setActiveSlot: (slot: 0 | 1) => void;
     /** When provided (multi mode), Save button uses this callback instead of single-config logic */
     buildMultiPreset?: () => MultiBacktestPreset | null;
+    /** Metrics from the last completed backtest run — required to enable the Save button */
+    currentMetrics?: BacktestMetrics | null;
+    /** True when config has changed since the last completed backtest */
+    resultIsStale?: boolean;
 }
 
 function formatParamLabel(key: string): string {
@@ -87,6 +94,7 @@ export function Sidebar({
     selectedSymbol,
     setSelectedSymbol,
     symbolLocked = false,
+    otherSymbol,
     interval,
     setInterval,
     startDatetime,
@@ -120,6 +128,8 @@ export function Sidebar({
     activeSlot,
     setActiveSlot,
     buildMultiPreset,
+    currentMetrics,
+    resultIsStale = false,
 }: SidebarProps) {
     const [saveConfirm, setSaveConfirm] = useState(false);
 
@@ -168,12 +178,20 @@ export function Sidebar({
         }));
     };
 
+    const metricsSnapshot = currentMetrics ? {
+        total_return: currentMetrics.total_return,
+        win_rate: currentMetrics.win_rate,
+        total_trades: currentMetrics.total_trades,
+        max_drawdown: currentMetrics.max_drawdown,
+    } : undefined;
+
     const handleSavePreset = async () => {
+        if (!currentMetrics) return; // safety guard
         setSaveConfirm(false);
         if (buildMultiPreset) {
             const preset = buildMultiPreset();
             if (!preset) return;
-            await savePreset(preset);
+            await savePreset({ ...preset, metrics: metricsSnapshot });
         } else {
             if (!selectedStrategy) return;
             const preset: SingleBacktestPreset = {
@@ -191,6 +209,7 @@ export function Sidebar({
                 strategyName: selectedStrategy.name,
                 params: { ...params },
                 engineSettings: JSON.parse(JSON.stringify(engineSettings)),
+                metrics: metricsSnapshot,
             };
             await savePreset(preset);
         }
@@ -359,9 +378,12 @@ export function Sidebar({
                                     }}
                                 >
                                     {availableData.length === 0 && <option>Loading...</option>}
-                                    {availableData.map((d) => (
-                                        <option key={d.symbol} value={d.symbol}>{d.symbol}</option>
-                                    ))}
+                                    {availableData
+                                        .filter((d) => !(backtestMode === 'multi_asset' && otherSymbol && d.symbol === otherSymbol))
+                                        .map((d) => (
+                                            <option key={d.symbol} value={d.symbol}>{d.symbol}</option>
+                                        ))
+                                    }
                                 </select>
                             </div>
 
@@ -721,13 +743,23 @@ export function Sidebar({
 
                     <button
                         onClick={handleSavePreset}
-                        disabled={!selectedStrategy && !buildMultiPreset}
+                        disabled={!currentMetrics || resultIsStale}
                         className={`px-5 py-4 rounded-xl font-medium transition-all flex items-center gap-2 ${
                             saveConfirm
                                 ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
-                                : 'bg-gray-800/60 border border-gray-700 text-gray-400 hover:text-amber-400 hover:border-amber-500/40 hover:bg-amber-500/10'
+                                : resultIsStale
+                                    ? 'bg-orange-500/10 border border-orange-500/30 text-orange-400/60 cursor-not-allowed'
+                                    : currentMetrics
+                                        ? 'bg-gray-800/60 border border-gray-700 text-gray-400 hover:text-amber-400 hover:border-amber-500/40 hover:bg-amber-500/10'
+                                        : 'bg-gray-800/30 border border-gray-800 text-gray-600 cursor-not-allowed'
                         }`}
-                        title="Save current parameters as favorite"
+                        title={
+                            resultIsStale
+                                ? 'Paramètres modifiés depuis le dernier backtest — relance d\'abord le backtest pour sauvegarder'
+                                : currentMetrics
+                                    ? 'Save current parameters as favorite'
+                                    : 'Lance un backtest d\'abord pour pouvoir sauvegarder'
+                        }
                     >
                         <Star className={`w-5 h-5 ${saveConfirm ? 'fill-amber-400 text-amber-400' : ''}`} />
                         {saveConfirm ? 'Saved!' : 'Save'}

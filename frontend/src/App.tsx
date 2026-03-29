@@ -82,7 +82,13 @@ function App() {
   useEffect(() => {
     if (backtestMode !== 'single' && !hasInitializedSlot2Ref.current) {
       hasInitializedSlot2Ref.current = true;
-      setSelectedSymbol2(selectedSymbol);
+      // In multi_asset, slot 2 must have a different symbol than slot 1
+      if (backtestMode === 'multi_asset') {
+        const other = availableData.find(d => d.symbol !== selectedSymbol);
+        setSelectedSymbol2(other ? other.symbol : selectedSymbol);
+      } else {
+        setSelectedSymbol2(selectedSymbol);
+      }
       setInterval2(interval);
       if (selectedStrategy) {
         setSelectedStrategy2(selectedStrategy);
@@ -107,6 +113,11 @@ function App() {
   const [previousMetrics, setPreviousMetrics] = useState<BacktestMetrics | null>(null);
   const currentResultContextRef = useRef<BacktestContext | null>(null);
   const filteredResultRef = useRef<BacktestResult | null>(null);
+
+  // Stale-result detection: hash of the config at last successful run
+  const lastRunConfigHashRef = useRef<string | null>(null);
+  // Ref that always holds the latest buildConfigHash function (updated each render)
+  const buildConfigHashRef = useRef<() => string>(() => '');
 
   // Auto-update mode (single mode only)
   const [autoUpdate, setAutoUpdate] = useState(false);
@@ -199,6 +210,7 @@ function App() {
           engineSettings,
         );
         setResult(res);
+        lastRunConfigHashRef.current = buildConfigHashRef.current();
         currentResultContextRef.current = newContext;
         lastSignalParamsRef.current = JSON.stringify(params);
       } else {
@@ -230,6 +242,7 @@ function App() {
           [cfg1, cfg2],
         );
         setMultiResult(res);
+        lastRunConfigHashRef.current = buildConfigHashRef.current();
         currentResultContextRef.current = newContext;
       }
     } catch (err: unknown) {
@@ -243,6 +256,13 @@ function App() {
   useEffect(() => {
     filteredResultRef.current = filteredResult;
   }, [filteredResult]);
+
+  // Multi-strat: slot 2 ticker always mirrors slot 1
+  useEffect(() => {
+    if (backtestMode === 'multi_strat') {
+      setSelectedSymbol2(selectedSymbol);
+    }
+  }, [selectedSymbol, backtestMode]);
 
   // Clear previous metrics when context changes
   useEffect(() => {
@@ -304,6 +324,7 @@ function App() {
           );
         }
         setResult(res);
+        lastRunConfigHashRef.current = buildConfigHashRef.current();
         currentResultContextRef.current = newContext;
         setError('');
       } catch (err: unknown) {
@@ -385,6 +406,7 @@ function App() {
   // ── Load favorite preset ──
   const handleLoadFavoritePreset = useCallback((preset: BacktestPreset) => {
     if (preset.mode === 'multi_asset' || preset.mode === 'multi_strat') {
+      // ── Load full multi preset ──
       const mp = preset as MultiBacktestPreset;
       const [c1, c2] = mp.configs;
       setBacktestMode(mp.mode);
@@ -408,7 +430,29 @@ function App() {
       setMaxContracts2(c2.maxContracts);
       setEngineSettings2(JSON.parse(JSON.stringify(c2.engineSettings)));
       hasInitializedSlot2Ref.current = true;
+    } else if (backtestMode !== 'single') {
+      // ── Apply single preset to the active slot (stay in multi mode) ──
+      const sp = preset as SingleBacktestPreset;
+      const strat = strategies.find(s => s.name === sp.strategyName);
+      if (activeSlot === 0) {
+        if (strat) { selectStrategy(strat); setTimeout(() => setParams({ ...strat.default_params, ...sp.params }), 0); }
+        setSelectedSymbol(sp.symbol);
+        setInterval(sp.interval);
+        setRiskPerTrade(sp.riskPerTrade);
+        setMaxContracts(sp.maxContracts);
+        setEngineSettings(JSON.parse(JSON.stringify(sp.engineSettings)));
+      } else {
+        if (strat) { setSelectedStrategy2(strat); setTimeout(() => setParams2({ ...strat.default_params, ...sp.params }), 0); }
+        // multi_asset: apply the preset's symbol; multi_strat: ticker is locked, don't change
+        if (backtestMode === 'multi_asset') setSelectedSymbol2(sp.symbol);
+        setInterval2(sp.interval);
+        setRiskPerTrade2(sp.riskPerTrade);
+        setMaxContracts2(sp.maxContracts);
+        setEngineSettings2(JSON.parse(JSON.stringify(sp.engineSettings)));
+      }
+      // Dates and equity are shared — not changed
     } else {
+      // ── Load single preset in single mode ──
       const sp = preset as SingleBacktestPreset;
       setBacktestMode('single');
       const strat = strategies.find(s => s.name === sp.strategyName);
@@ -423,7 +467,7 @@ function App() {
       setEngineSettings(JSON.parse(JSON.stringify(sp.engineSettings)));
     }
     setMode('backtest');
-  }, [strategies, selectStrategy]);
+  }, [strategies, selectStrategy, backtestMode, activeSlot]);
 
   // Build multi preset for saving from Sidebar
   const buildMultiPreset = useCallback((): MultiBacktestPreset | null => {
@@ -473,6 +517,34 @@ function App() {
   const sidebarSetMaxContracts = showSlot1 ? setMaxContracts : setMaxContracts2;
   const sidebarEngineSettings = showSlot1 ? engineSettings : engineSettings2;
   const sidebarSetEngineSettings = showSlot1 ? setEngineSettings : setEngineSettings2;
+
+  // Build a stable hash of the current backtest config (used for stale-result detection)
+  const buildConfigHash = () => JSON.stringify(
+    backtestMode === 'single'
+      ? { mode: 'single', strategy: selectedStrategy?.name, symbol: selectedSymbol, interval,
+          start: startDatetime, end: endDatetime, equity: initialEquity,
+          risk: riskPerTrade, maxContracts, params, engine: engineSettings }
+      : { mode: backtestMode,
+          strategy1: selectedStrategy?.name, symbol1: selectedSymbol, interval1: interval,
+          params1: params, risk1: riskPerTrade, maxContracts1: maxContracts, engine1: engineSettings,
+          strategy2: selectedStrategy2?.name,
+          symbol2: backtestMode === 'multi_strat' ? selectedSymbol : selectedSymbol2,
+          interval2, params2, risk2: riskPerTrade2, maxContracts2: maxContracts2, engine2: engineSettings2,
+          start: startDatetime, end: endDatetime, equity: initialEquity }
+  );
+
+  // Keep the ref in sync so runBacktest (async) can always read the latest hash
+  buildConfigHashRef.current = buildConfigHash;
+
+  const hasResult = filteredResult !== null || filteredMultiResult !== null;
+  const resultIsStale = hasResult &&
+    lastRunConfigHashRef.current !== null &&
+    lastRunConfigHashRef.current !== buildConfigHash();
+
+  // In multi_asset, the other slot's symbol (to prevent duplicate selection)
+  const sidebarOtherSymbol = isMulti && backtestMode === 'multi_asset'
+    ? (activeSlot === 0 ? selectedSymbol2 : selectedSymbol)
+    : undefined;
 
   const canRun = backtestMode === 'single'
     ? !!(selectedStrategy && selectedSymbol)
@@ -536,6 +608,7 @@ function App() {
             selectedSymbol={sidebarSymbol}
             setSelectedSymbol={sidebarSetSymbol}
             symbolLocked={isMulti && activeSlot === 1 && backtestMode === 'multi_strat'}
+            otherSymbol={sidebarOtherSymbol}
             interval={sidebarInterval}
             setInterval={sidebarSetInterval}
             startDatetime={startDatetime}
@@ -563,12 +636,14 @@ function App() {
             autoUpdate={autoUpdate && backtestMode === 'single'}
             setAutoUpdate={setAutoUpdate}
             autoUpdateLoading={autoUpdateLoading}
-            hasResult={result !== null || multiResult !== null}
+            hasResult={hasResult}
+            resultIsStale={resultIsStale}
             backtestMode={backtestMode}
             setBacktestMode={setBacktestMode}
             activeSlot={activeSlot}
             setActiveSlot={setActiveSlot}
             buildMultiPreset={backtestMode !== 'single' ? buildMultiPreset : undefined}
+            currentMetrics={backtestMode === 'single' ? (filteredResult?.metrics ?? null) : (filteredMultiResult?.metrics ?? null)}
           />
 
           <Dashboard
@@ -591,7 +666,18 @@ function App() {
 
       {/* Favorites Mode */}
       {mode === 'favorites' && (
-        <FavoritesPage onLoadPreset={handleLoadFavoritePreset} />
+        <FavoritesPage
+          onLoadPreset={handleLoadFavoritePreset}
+          multiContext={isMulti ? {
+            backtestMode,
+            activeSlot,
+            slotLabel: (backtestMode === 'multi_asset' ? ['Asset 1', 'Asset 2'] : ['Strategy 1', 'Strategy 2'])[activeSlot],
+            lockedSymbol: backtestMode === 'multi_strat' ? selectedSymbol : undefined,
+            otherSlotSymbol: backtestMode === 'multi_asset'
+              ? (activeSlot === 0 ? selectedSymbol2 : selectedSymbol)
+              : undefined,
+          } : undefined}
+        />
       )}
 
       {/* Optimization Mode */}

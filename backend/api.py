@@ -1090,8 +1090,12 @@ def run_multi_backtest(req: MultiBacktestRequest):
     label1 = f"{cfg1.symbol} / {cfg1.strategy_name} ({cfg1.interval})"
     label2 = f"{cfg2.symbol} / {cfg2.strategy_name} ({cfg2.interval})"
 
-    result1 = _run_config_for_multi(cfg1, req.start_datetime, req.end_datetime, req.initial_equity, "1")
-    result2 = _run_config_for_multi(cfg2, req.start_datetime, req.end_datetime, req.initial_equity, "2")
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future1 = executor.submit(_run_config_for_multi, cfg1, req.start_datetime, req.end_datetime, req.initial_equity, "1")
+        future2 = executor.submit(_run_config_for_multi, cfg2, req.start_datetime, req.end_datetime, req.initial_equity, "2")
+        result1 = future1.result()
+        result2 = future2.result()
 
     trades1 = result1.get("trades", [])
     trades2 = result2.get("trades", [])
