@@ -213,10 +213,10 @@
     "id": "b5d7ff44-5a11-44ae-93ab-4f037012c307",
     "symbol": "MCL",
     "contract_id": "CON.F.US.MCLE.K26",
-    "start_date": "2026-01-15 19:49:00+01:00",
+    "start_date": "2025-01-02 00:00:00+01:00",
     "end_date": "2026-03-27 21:59:00+01:00",
-    "bar_count_1m": 69764,
-    "total_size_mb": 7.88,
+    "bar_count_1m": 427438,
+    "total_size_mb": 46.95,
     "timeframes": [
       "1m",
       "2m",
@@ -226,8 +226,86 @@
       "15m"
     ],
     "timezone": "Europe/Brussels",
-    "updated_at": "2026-03-27T21:18:40.621778",
+    "updated_at": "2026-03-29T17:44:25.098767",
     "contract_segments": [
+      {
+        "contract": "DATABENTO:MCLG5",
+        "label": "MCLG5",
+        "from": "2025-01-01",
+        "to": "2025-01-16"
+      },
+      {
+        "contract": "DATABENTO:MCLH5",
+        "label": "MCLH5",
+        "from": "2025-01-16",
+        "to": "2025-02-17"
+      },
+      {
+        "contract": "DATABENTO:MCLJ5",
+        "label": "MCLJ5",
+        "from": "2025-02-17",
+        "to": "2025-03-18"
+      },
+      {
+        "contract": "DATABENTO:MCLK5",
+        "label": "MCLK5",
+        "from": "2025-03-18",
+        "to": "2025-04-17"
+      },
+      {
+        "contract": "DATABENTO:MCLM5",
+        "label": "MCLM5",
+        "from": "2025-04-17",
+        "to": "2025-05-16"
+      },
+      {
+        "contract": "DATABENTO:MCLN5",
+        "label": "MCLN5",
+        "from": "2025-05-16",
+        "to": "2025-06-17"
+      },
+      {
+        "contract": "DATABENTO:MCLQ5",
+        "label": "MCLQ5",
+        "from": "2025-06-17",
+        "to": "2025-07-18"
+      },
+      {
+        "contract": "DATABENTO:MCLU5",
+        "label": "MCLU5",
+        "from": "2025-07-18",
+        "to": "2025-08-17"
+      },
+      {
+        "contract": "DATABENTO:MCLV5",
+        "label": "MCLV5",
+        "from": "2025-08-17",
+        "to": "2025-09-18"
+      },
+      {
+        "contract": "DATABENTO:MCLX5",
+        "label": "MCLX5",
+        "from": "2025-09-18",
+        "to": "2025-10-17"
+      },
+      {
+        "contract": "DATABENTO:MCLZ5",
+        "label": "MCLZ5",
+        "from": "2025-10-17",
+        "to": "2025-11-18"
+      },
+      {
+        "contract": "DATABENTO:MCLF6",
+        "label": "MCLF6",
+        "from": "2025-11-18",
+        "to": "2025-12-17"
+      },
+      {
+        "contract": "DATABENTO:MCLG6",
+        "label": "MCLG6",
+        "from": "2025-12-17",
+        "to": "2026-01-15"
+      },
       {
         "contract": "CON.F.US.MCLE.G26",
         "label": "G26",
