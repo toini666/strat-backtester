@@ -79,7 +79,7 @@ function ConfigMetricRow({
                     <div className="text-gray-500 uppercase tracking-wide mb-1">Max DD</div>
                     <div className="font-mono font-bold text-red-400">{metrics.max_drawdown.toFixed(2)}%</div>
                     <div className="font-mono text-[11px] text-red-400 opacity-60">
-                        -${(metrics.max_drawdown / 100 * initialEquity).toFixed(2)}
+                        -${(metrics.max_drawdown_dollars ?? metrics.max_drawdown / 100 * initialEquity).toFixed(2)}
                     </div>
                 </div>
             </div>
@@ -249,7 +249,7 @@ export function Dashboard({
                     value={`${metrics.max_drawdown.toFixed(2)}%`}
                     icon={DollarSign}
                     color="text-red-400"
-                    subValue={`-$${(metrics.max_drawdown / 100 * equity).toFixed(2)}`}
+                    subValue={`-$${(metrics.max_drawdown_dollars ?? metrics.max_drawdown / 100 * equity).toFixed(2)}`}
                     subColor="text-red-400"
                     deltaLabel={drawdownDelta?.label}
                     deltaColor={drawdownDelta?.color}

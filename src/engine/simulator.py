@@ -1183,12 +1183,14 @@ def simulate(
     eq_values = [p["value"] for p in equity_curve]
     peak = eq_values[0]
     max_dd = 0.0
+    max_dd_dollars = 0.0
     for v in eq_values:
         if v > peak:
             peak = v
         dd = (peak - v) / peak if peak > 0 else 0
         if dd > max_dd:
             max_dd = dd
+            max_dd_dollars = peak - v
 
     # Sharpe approximation
     if len(trades_list) > 1:
@@ -1204,6 +1206,7 @@ def simulate(
         "win_rate": float(win_rate),
         "total_trades": int(total_trades),
         "max_drawdown": float(max_dd * 100),
+        "max_drawdown_dollars": float(max_dd_dollars),
         "sharpe_ratio": float(sharpe),
     }
 

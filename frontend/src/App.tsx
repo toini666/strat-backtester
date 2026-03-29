@@ -342,6 +342,7 @@ function App() {
     let currentEquity = equity;
     let peak = equity;
     let maxDrawdown = 0;
+    let maxDrawdownDollars = 0;
     let cumPnL = 0;
     let winCount = 0;
     trades.forEach(t => {
@@ -349,7 +350,10 @@ function App() {
       currentEquity += t.pnl;
       if (currentEquity > peak) peak = currentEquity;
       const dd = (peak - currentEquity) / peak;
-      if (dd > maxDrawdown) maxDrawdown = dd;
+      if (dd > maxDrawdown) {
+        maxDrawdown = dd;
+        maxDrawdownDollars = peak - currentEquity;
+      }
       if (t.pnl > 0) winCount++;
     });
     return {
@@ -357,6 +361,7 @@ function App() {
       win_rate: trades.length > 0 ? (winCount / trades.length) * 100 : 0,
       total_trades: trades.length,
       max_drawdown: maxDrawdown * 100,
+      max_drawdown_dollars: maxDrawdownDollars,
       sharpe_ratio: 0,
     };
   }, []);

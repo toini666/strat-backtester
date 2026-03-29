@@ -291,6 +291,7 @@ export interface BacktestMetrics {
     win_rate: number;
     total_trades: number;
     max_drawdown: number;
+    max_drawdown_dollars?: number;
     sharpe_ratio: number;
 }
 
