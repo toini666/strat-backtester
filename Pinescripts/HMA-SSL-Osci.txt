@@ -53,50 +53,50 @@ i_maxSlPoints  = input.float(300.0,"Distance SL max (points)",     group=grp_ris
 i_cooldownBars = input.int(1,      "Bougies d'attente post-close", group=grp_risk, minval=0)
 i_maxCandlePct = input.float(0.9,  "Taille max bougie Entry (%)",  group=grp_risk, step=0.1, minval=0.0, tooltip="Trade ignoré si abs(close - open) / close > N%. 0 = désactivé.")
 i_tp2PartialOn = input.bool(false,  "Activer TP2 Partiel (retour dans canal HMA)", group=grp_risk, tooltip="Si activé, envoie une alerte PARTIAL quand le prix revient dans le canal HMA après le TP1.")
-simple string i_exitMode = input.string("Break ou Inversion", "Mode de clôture TP Final", group=grp_risk, options=["Break ou Inversion", "Break HMA", "Inversion HMA"], tooltip="Break ou Inversion : clôture dès que l'un des deux signaux se déclenche. Break HMA : clôture quand le prix sort de l'autre côté du canal. Inversion HMA : clôture quand le canal change de couleur.")
+simple string i_exitMode = input.string("Break HMA", "Mode de clôture TP Final", group=grp_risk, options=["Break ou Inversion", "Break HMA", "Inversion HMA"], tooltip="Break ou Inversion : clôture dès que l'un des deux signaux se déclenche. Break HMA : clôture quand le prix sort de l'autre côté du canal. Inversion HMA : clôture quand le canal change de couleur.")
 
 // --- Auto-Close ---
 grp_time     = "Auto-Close (Bruxelles)"
-i_autoCloseH = input.int(21, "Heure",   minval=0, maxval=23, group=grp_time, inline="autoclose")
+i_autoCloseH = input.int(22, "Heure",   minval=0, maxval=23, group=grp_time, inline="autoclose")
 i_autoCloseM = input.int(0,  "Minute",  minval=0, maxval=59, group=grp_time, inline="autoclose")
 
 // --- Blackout ---
 grp_bo      = "Blackout (Bruxelles)"
 i_bo1On     = input.bool(true, "Blackout 1 actif", group=grp_bo, inline="bo1")
-i_bo1StartH = input.int(1,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo1")
+i_bo1StartH = input.int(0,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo1")
 i_bo1StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo1")
-i_bo1EndH   = input.int(2,  "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo1e")
+i_bo1EndH   = input.int(1,  "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo1e")
 i_bo1EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo1e")
 
 i_bo2On     = input.bool(true, "Blackout 2 actif", group=grp_bo, inline="bo2")
-i_bo2StartH = input.int(3, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo2")
+i_bo2StartH = input.int(2, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo2")
 i_bo2StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo2")
-i_bo2EndH   = input.int(6, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo2e")
+i_bo2EndH   = input.int(3, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo2e")
 i_bo2EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo2e")
 
 i_bo3On     = input.bool(true, "Blackout 3 actif", group=grp_bo, inline="bo3")
-i_bo3StartH = input.int(8, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo3")
+i_bo3StartH = input.int(4, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo3")
 i_bo3StartM = input.int(0, "M",       minval=0, maxval=59, group=grp_bo, inline="bo3")
-i_bo3EndH   = input.int(9, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo3e")
+i_bo3EndH   = input.int(7, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo3e")
 i_bo3EndM   = input.int(0, "M",       minval=0, maxval=59, group=grp_bo, inline="bo3e")
 
 i_bo4On     = input.bool(true, "Blackout 4 actif", group=grp_bo, inline="bo4")
-i_bo4StartH = input.int(10, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo4")
+i_bo4StartH = input.int(9, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo4")
 i_bo4StartM = input.int(0, "M",       minval=0, maxval=59, group=grp_bo, inline="bo4")
-i_bo4EndH   = input.int(18, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo4e")
-i_bo4EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo4e")
+i_bo4EndH   = input.int(10, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo4e")
+i_bo4EndM   = input.int(30,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo4e")
 
 i_bo5On     = input.bool(true,  "Blackout 5 actif", group=grp_bo, inline="bo5")
-i_bo5StartH = input.int(21, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo5")
+i_bo5StartH = input.int(11, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo5")
 i_bo5StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo5")
-i_bo5EndH   = input.int(23, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo5e")
-i_bo5EndM   = input.int(59,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo5e")
+i_bo5EndH   = input.int(19, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo5e")
+i_bo5EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo5e")
 
-i_bo6On     = input.bool(false, "Blackout 6 actif", group=grp_bo, inline="bo6")
-i_bo6StartH = input.int(23, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo6")
+i_bo6On     = input.bool(true, "Blackout 6 actif", group=grp_bo, inline="bo6")
+i_bo6StartH = input.int(22, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo6")
 i_bo6StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo6")
 i_bo6EndH   = input.int(23, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo6e")
-i_bo6EndM   = input.int(5,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo6e")
+i_bo6EndM   = input.int(59,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo6e")
 
 // --- Tableau ---
 grp_tbl      = "TABLEAU"

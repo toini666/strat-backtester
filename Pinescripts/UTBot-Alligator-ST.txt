@@ -15,39 +15,39 @@ i_stATR       = input.int(10, "Période ATR", minval=1, group=grp_st)
 i_stMult      = input.float(3.0, "Multiplicateur", minval=0.1, step=0.1, group=grp_st)
 
 grp_time = "Auto-Close (Bruxelles)"
-i_autoCloseH = input.int(21, "Heure auto-close", minval=0, maxval=23, group=grp_time, inline="autoclose", tooltip="Ferme uniquement la position en cours à l'heure configurée.")
+i_autoCloseH = input.int(22, "Heure auto-close", minval=0, maxval=23, group=grp_time, inline="autoclose", tooltip="Ferme uniquement la position en cours à l'heure configurée.")
 i_autoCloseM = input.int(0, "Minute auto-close", minval=0, maxval=59, group=grp_time, inline="autoclose")
 
 grp_bo = "Blackout (Bruxelles)"
 i_bo1On    = input.bool(true, "Blackout 1 actif", group=grp_bo, inline="bo1")
-i_bo1StartH = input.int(0, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo1")
+i_bo1StartH = input.int(1, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo1")
 i_bo1StartM = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo1")
-i_bo1EndH   = input.int(2, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo1e")
+i_bo1EndH   = input.int(3, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo1e")
 i_bo1EndM   = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo1e")
 
 i_bo2On    = input.bool(true, "Blackout 2 actif", group=grp_bo, inline="bo2")
-i_bo2StartH = input.int(6, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo2")
+i_bo2StartH = input.int(7, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo2")
 i_bo2StartM = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo2")
-i_bo2EndH   = input.int(8, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo2e")
+i_bo2EndH   = input.int(9, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo2e")
 i_bo2EndM   = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo2e")
 
 i_bo3On    = input.bool(true, "Blackout 3 actif", group=grp_bo, inline="bo3")
-i_bo3StartH = input.int(9, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo3")
+i_bo3StartH = input.int(10, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo3")
 i_bo3StartM = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo3")
-i_bo3EndH   = input.int(11, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo3e")
+i_bo3EndH   = input.int(12, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo3e")
 i_bo3EndM   = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo3e")
 
 i_bo4On    = input.bool(true, "Blackout 4 actif", group=grp_bo, inline="bo4")
-i_bo4StartH = input.int(16, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo4")
+i_bo4StartH = input.int(17, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo4")
 i_bo4StartM = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo4")
-i_bo4EndH   = input.int(19, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo4e")
+i_bo4EndH   = input.int(20, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo4e")
 i_bo4EndM   = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo4e")
 
 i_bo5On    = input.bool(true, "Blackout 5 actif", group=grp_bo, inline="bo5")
-i_bo5StartH = input.int(21, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo5")
+i_bo5StartH = input.int(22, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo5")
 i_bo5StartM = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo5")
 i_bo5EndH   = input.int(23, "Fin H", minval=0, maxval=23, group=grp_bo, inline="bo5e")
-i_bo5EndM   = input.int(0, "M", minval=0, maxval=59, group=grp_bo, inline="bo5e")
+i_bo5EndM   = input.int(59, "M", minval=0, maxval=59, group=grp_bo, inline="bo5e")
 
 i_bo6On    = input.bool(false, "Blackout 6 actif", group=grp_bo, inline="bo6")
 i_bo6StartH = input.int(23, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo6")
@@ -79,6 +79,13 @@ grp_alert = "Alertes"
 i_stratName   = input.string("UTBot-Alli-ST", "Nom stratégie", group=grp_alert)
 i_showSetup   = input.bool(true, "Afficher triangles setup", group="Visuel")
 i_showAutoCloseMark = input.bool(true, "Afficher repère auto-close", group="Visuel")
+
+grp_tbl = "TABLEAU"
+simple string i_tblPos  = input.string("top_right", "Position", group=grp_tbl,
+     options=["top_right","top_left","bottom_right","bottom_left",
+              "top_center","bottom_center","middle_right","middle_left","middle_center"])
+simple string i_tblSize = input.string("small", "Taille texte", group=grp_tbl,
+     options=["tiny","small","normal","large","huge"])
 
 // ============================================
 // FONCTIONS UTILITAIRES
@@ -603,7 +610,7 @@ else if tradeState == 5
             lineBE := na
     else
         float trailingLevel = entryPrice + initialRisk * i_rrTrailing
-        bool tp1Hit = high >= tp1Price
+        bool tp1Hit = high >= tp1Price and not isEntryBar
         bool trailHit = high >= trailingLevel
         if trailHit
             trailingActive := true
@@ -884,7 +891,7 @@ else if tradeState == 8
             lineBE := na
     else
         float trailingLevel = entryPrice - initialRisk * i_rrTrailing
-        bool tp1Hit = low <= tp1Price
+        bool tp1Hit = low <= tp1Price and not isEntryBar
         bool trailHit = low <= trailingLevel
         if trailHit
             trailingActive := true
@@ -1238,48 +1245,60 @@ if evCloseSTRevShort
 // ============================================
 // STATUS TABLE
 // ============================================
-var table statusTable = table.new(position.top_right, 2, 9, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+f_icon(bool cond) => cond ? "✓" : "✗"
+f_bg(bool cond)   => cond ? color.new(color.green, 30) : color.new(color.red, 30)
+f_bgNa()          => color.new(color.gray, 60)
+
+TXT_WHITE = color.white
+HDR_BG    = color.new(color.navy, 20)
+
+var table statusTable = table.new(i_tblPos, 3, 9, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
 if barstate.islast
-    table.cell(statusTable, 0, 0, "Condition", text_color=color.white, bgcolor=color.new(color.gray, 70))
-    table.cell(statusTable, 1, 0, "Status", text_color=color.white, bgcolor=color.new(color.gray, 70))
+    // ── En-têtes ──────────────────────────────────────────
+    table.cell(statusTable, 0, 0, "Condition",  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(statusTable, 1, 0, "▲ LONG",    text_color=color.new(color.lime, 10), text_size=i_tblSize, bgcolor=HDR_BG)
+    table.cell(statusTable, 2, 0, "▼ SHORT",   text_color=color.new(color.red,  10), text_size=i_tblSize, bgcolor=HDR_BG)
 
-    string blackoutStatus = inBlackout ? "BLACKOUT" : "OK"
-    color blackoutColor = inBlackout ? color.red : color.green
-    table.cell(statusTable, 0, 1, "Blackout", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 1, blackoutStatus, text_color=color.white, bgcolor=color.new(blackoutColor, 70))
+    // ── Blackout ──────────────────────────────────────────
+    table.cell(statusTable, 0, 1, "Blackout",    text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(statusTable, 1, 1, f_icon(not inBlackout), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(not inBlackout))
+    table.cell(statusTable, 2, 1, f_icon(not inBlackout), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(not inBlackout))
 
-    string autoCloseStatus = autoCloseBar ? "AUTO-CLOSE" : "WAIT"
-    color autoCloseColor = autoCloseBar ? color.orange : color.gray
-    table.cell(statusTable, 0, 2, "Auto-Close", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 2, autoCloseStatus, text_color=color.white, bgcolor=color.new(autoCloseColor, 70))
+    // ── Auto-Close ────────────────────────────────────────
+    table.cell(statusTable, 0, 2, "Auto-Close",  text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(statusTable, 1, 2, f_icon(not autoCloseBar), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(not autoCloseBar))
+    table.cell(statusTable, 2, 2, f_icon(not autoCloseBar), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(not autoCloseBar))
 
-    string trendStatus = stTrend == 1 ? "BULLISH" : "BEARISH"
-    color trendColor = stTrend == 1 ? color.green : color.red
-    table.cell(statusTable, 0, 3, "Supertrend", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 3, trendStatus, text_color=color.white, bgcolor=color.new(trendColor, 70))
+    // ── Supertrend ────────────────────────────────────────
+    table.cell(statusTable, 0, 3, "Supertrend",  text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(statusTable, 1, 3, f_icon(stTrend == 1),  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(stTrend == 1))
+    table.cell(statusTable, 2, 3, f_icon(stTrend == -1), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(stTrend == -1))
 
-    string alligatorChartStatus = alligatorChartBullish ? "BULLISH" : alligatorChartBearish ? "BEARISH" : "MIXED"
-    color alligatorChartColor = alligatorChartBullish ? color.green : alligatorChartBearish ? color.red : color.gray
-    table.cell(statusTable, 0, 4, "Alligator", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 4, alligatorChartStatus, text_color=color.white, bgcolor=color.new(alligatorChartColor, 70))
+    // ── Alligator (bougie courante) ────────────────────────
+    table.cell(statusTable, 0, 4, "Alligator",   text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(statusTable, 1, 4, f_icon(alligatorChartBullish), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(alligatorChartBullish))
+    table.cell(statusTable, 2, 4, f_icon(alligatorChartBearish), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(alligatorChartBearish))
 
-    string alligatorOffsetStatus = alligatorOffsetBullish ? "BULLISH" : alligatorOffsetBearish ? "BEARISH" : "MIXED"
-    color alligatorOffsetColor = alligatorOffsetBullish ? color.green : alligatorOffsetBearish ? color.red : color.gray
-    table.cell(statusTable, 0, 5, "Alligator Off", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 5, alligatorOffsetStatus, text_color=color.white, bgcolor=color.new(alligatorOffsetColor, 70))
+    // ── Alligator (offset) ────────────────────────────────
+    table.cell(statusTable, 0, 5, "Alligator Off", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(statusTable, 1, 5, f_icon(alligatorOffsetBullish), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(alligatorOffsetBullish))
+    table.cell(statusTable, 2, 5, f_icon(alligatorOffsetBearish), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(alligatorOffsetBearish))
 
-    string utbotStatus = utBotBuy ? "BUY" : utBotSell ? "SELL" : "WAIT"
-    color utbotColor = utBotBuy ? color.green : utBotSell ? color.red : color.gray
-    table.cell(statusTable, 0, 6, "UTBot", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 6, utbotStatus, text_color=color.white, bgcolor=color.new(utbotColor, 70))
+    // ── UTBot ─────────────────────────────────────────────
+    table.cell(statusTable, 0, 6, "UTBot",        text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(statusTable, 1, 6, f_icon(utBotBuy),  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(utBotBuy))
+    table.cell(statusTable, 2, 6, f_icon(utBotSell), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(utBotSell))
 
-    string retraceStatus = (tradeState == 3 or tradeState == 4) ? str.tostring(retraceLevel) + " (" + str.tostring(math.max(i_maxBarsRetrace - (bar_index - signalBar), 0)) + ")" : "—"
-    color retraceColor = tradeState == 3 ? color.green : tradeState == 4 ? color.red : color.gray
-    table.cell(statusTable, 0, 7, "Retrace", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 7, retraceStatus, text_color=color.white, bgcolor=color.new(retraceColor, 70))
+    // ── Retrace ───────────────────────────────────────────
+    string retraceLongStr  = tradeState == 3 ? str.tostring(retraceLevel) + " (" + str.tostring(math.max(i_maxBarsRetrace - (bar_index - signalBar), 0)) + ")" : "—"
+    string retraceShortStr = tradeState == 4 ? str.tostring(retraceLevel) + " (" + str.tostring(math.max(i_maxBarsRetrace - (bar_index - signalBar), 0)) + ")" : "—"
+    table.cell(statusTable, 0, 7, "Retrace",      text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(statusTable, 1, 7, retraceLongStr,  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=tradeState == 3 ? color.new(color.green, 30) : f_bgNa())
+    table.cell(statusTable, 2, 7, retraceShortStr, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=tradeState == 4 ? color.new(color.red,   30) : f_bgNa())
 
+    // ── State / Pos ───────────────────────────────────────
     string stateStatus = getTradeStateLabel(tradeState)
-    color stateColor = currentSide == 1 ? color.green : currentSide == -1 ? color.red : color.gray
-    table.cell(statusTable, 0, 8, "State / Pos", text_color=color.white, bgcolor=color.new(color.gray, 80))
-    table.cell(statusTable, 1, 8, stateStatus + " / " + (currentSide == 1 ? "LONG" : currentSide == -1 ? "SHORT" : "NONE"), text_color=color.white, bgcolor=color.new(stateColor, 70))
+    table.cell(statusTable, 0, 8, "State / Pos",  text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    table.cell(statusTable, 1, 8, currentSide == 1  ? stateStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=currentSide == 1  ? color.new(color.green, 30) : f_bgNa())
+    table.cell(statusTable, 2, 8, currentSide == -1 ? stateStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=currentSide == -1 ? color.new(color.red,   30) : f_bgNa())

@@ -27,7 +27,7 @@ i_breakWaitBars = input.int(2, "Bougies supp. après Break (0-50)", minval=0, ma
 i_hwFilterOn    = input.bool(true, "Activer le filtre valeur Hyperwave", group=grp_filters, tooltip="Ignore le signal si la dernière Hyperwave était comprise entre -N et +N.")
 i_hwLevel       = input.float(20.0, "Niveau d'exclusion Hyperwave (+/-)", group=grp_filters, minval=0.0)
 i_hwExtremeFilterOn = input.bool(false, "Activer le filtre extrême Hyperwave", group=grp_filters, tooltip="Long interdit si HW > +N (zone suracheté extrême). Short interdit si HW < -N (zone survendu extrême).")
-i_hwExtreme         = input.float(10.0, "Niveau extrême Hyperwave (+/-)", group=grp_filters, minval=0.0, tooltip="Long interdit si dernière HW confirmée > +N. Short interdit si < -N.")
+i_hwExtreme         = input.float(20.0, "Niveau extrême Hyperwave (+/-)", group=grp_filters, minval=0.0, tooltip="Long interdit si dernière HW confirmée > +N. Short interdit si < -N.")
 i_cooldownBars  = input.int(1, "Bougies d'attente après clôture", group=grp_filters, tooltip="Délai minimum avant de reprendre une position après une clôture.", minval=0)
 i_maxCandlePct  = input.float(0.4, "Taille max bougie Break/Entry (%)", group=grp_filters, step=0.1, minval=0.0, tooltip="Filtre les bougies dont la variation absolue entre open et close depasse ce pourcentage du prix.")
 i_requireEmaAlignment = input.bool(false, "Exiger EMA secondaire dans le bon sens", group=grp_filters, tooltip="Long: EMA secondaire au-dessus de l'EMA principale. Short: EMA secondaire en-dessous de l'EMA principale.")
