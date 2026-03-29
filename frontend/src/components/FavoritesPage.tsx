@@ -15,6 +15,8 @@ import {
 import { ConfirmModal } from './ui/Modal';
 import {
     type BacktestPreset,
+    type SingleBacktestPreset,
+    type MultiBacktestPreset,
     loadPresets,
     loadPresetsLocal,
     savePreset,
@@ -29,8 +31,40 @@ interface FavoritesPageProps {
 type SortKey = 'name' | 'strategyName' | 'symbol' | 'interval' | 'createdAt';
 type SortDir = 'asc' | 'desc';
 
+/** Unified display fields for both single and multi presets */
+function getPresetInfo(preset: BacktestPreset) {
+    if (preset.mode === 'multi_asset' || preset.mode === 'multi_strat') {
+        const mp = preset as MultiBacktestPreset;
+        const [c1, c2] = mp.configs;
+        return {
+            strategyName: `${c1.strategyName} / ${c2.strategyName}`,
+            symbol: `${c1.symbol} / ${c2.symbol}`,
+            interval: `${c1.interval} / ${c2.interval}`,
+            startDatetime: mp.startDatetime,
+            endDatetime: mp.endDatetime,
+            isMulti: true,
+            modeLabel: preset.mode === 'multi_asset' ? 'Multi-Asset' : 'Multi-Strat',
+            modeColor: preset.mode === 'multi_asset'
+                ? 'text-violet-400 bg-violet-500/10 border-violet-500/20'
+                : 'text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/20',
+        };
+    }
+    const sp = preset as SingleBacktestPreset;
+    return {
+        strategyName: sp.strategyName,
+        symbol: sp.symbol,
+        interval: sp.interval,
+        startDatetime: sp.startDatetime,
+        endDatetime: sp.endDatetime,
+        isMulti: false,
+        modeLabel: 'Single',
+        modeColor: 'text-blue-400 bg-blue-500/10 border-blue-500/20',
+    };
+}
+
 export function FavoritesPage({ onLoadPreset }: FavoritesPageProps) {
     const [presets, setPresets] = useState<BacktestPreset[]>(() => loadPresetsLocal());
+    const [filterMode, setFilterMode] = useState<'' | 'single' | 'multi_asset' | 'multi_strat'>('');
     const [filterStrategy, setFilterStrategy] = useState('');
     const [filterTicker, setFilterTicker] = useState('');
     const [filterTimeframe, setFilterTimeframe] = useState('');
@@ -50,17 +84,20 @@ export function FavoritesPage({ onLoadPreset }: FavoritesPageProps) {
     }, []);
 
     // Derive unique filter options from existing presets
-    const uniqueStrategies = [...new Set(presets.map(p => p.strategyName))].sort();
-    const uniqueTickers = [...new Set(presets.map(p => p.symbol))].sort();
-    const uniqueTimeframes = [...new Set(presets.map(p => p.interval))].sort();
+    const uniqueStrategies = [...new Set(presets.map(p => getPresetInfo(p).strategyName))].sort();
+    const uniqueTickers = [...new Set(presets.map(p => getPresetInfo(p).symbol))].sort();
+    const uniqueTimeframes = [...new Set(presets.map(p => getPresetInfo(p).interval))].sort();
 
     const filtered = presets
-        .filter(p => !filterStrategy || p.strategyName === filterStrategy)
-        .filter(p => !filterTicker || p.symbol === filterTicker)
-        .filter(p => !filterTimeframe || p.interval === filterTimeframe)
+        .filter(p => !filterMode || (filterMode === 'single' ? (!p.mode || p.mode === 'single') : p.mode === filterMode))
+        .filter(p => !filterStrategy || getPresetInfo(p).strategyName === filterStrategy)
+        .filter(p => !filterTicker || getPresetInfo(p).symbol === filterTicker)
+        .filter(p => !filterTimeframe || getPresetInfo(p).interval === filterTimeframe)
         .sort((a, b) => {
-            let valA: string | number = a[sortKey] ?? '';
-            let valB: string | number = b[sortKey] ?? '';
+            const infoA = getPresetInfo(a);
+            const infoB = getPresetInfo(b);
+            let valA: string | number = sortKey === 'createdAt' ? a.createdAt : (sortKey === 'name' ? a.name : (infoA as Record<string, string>)[sortKey] ?? '');
+            let valB: string | number = sortKey === 'createdAt' ? b.createdAt : (sortKey === 'name' ? b.name : (infoB as Record<string, string>)[sortKey] ?? '');
             if (typeof valA === 'string') valA = valA.toLowerCase();
             if (typeof valB === 'string') valB = valB.toLowerCase();
             if (valA < valB) return sortDir === 'asc' ? -1 : 1;
@@ -113,8 +150,11 @@ export function FavoritesPage({ onLoadPreset }: FavoritesPageProps) {
             setImportError('JSON invalide');
             return;
         }
-        if (!parsed.strategyName || !parsed.symbol || !parsed.params) {
-            setImportError('Preset incomplet (strategyName, symbol ou params manquant)');
+        // Accept both single and multi presets
+        const isMulti = parsed.mode === 'multi_asset' || parsed.mode === 'multi_strat';
+        const isSingle = !isMulti && (parsed as SingleBacktestPreset).strategyName;
+        if (!isMulti && !isSingle) {
+            setImportError('Preset incomplet (strategyName ou configs manquant)');
             return;
         }
         const fresh: BacktestPreset = {
@@ -209,6 +249,34 @@ export function FavoritesPage({ onLoadPreset }: FavoritesPageProps) {
                         <Search className="w-3.5 h-3.5" />
                         <span className="uppercase tracking-wider font-medium">Filtres</span>
                     </div>
+                    {/* Mode filter */}
+                    <div className="flex items-center gap-1.5">
+                        {([
+                            { value: '', label: 'Tous' },
+                            { value: 'single', label: 'Single' },
+                            { value: 'multi_asset', label: 'Multi-Asset' },
+                            { value: 'multi_strat', label: 'Multi-Strat' },
+                        ] as const).map(opt => (
+                            <button
+                                key={opt.value}
+                                onClick={() => setFilterMode(opt.value)}
+                                className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-all ${
+                                    filterMode === opt.value
+                                        ? opt.value === 'multi_asset'
+                                            ? 'bg-violet-500/15 text-violet-400 border-violet-500/30'
+                                            : opt.value === 'multi_strat'
+                                                ? 'bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/30'
+                                                : opt.value === 'single'
+                                                    ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+                                                    : 'bg-gray-700/50 text-gray-300 border-gray-600/50'
+                                        : 'bg-gray-800/50 text-gray-500 border-gray-700/50 hover:text-gray-400'
+                                }`}
+                            >
+                                {opt.label}
+                            </button>
+                        ))}
+                    </div>
+
                     <div className="flex items-center gap-2">
                         <label className="text-xs text-gray-500 shrink-0">Strategy</label>
                         <select
@@ -248,9 +316,9 @@ export function FavoritesPage({ onLoadPreset }: FavoritesPageProps) {
                             ))}
                         </select>
                     </div>
-                    {(filterStrategy || filterTicker || filterTimeframe) && (
+                    {(filterMode || filterStrategy || filterTicker || filterTimeframe) && (
                         <button
-                            onClick={() => { setFilterStrategy(''); setFilterTicker(''); setFilterTimeframe(''); }}
+                            onClick={() => { setFilterMode(''); setFilterStrategy(''); setFilterTicker(''); setFilterTimeframe(''); }}
                             className="text-xs text-gray-500 hover:text-gray-300 transition-colors px-2.5 py-1.5 rounded-lg hover:bg-gray-700/40 border border-gray-700/50"
                         >
                             Effacer les filtres
@@ -290,10 +358,12 @@ export function FavoritesPage({ onLoadPreset }: FavoritesPageProps) {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-800/40">
-                                {filtered.map(preset => (
+                                {filtered.map(preset => {
+                                    const info = getPresetInfo(preset);
+                                    return (
                                     <tr key={preset.id} className="hover:bg-gray-800/20 transition-colors group">
-                                        {/* Name */}
-                                        <td className="px-4 py-3 max-w-[200px]">
+                                        {/* Name + mode badge */}
+                                        <td className="px-4 py-3 max-w-[220px]">
                                             {renamingId === preset.id ? (
                                                 <input
                                                     ref={renameInputRef}
@@ -308,31 +378,36 @@ export function FavoritesPage({ onLoadPreset }: FavoritesPageProps) {
                                                     autoFocus
                                                 />
                                             ) : (
-                                                <span className="text-sm text-gray-200 font-medium truncate block">{preset.name}</span>
+                                                <div className="flex flex-col gap-1">
+                                                    <span className="text-sm text-gray-200 font-medium truncate">{preset.name}</span>
+                                                    <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border w-fit ${info.modeColor}`}>
+                                                        {info.modeLabel}
+                                                    </span>
+                                                </div>
                                             )}
                                         </td>
                                         {/* Strategy */}
                                         <td className="px-4 py-3">
                                             <span className="text-xs px-2 py-1 rounded-md bg-purple-500/15 text-purple-300 font-medium whitespace-nowrap">
-                                                {preset.strategyName}
+                                                {info.strategyName}
                                             </span>
                                         </td>
                                         {/* Ticker */}
                                         <td className="px-4 py-3">
                                             <span className="text-xs px-2 py-1 rounded-md bg-blue-500/15 text-blue-300 font-medium font-mono">
-                                                {preset.symbol}
+                                                {info.symbol}
                                             </span>
                                         </td>
                                         {/* Timeframe */}
                                         <td className="px-4 py-3">
                                             <span className="text-xs px-2 py-1 rounded-md bg-cyan-500/15 text-cyan-300 font-medium font-mono">
-                                                {preset.interval}
+                                                {info.interval}
                                             </span>
                                         </td>
                                         {/* Date range */}
                                         <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
-                                            <div>{preset.startDatetime.replace('T', ' ')}</div>
-                                            <div>{preset.endDatetime.replace('T', ' ')}</div>
+                                            <div>{info.startDatetime.replace('T', ' ')}</div>
+                                            <div>{info.endDatetime.replace('T', ' ')}</div>
                                         </td>
                                         {/* Created */}
                                         <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
@@ -374,7 +449,8 @@ export function FavoritesPage({ onLoadPreset }: FavoritesPageProps) {
                                             </div>
                                         </td>
                                     </tr>
-                                ))}
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>

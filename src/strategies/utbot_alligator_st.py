@@ -38,6 +38,7 @@ class UTBotAlligatorST(Strategy):
     name = "UTBotAlligatorST"
     manual_exit = True
     use_simulator = True
+    blackout_sensitive = True
     simulator_settings = {
         "tp1_execution_mode": "bar_close_if_touched",
     }
@@ -241,6 +242,11 @@ class UTBotAlligatorST(Strategy):
         open_ = data["Open"].values
         high = data["High"].values
         low = data["Low"].values
+        is_blackout = (
+            data["is_blackout"].fillna(False).astype(bool).values
+            if "is_blackout" in data.columns
+            else np.zeros(len(data), dtype=bool)
+        )
         hl2 = (high + low) / 2.0
         n = len(data)
 
@@ -462,7 +468,9 @@ class UTBotAlligatorST(Strategy):
 
             elif trade_state == 3:
                 # Long retrace: price must come down to touch retrace_level
-                if low[i] <= retrace_level and i > last_action_bar:
+                if is_blackout[i]:
+                    pass
+                elif low[i] <= retrace_level and i > last_action_bar:
                     calc_entry = round_tick(retrace_level)
                     raw_sl = round_tick(st_value[i] - sl_buffer)
                     raw_risk = calc_entry - raw_sl
@@ -501,7 +509,9 @@ class UTBotAlligatorST(Strategy):
 
             elif trade_state == 4:
                 # Short retrace: price must come up to touch retrace_level
-                if high[i] >= retrace_level and i > last_action_bar:
+                if is_blackout[i]:
+                    pass
+                elif high[i] >= retrace_level and i > last_action_bar:
                     calc_entry = round_tick(retrace_level)
                     raw_sl = round_tick(st_value[i] + sl_buffer)
                     raw_risk = raw_sl - calc_entry
@@ -682,6 +692,7 @@ class UTBotAlligatorST(Strategy):
                 "st_dn": st_dn,
                 "st_buy_signal": st_buy_signal.astype(int),
                 "st_sell_signal": st_sell_signal.astype(int),
+                "is_blackout": is_blackout.astype(int),
                 "trade_state": trade_state_arr,
                 "long_entry_signal": long_entries.astype(int),
                 "short_entry_signal": short_entries.astype(int),

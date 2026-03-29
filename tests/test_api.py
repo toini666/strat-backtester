@@ -4,6 +4,7 @@ Tests for the FastAPI backend.
 import pytest
 import sys
 import os
+import pandas as pd
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -12,7 +13,8 @@ from pydantic import ValidationError
 
 # Import after path setup
 from backend.main import app
-from backend.api import BacktestRequest, get_session
+from backend.api import BacktestRequest, SIGNAL_CACHE, _annotate_blackout_flags, get_session
+from src.engine.simulator import BlackoutWindow
 
 
 @pytest.fixture
@@ -202,6 +204,40 @@ class TestSessionFunction:
         assert get_session("invalid") == "Unknown"
         assert get_session("") == "Unknown"
 
+    def test_blackout_annotation_uses_bar_close_time(self):
+        index = pd.DatetimeIndex(
+            [
+                "2026-03-04 02:55:00+01:00",
+                "2026-03-04 03:02:00+01:00",
+                "2026-03-04 03:09:00+01:00",
+            ]
+        )
+        data = pd.DataFrame(
+            {
+                "Open": [1.0, 1.0, 1.0],
+                "High": [1.0, 1.0, 1.0],
+                "Low": [1.0, 1.0, 1.0],
+                "Close": [1.0, 1.0, 1.0],
+                "Volume": [1, 1, 1],
+            },
+            index=index,
+        )
+
+        annotated = _annotate_blackout_flags(
+            data,
+            [
+                BlackoutWindow(
+                    active=True,
+                    start_hour=1,
+                    start_minute=0,
+                    end_hour=3,
+                    end_minute=0,
+                )
+            ],
+        )
+
+        assert bool(annotated.loc[pd.Timestamp("2026-03-04 02:55:00+01:00"), "is_blackout"]) is False
+
 
 class TestBacktestEndpoint:
     """Tests for the backtest endpoint."""
@@ -224,3 +260,64 @@ class TestBacktestEndpoint:
             # Missing strategy_name
         })
         assert response.status_code == 422
+
+
+class TestResimulateEndpoint:
+    def test_resimulate_rejects_blackout_change_for_blackout_sensitive_strategy(self, client):
+        original_cache = SIGNAL_CACHE.copy()
+        try:
+            SIGNAL_CACHE.clear()
+            SIGNAL_CACHE.update(
+                {
+                    "key": "test",
+                    "sliced_data": [],
+                    "sliced_signals": {},
+                    "data_1m": [],
+                    "specs": {"tick_size": 0.25, "tick_value": 0.5, "point_value": 2.0, "fee_per_trade": 0.0},
+                    "simulator_settings": {},
+                    "strategy_name": "UTBotAlligatorST",
+                    "symbol": "MGC",
+                    "params": {},
+                    "blackout_signature": (
+                        (False, 0, 0, 0, 5),
+                        (False, 9, 0, 9, 5),
+                        (True, 12, 0, 14, 0),
+                        (False, 15, 30, 15, 35),
+                        (True, 16, 30, 22, 0),
+                        (True, 22, 0, 23, 59),
+                    ),
+                }
+            )
+
+            response = client.post(
+                "/backtest/resimulate",
+                json={
+                    "initial_equity": 50000,
+                    "risk_per_trade": 0.01,
+                    "max_contracts": 10,
+                    "engine_settings": {
+                        "auto_close_enabled": True,
+                        "auto_close_hour": 22,
+                        "auto_close_minute": 0,
+                        "blackout_windows": [
+                            {"active": False, "start_hour": 0, "start_minute": 0, "end_hour": 0, "end_minute": 5},
+                            {"active": False, "start_hour": 9, "start_minute": 0, "end_hour": 9, "end_minute": 5},
+                            {"active": True, "start_hour": 12, "start_minute": 0, "end_hour": 13, "end_minute": 0},
+                            {"active": False, "start_hour": 15, "start_minute": 30, "end_hour": 15, "end_minute": 35},
+                            {"active": True, "start_hour": 16, "start_minute": 30, "end_hour": 22, "end_minute": 0},
+                            {"active": True, "start_hour": 22, "start_minute": 0, "end_hour": 23, "end_minute": 59},
+                        ],
+                        "debug": False,
+                        "daily_win_limit_enabled": False,
+                        "daily_win_limit": 500,
+                        "daily_loss_limit_enabled": False,
+                        "daily_loss_limit": 700,
+                    },
+                },
+            )
+
+            assert response.status_code == 400
+            assert "require a full backtest" in response.json()["detail"]
+        finally:
+            SIGNAL_CACHE.clear()
+            SIGNAL_CACHE.update(original_cache)

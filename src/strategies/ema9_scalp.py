@@ -35,6 +35,7 @@ class EMA9Scalp(Strategy):
     name = "EMA9Scalp"
     manual_exit = True
     use_simulator = True
+    blackout_sensitive = True
     simulator_settings = {
         "tp1_execution_mode": "bar_close_if_touched",
         "ema_exit_after_tp1_only": True,
@@ -277,6 +278,11 @@ class EMA9Scalp(Strategy):
         open_  = data["Open"]
         high   = data["High"]
         low    = data["Low"]
+        is_blackout = (
+            data["is_blackout"].fillna(False).astype(bool).values
+            if "is_blackout" in data.columns
+            else np.zeros(len(data), dtype=bool)
+        )
         volume = data["Volume"]
         hl2    = (high + low) / 2
         n = len(data)
@@ -532,6 +538,7 @@ class EMA9Scalp(Strategy):
                 trade_state == 2
                 and (ready_bar < 0 or i > ready_bar)
                 and i > entry_bar  # not on same bar as previous entry
+                and not is_blackout[i]
             )
             if can_enter_long:
                 long_break_trigger = round_tick(np_high[i - 1] + tick_size)
@@ -560,6 +567,7 @@ class EMA9Scalp(Strategy):
                 trade_state == 6
                 and (ready_bar < 0 or i > ready_bar)
                 and i > entry_bar
+                and not is_blackout[i]
             )
             if can_enter_short:
                 short_break_trigger = round_tick(np_low[i - 1] - tick_size)
@@ -657,6 +665,7 @@ class EMA9Scalp(Strategy):
                 "osc_sig": osc_sig,
                 "osc_sgd": osc_sgd,
                 "mfi": mfi,
+                "is_blackout": is_blackout.astype(int),
                 "state": state_arr,
                 "long_entry_signal": long_entries.astype(int),
                 "short_entry_signal": short_entries.astype(int),

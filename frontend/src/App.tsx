@@ -3,6 +3,12 @@ import {
   api,
   type Strategy,
   type BacktestResult,
+  type MultiBacktestResult,
+  type MultiBacktestConfig,
+  type BacktestMode,
+  type SingleBacktestPreset,
+  type MultiBacktestPreset,
+  type BacktestPreset,
   type AvailableDataset,
   type Trade,
   type BacktestMetrics,
@@ -17,10 +23,6 @@ import './App.css';
 import { Layout } from './components/Layout';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
-// Optimization components preserved for future use:
-// import { OptimizationConfig } from './components/OptimizationConfig';
-// import { OptimizationResults } from './components/OptimizationResults';
-// import { OptimizationHistory } from './components/OptimizationHistory';
 import { MarketDataPanel } from './components/MarketDataPanel';
 import { FavoritesPage } from './components/FavoritesPage';
 
@@ -30,36 +32,75 @@ type StrategyParams = Record<string, number | string | boolean>;
 // App modes
 type AppMode = 'backtest' | 'optimization' | 'data' | 'favorites';
 
+function makeDefaultEngineSettings(): BacktestEngineSettings {
+  return {
+    ...DEFAULT_BACKTEST_ENGINE_SETTINGS,
+    blackout_windows: DEFAULT_BACKTEST_ENGINE_SETTINGS.blackout_windows.map((w) => ({ ...w })),
+  };
+}
+
 function App() {
-  // Mode state
+  // App navigation mode
   const [mode, setMode] = useState<AppMode>('backtest');
 
-  const [strategies, setStrategies] = useState<Strategy[]>([]);
-  const [selectedStrategy, setSelectedStrategy] = useState<Strategy | null>(null);
-  const [params, setParams] = useState<StrategyParams>({});
+  // Backtest mode: single / multi-asset / multi-strat
+  const [backtestMode, setBacktestMode] = useState<BacktestMode>('single');
+  // Which slot is active in multi mode (0 = first, 1 = second)
+  const [activeSlot, setActiveSlot] = useState<0 | 1>(0);
 
-  // Available data from local store
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [availableData, setAvailableData] = useState<AvailableDataset[]>([]);
 
-  // Data Config - simplified
+  // ── Slot 1 state (always used in single mode; also the first config in multi mode) ──
+  const [selectedStrategy, setSelectedStrategy] = useState<Strategy | null>(null);
+  const [params, setParams] = useState<StrategyParams>({});
   const [selectedSymbol, setSelectedSymbol] = useState('');
   const [interval, setInterval] = useState('5m');
   const [startDatetime, setStartDatetime] = useState('');
   const [endDatetime, setEndDatetime] = useState('');
-
-  // Risk Mgmt
   const [initialEquity, setInitialEquity] = useState(50000);
   const [riskPerTrade, setRiskPerTrade] = useState(0.5); // %
-
-  // Trade Filters
   const [maxContracts, setMaxContracts] = useState(50);
-  const [engineSettings, setEngineSettings] = useState<BacktestEngineSettings>({
-    ...DEFAULT_BACKTEST_ENGINE_SETTINGS,
-    blackout_windows: DEFAULT_BACKTEST_ENGINE_SETTINGS.blackout_windows.map((window) => ({ ...window })),
-  });
+  const [engineSettings, setEngineSettings] = useState<BacktestEngineSettings>(makeDefaultEngineSettings());
 
+  // ── Slot 2 state (second config in multi mode) ──
+  const [selectedStrategy2, setSelectedStrategy2] = useState<Strategy | null>(null);
+  const [params2, setParams2] = useState<StrategyParams>({});
+  const [selectedSymbol2, setSelectedSymbol2] = useState('');
+  const [interval2, setInterval2] = useState('5m');
+  const [riskPerTrade2, setRiskPerTrade2] = useState(0.5);
+  const [maxContracts2, setMaxContracts2] = useState(50);
+  const [engineSettings2, setEngineSettings2] = useState<BacktestEngineSettings>(makeDefaultEngineSettings());
+
+  const selectStrategy2 = useCallback((strat: Strategy) => {
+    setSelectedStrategy2(strat);
+    setParams2({ ...strat.default_params });
+  }, []);
+
+  // When switching to multi mode for the first time, copy slot 1 into slot 2 as a starting point
+  const hasInitializedSlot2Ref = useRef(false);
+  useEffect(() => {
+    if (backtestMode !== 'single' && !hasInitializedSlot2Ref.current) {
+      hasInitializedSlot2Ref.current = true;
+      setSelectedSymbol2(selectedSymbol);
+      setInterval2(interval);
+      if (selectedStrategy) {
+        setSelectedStrategy2(selectedStrategy);
+        setParams2({ ...params });
+      }
+      setRiskPerTrade2(riskPerTrade);
+      setMaxContracts2(maxContracts);
+      setEngineSettings2(JSON.parse(JSON.stringify(engineSettings)));
+    }
+    if (backtestMode === 'single') {
+      hasInitializedSlot2Ref.current = false;
+    }
+  }, [backtestMode]);
+
+  // ── Results ──
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
+  const [multiResult, setMultiResult] = useState<MultiBacktestResult | null>(null);
   const [error, setError] = useState('');
 
   // Previous run comparison — tracks metrics from the last completed run (same context only)
@@ -67,58 +108,51 @@ function App() {
   const currentResultContextRef = useRef<BacktestContext | null>(null);
   const filteredResultRef = useRef<BacktestResult | null>(null);
 
-  // Auto-update mode: when enabled, parameter changes trigger automatic resimulation
+  // Auto-update mode (single mode only)
   const [autoUpdate, setAutoUpdate] = useState(false);
   const [autoUpdateLoading, setAutoUpdateLoading] = useState(false);
   const autoUpdateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Filters
+  // Session filters
   const [selectedSessions, setSelectedSessions] = useState<string[]>(['Asia', 'UK', 'US']);
 
-  // Derived state
+  // Derived/filtered results
   const [filteredResult, setFilteredResult] = useState<BacktestResult | null>(null);
+  const [filteredMultiResult, setFilteredMultiResult] = useState<MultiBacktestResult | null>(null);
 
-  // Optimization state — preserved for future use when optimization UI is re-enabled
-
-  // Load strategies and available data on mount
+  // ── Load strategies & available data on mount ──
   useEffect(() => {
     api.getStrategies().then(data => {
       setStrategies(data);
       if (data.length > 0) selectStrategy(data[0]);
     }).catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      setError("Failed to load strategies: " + message);
+      setError("Failed to load strategies: " + (err instanceof Error ? err.message : String(err)));
     });
 
     api.getAvailableData().then(data => {
       setAvailableData(data);
       if (data.length > 0) {
         setSelectedSymbol(data[0].symbol);
-        // Set default timeframe
         if (data[0].timeframes.includes('5m')) {
           setInterval('5m');
         } else if (data[0].timeframes.length > 0) {
           setInterval(data[0].timeframes[data[0].timeframes.length - 1]);
         }
-        // Set default end datetime to dataset end
-        setEndDatetime(data[0].end_date.slice(0, 16)); // trim to YYYY-MM-DDTHH:mm
+        setEndDatetime(data[0].end_date.slice(0, 16));
       }
     }).catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      setError("Failed to load available data: " + message);
+      setError("Failed to load available data: " + (err instanceof Error ? err.message : String(err)));
     });
   }, []);
 
-  // When symbol or strategy changes, set default start datetime considering buffer
+  // Default start datetime for slot 1
   useEffect(() => {
     if (!selectedSymbol || !selectedStrategy || availableData.length === 0) return;
     const ds = availableData.find(d => d.symbol === selectedSymbol);
     if (!ds) return;
-
     const minStarts = ds.min_start_per_strategy[selectedStrategy.name];
     if (minStarts && minStarts[interval]) {
       const minStart = minStarts[interval];
-      // Only update if current startDatetime is before minStart or empty
       if (!startDatetime || startDatetime < minStart.slice(0, 16)) {
         setStartDatetime(minStart.slice(0, 16));
       }
@@ -130,9 +164,8 @@ function App() {
     setParams({ ...strat.default_params });
   }, []);
 
+  // ── Run Backtest ──
   const runBacktest = async () => {
-    if (!selectedStrategy || !selectedSymbol) return;
-
     const newContext: BacktestContext = { symbol: selectedSymbol, interval, start: startDatetime, end: endDatetime };
 
     // Promote current filtered metrics to "previous" if context matches
@@ -148,38 +181,70 @@ function App() {
     setLoading(true);
     setError('');
     setResult(null);
+    setMultiResult(null);
 
     try {
-      const res = await api.runBacktest(
-        selectedStrategy.name,
-        selectedSymbol,
-        interval,
-        startDatetime,
-        endDatetime,
-        initialEquity,
-        riskPerTrade / 100, // Send as decimal
-        params,
-        maxContracts,
-        engineSettings,
-      );
-      setResult(res);
-      currentResultContextRef.current = newContext;
-      // Track which strategy params were used for signal generation
-      lastSignalParamsRef.current = JSON.stringify(params);
+      if (backtestMode === 'single') {
+        if (!selectedStrategy || !selectedSymbol) return;
+        const res = await api.runBacktest(
+          selectedStrategy.name,
+          selectedSymbol,
+          interval,
+          startDatetime,
+          endDatetime,
+          initialEquity,
+          riskPerTrade / 100,
+          params,
+          maxContracts,
+          engineSettings,
+        );
+        setResult(res);
+        currentResultContextRef.current = newContext;
+        lastSignalParamsRef.current = JSON.stringify(params);
+      } else {
+        // Multi mode: build two configs
+        if (!selectedStrategy || !selectedStrategy2) return;
+        const cfg1: MultiBacktestConfig = {
+          strategy_name: selectedStrategy.name,
+          symbol: selectedSymbol,
+          interval,
+          params,
+          risk_per_trade: riskPerTrade / 100,
+          max_contracts: maxContracts,
+          engine_settings: engineSettings,
+        };
+        const cfg2: MultiBacktestConfig = {
+          strategy_name: selectedStrategy2.name,
+          symbol: backtestMode === 'multi_strat' ? selectedSymbol : selectedSymbol2,
+          interval: interval2,
+          params: params2,
+          risk_per_trade: riskPerTrade2 / 100,
+          max_contracts: maxContracts2,
+          engine_settings: engineSettings2,
+        };
+        const res = await api.runMultiBacktest(
+          backtestMode,
+          startDatetime,
+          endDatetime,
+          initialEquity,
+          [cfg1, cfg2],
+        );
+        setMultiResult(res);
+        currentResultContextRef.current = newContext;
+      }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message);
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
   };
 
-  // Keep filteredResultRef in sync so async handlers can read the latest value
+  // Keep filteredResultRef in sync
   useEffect(() => {
     filteredResultRef.current = filteredResult;
   }, [filteredResult]);
 
-  // Clear previous metrics when the backtest context changes (ticker, timeframe, or date range)
+  // Clear previous metrics when context changes
   useEffect(() => {
     const ctx = currentResultContextRef.current;
     if (!ctx) return;
@@ -190,9 +255,7 @@ function App() {
     }
   }, [selectedSymbol, interval, startDatetime, endDatetime]);
 
-  // Auto-update: debounced re-run when parameters change.
-  // - Strategy params change → full backtest (re-generates signals)
-  // - Risk/engine params change → fast resimulate (reuses cached signals)
+  // Auto-update (single mode only): debounced re-run when parameters change
   const autoUpdateRef = useRef({
     initialEquity, riskPerTrade, maxContracts, params, engineSettings,
     selectedStrategy, selectedSymbol, interval, startDatetime, endDatetime,
@@ -201,19 +264,16 @@ function App() {
     initialEquity, riskPerTrade, maxContracts, params, engineSettings,
     selectedStrategy, selectedSymbol, interval, startDatetime, endDatetime,
   };
-  // Track the last params that were used for signal generation
   const lastSignalParamsRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!autoUpdate || !result) return;
+    if (!autoUpdate || !result || backtestMode !== 'single') return;
     if (autoUpdateTimer.current) clearTimeout(autoUpdateTimer.current);
     autoUpdateTimer.current = setTimeout(async () => {
       const p = autoUpdateRef.current;
       if (!p.selectedStrategy || !p.selectedSymbol) return;
 
       const newContext: BacktestContext = { symbol: p.selectedSymbol, interval: p.interval, start: p.startDatetime, end: p.endDatetime };
-
-      // Promote current filtered metrics to "previous" if context matches
       const ctx = currentResultContextRef.current;
       const fr = filteredResultRef.current;
       if (fr && ctx && ctx.symbol === newContext.symbol && ctx.interval === newContext.interval &&
@@ -223,7 +283,6 @@ function App() {
         setPreviousMetrics(null);
       }
 
-      // Determine if strategy params changed (need full backtest)
       const currentParamsKey = JSON.stringify(p.params);
       const needsFullBacktest = lastSignalParamsRef.current !== null
         && lastSignalParamsRef.current !== currentParamsKey;
@@ -232,55 +291,38 @@ function App() {
       try {
         let res: BacktestResult;
         if (needsFullBacktest) {
-          // Strategy params changed → full backtest to regenerate signals
           res = await api.runBacktest(
-            p.selectedStrategy.name,
-            p.selectedSymbol,
-            p.interval,
-            p.startDatetime,
-            p.endDatetime,
-            p.initialEquity,
-            p.riskPerTrade / 100,
-            p.params,
-            p.maxContracts,
-            p.engineSettings,
+            p.selectedStrategy.name, p.selectedSymbol, p.interval,
+            p.startDatetime, p.endDatetime, p.initialEquity,
+            p.riskPerTrade / 100, p.params, p.maxContracts, p.engineSettings,
           );
           lastSignalParamsRef.current = currentParamsKey;
         } else {
-          // Only risk/engine changed → fast resimulate with cached signals
           res = await api.resimulate(
-            p.initialEquity,
-            p.riskPerTrade / 100,
-            p.maxContracts,
-            p.params,
-            p.engineSettings,
+            p.initialEquity, p.riskPerTrade / 100, p.maxContracts,
+            p.params, p.engineSettings,
           );
         }
         setResult(res);
         currentResultContextRef.current = newContext;
         setError('');
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        setError(message);
+        setError(err instanceof Error ? err.message : String(err));
       } finally {
         setAutoUpdateLoading(false);
       }
     }, 400);
-    return () => {
-      if (autoUpdateTimer.current) clearTimeout(autoUpdateTimer.current);
-    };
+    return () => { if (autoUpdateTimer.current) clearTimeout(autoUpdateTimer.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoUpdate, initialEquity, riskPerTrade, maxContracts, params, engineSettings]);
 
-  // Helper to calc metrics on a subset of trades
+  // Helper: compute metrics from a trade list
   const calculateMetrics = useCallback((trades: Trade[], equity: number): BacktestMetrics => {
     let currentEquity = equity;
     let peak = equity;
     let maxDrawdown = 0;
-
     let cumPnL = 0;
     let winCount = 0;
-
     trades.forEach(t => {
       cumPnL += t.pnl;
       currentEquity += t.pnl;
@@ -289,33 +331,27 @@ function App() {
       if (dd > maxDrawdown) maxDrawdown = dd;
       if (t.pnl > 0) winCount++;
     });
-
     return {
       total_return: (cumPnL / equity) * 100,
       win_rate: trades.length > 0 ? (winCount / trades.length) * 100 : 0,
       total_trades: trades.length,
       max_drawdown: maxDrawdown * 100,
-      sharpe_ratio: 0
+      sharpe_ratio: 0,
     };
   }, []);
 
+  // Compute filteredResult from single-mode result
   useEffect(() => {
-    if (!result) {
-      setFilteredResult(null);
-      return;
-    }
-
+    if (!result) { setFilteredResult(null); return; }
     const filteredTrades = result.trades.filter(t => selectedSessions.includes(t.session));
     const activeTrades = filteredTrades.filter(t => !t.excluded);
     const newMetrics = calculateMetrics(activeTrades, initialEquity);
-
     let currentEq = initialEquity;
     const newCurve = [{ time: 'Start', value: initialEquity }];
     activeTrades.forEach((t, i) => {
       currentEq += t.pnl;
       newCurve.push({ time: t.exit_execution_time || t.exit_time || String(i), value: currentEq });
     });
-
     setFilteredResult({
       metrics: { ...result.metrics, ...newMetrics },
       trades: filteredTrades,
@@ -324,40 +360,134 @@ function App() {
       data_source_used: result.data_source_used,
       debug_file: result.debug_file,
     });
-
   }, [result, selectedSessions, initialEquity, calculateMetrics]);
 
+  // Compute filteredMultiResult from multi-mode result
+  useEffect(() => {
+    if (!multiResult) { setFilteredMultiResult(null); return; }
+    const filteredTrades = multiResult.trades.filter(t => selectedSessions.includes(t.session));
+    const activeTrades = filteredTrades.filter(t => !t.excluded);
+    const newMetrics = calculateMetrics(activeTrades, initialEquity);
+    let currentEq = initialEquity;
+    const newCurve = [{ time: 'Start', value: initialEquity }];
+    activeTrades.forEach((t, i) => {
+      currentEq += t.pnl;
+      newCurve.push({ time: t.exit_execution_time || t.exit_time || String(i), value: currentEq });
+    });
+    setFilteredMultiResult({
+      ...multiResult,
+      metrics: { ...multiResult.metrics, ...newMetrics },
+      trades: filteredTrades,
+      equity_curve: newCurve,
+    });
+  }, [multiResult, selectedSessions, initialEquity, calculateMetrics]);
 
-  // Optimization handlers — preserved as comments for future use when optimization UI is re-enabled
-
-  const handleLoadFavoritePreset = useCallback((preset: import('./api').BacktestPreset) => {
-    const strat = strategies.find(s => s.name === preset.strategyName);
-    if (strat) {
-      selectStrategy(strat);
-      setTimeout(() => setParams({ ...strat.default_params, ...preset.params }), 0);
+  // ── Load favorite preset ──
+  const handleLoadFavoritePreset = useCallback((preset: BacktestPreset) => {
+    if (preset.mode === 'multi_asset' || preset.mode === 'multi_strat') {
+      const mp = preset as MultiBacktestPreset;
+      const [c1, c2] = mp.configs;
+      setBacktestMode(mp.mode);
+      setStartDatetime(mp.startDatetime);
+      setEndDatetime(mp.endDatetime);
+      setInitialEquity(mp.initialEquity);
+      // Slot 1
+      const s1 = strategies.find(s => s.name === c1.strategyName);
+      if (s1) { selectStrategy(s1); setTimeout(() => setParams({ ...s1.default_params, ...c1.params }), 0); }
+      setSelectedSymbol(c1.symbol);
+      setInterval(c1.interval);
+      setRiskPerTrade(c1.riskPerTrade);
+      setMaxContracts(c1.maxContracts);
+      setEngineSettings(JSON.parse(JSON.stringify(c1.engineSettings)));
+      // Slot 2
+      const s2 = strategies.find(s => s.name === c2.strategyName);
+      if (s2) { setSelectedStrategy2(s2); setTimeout(() => setParams2({ ...s2.default_params, ...c2.params }), 0); }
+      setSelectedSymbol2(c2.symbol);
+      setInterval2(c2.interval);
+      setRiskPerTrade2(c2.riskPerTrade);
+      setMaxContracts2(c2.maxContracts);
+      setEngineSettings2(JSON.parse(JSON.stringify(c2.engineSettings)));
+      hasInitializedSlot2Ref.current = true;
+    } else {
+      const sp = preset as SingleBacktestPreset;
+      setBacktestMode('single');
+      const strat = strategies.find(s => s.name === sp.strategyName);
+      if (strat) { selectStrategy(strat); setTimeout(() => setParams({ ...strat.default_params, ...sp.params }), 0); }
+      setSelectedSymbol(sp.symbol);
+      setInterval(sp.interval);
+      setStartDatetime(sp.startDatetime);
+      setEndDatetime(sp.endDatetime);
+      setInitialEquity(sp.initialEquity);
+      setRiskPerTrade(sp.riskPerTrade);
+      setMaxContracts(sp.maxContracts);
+      setEngineSettings(JSON.parse(JSON.stringify(sp.engineSettings)));
     }
-    setSelectedSymbol(preset.symbol);
-    setInterval(preset.interval);
-    setStartDatetime(preset.startDatetime);
-    setEndDatetime(preset.endDatetime);
-    setInitialEquity(preset.initialEquity);
-    setRiskPerTrade(preset.riskPerTrade);
-    setMaxContracts(preset.maxContracts);
-    setEngineSettings(JSON.parse(JSON.stringify(preset.engineSettings)));
     setMode('backtest');
   }, [strategies, selectStrategy]);
 
+  // Build multi preset for saving from Sidebar
+  const buildMultiPreset = useCallback((): MultiBacktestPreset | null => {
+    if (!selectedStrategy || !selectedStrategy2) return null;
+    return {
+      id: crypto.randomUUID(),
+      name: `${backtestMode === 'multi_asset' ? 'Multi-Asset' : 'Multi-Strat'} — ${selectedSymbol}/${selectedSymbol2}`,
+      createdAt: new Date().toISOString(),
+      mode: backtestMode as 'multi_asset' | 'multi_strat',
+      startDatetime,
+      endDatetime,
+      initialEquity,
+      configs: [
+        {
+          symbol: selectedSymbol, interval, strategyName: selectedStrategy.name,
+          params, riskPerTrade, maxContracts, engineSettings,
+        },
+        {
+          symbol: backtestMode === 'multi_strat' ? selectedSymbol : selectedSymbol2,
+          interval: interval2, strategyName: selectedStrategy2.name,
+          params: params2, riskPerTrade: riskPerTrade2, maxContracts: maxContracts2,
+          engineSettings: engineSettings2,
+        },
+      ],
+    };
+  }, [backtestMode, selectedSymbol, selectedSymbol2, interval, interval2, selectedStrategy, selectedStrategy2,
+      params, params2, riskPerTrade, riskPerTrade2, maxContracts, maxContracts2, engineSettings, engineSettings2,
+      startDatetime, endDatetime, initialEquity]);
+
+  // Determine which slot's state to pass to Sidebar
+  const isMulti = backtestMode !== 'single';
+  const showSlot1 = !isMulti || activeSlot === 0;
+
+  const sidebarSymbol = showSlot1 ? selectedSymbol : selectedSymbol2;
+  const sidebarSetSymbol = showSlot1
+    ? setSelectedSymbol
+    : (backtestMode === 'multi_strat' ? (_: string) => {} : setSelectedSymbol2);
+  const sidebarInterval = showSlot1 ? interval : interval2;
+  const sidebarSetInterval = showSlot1 ? setInterval : setInterval2;
+  const sidebarStrategy = showSlot1 ? selectedStrategy : selectedStrategy2;
+  const sidebarSelectStrategy = showSlot1 ? selectStrategy : selectStrategy2;
+  const sidebarParams = showSlot1 ? params : params2;
+  const sidebarSetParams = showSlot1 ? setParams : setParams2;
+  const sidebarRiskPerTrade = showSlot1 ? riskPerTrade : riskPerTrade2;
+  const sidebarSetRiskPerTrade = showSlot1 ? setRiskPerTrade : setRiskPerTrade2;
+  const sidebarMaxContracts = showSlot1 ? maxContracts : maxContracts2;
+  const sidebarSetMaxContracts = showSlot1 ? setMaxContracts : setMaxContracts2;
+  const sidebarEngineSettings = showSlot1 ? engineSettings : engineSettings2;
+  const sidebarSetEngineSettings = showSlot1 ? setEngineSettings : setEngineSettings2;
+
+  const canRun = backtestMode === 'single'
+    ? !!(selectedStrategy && selectedSymbol)
+    : !!(selectedStrategy && selectedStrategy2);
+
   return (
     <Layout>
-      {/* Mode Toggle */}
+      {/* App navigation toggle */}
       <div className="mb-6 flex items-center gap-4">
         <div className="inline-flex rounded-lg bg-gray-800/50 p-1 border border-gray-700">
           <button
             onClick={() => setMode('backtest')}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'backtest'
               ? 'bg-blue-600 text-white shadow-lg'
-              : 'text-gray-400 hover:text-gray-300'
-              }`}
+              : 'text-gray-400 hover:text-gray-300'}`}
           >
             Backtest
           </button>
@@ -365,8 +495,7 @@ function App() {
             onClick={() => setMode('favorites')}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'favorites'
               ? 'bg-amber-500 text-white shadow-lg shadow-amber-900/30'
-              : 'text-gray-400 hover:text-gray-300'
-              }`}
+              : 'text-gray-400 hover:text-gray-300'}`}
           >
             Favorites
           </button>
@@ -374,8 +503,7 @@ function App() {
             onClick={() => setMode('optimization')}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'optimization'
               ? 'bg-purple-600 text-white shadow-lg'
-              : 'text-gray-400 hover:text-gray-300'
-              }`}
+              : 'text-gray-400 hover:text-gray-300'}`}
           >
             Optimization
           </button>
@@ -383,23 +511,18 @@ function App() {
             onClick={() => setMode('data')}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'data'
               ? 'bg-emerald-600 text-white shadow-lg'
-              : 'text-gray-400 hover:text-gray-300'
-              }`}
+              : 'text-gray-400 hover:text-gray-300'}`}
           >
             Data
           </button>
         </div>
-
       </div>
 
       {/* Error Display */}
       {error && (
         <div className="mb-6 p-4 bg-red-900/30 border border-red-700/50 rounded-lg text-red-400">
           {error}
-          <button
-            onClick={() => setError('')}
-            className="ml-4 text-red-300 hover:text-red-200"
-          >
+          <button onClick={() => setError('')} className="ml-4 text-red-300 hover:text-red-200">
             Dismiss
           </button>
         </div>
@@ -410,43 +533,53 @@ function App() {
         <div className="space-y-6">
           <Sidebar
             availableData={availableData}
-            selectedSymbol={selectedSymbol}
-            setSelectedSymbol={setSelectedSymbol}
-            interval={interval}
-            setInterval={setInterval}
+            selectedSymbol={sidebarSymbol}
+            setSelectedSymbol={sidebarSetSymbol}
+            symbolLocked={isMulti && activeSlot === 1 && backtestMode === 'multi_strat'}
+            interval={sidebarInterval}
+            setInterval={sidebarSetInterval}
             startDatetime={startDatetime}
             setStartDatetime={setStartDatetime}
             endDatetime={endDatetime}
             setEndDatetime={setEndDatetime}
+            datesReadOnly={isMulti && activeSlot === 1}
             initialEquity={initialEquity}
             setInitialEquity={setInitialEquity}
-            riskPerTrade={riskPerTrade}
-            setRiskPerTrade={setRiskPerTrade}
-            maxContracts={maxContracts}
-            setMaxContracts={setMaxContracts}
-            engineSettings={engineSettings}
-            setEngineSettings={setEngineSettings}
+            equityReadOnly={isMulti && activeSlot === 1}
+            riskPerTrade={sidebarRiskPerTrade}
+            setRiskPerTrade={sidebarSetRiskPerTrade}
+            maxContracts={sidebarMaxContracts}
+            setMaxContracts={sidebarSetMaxContracts}
+            engineSettings={sidebarEngineSettings}
+            setEngineSettings={sidebarSetEngineSettings}
             strategies={strategies}
-            selectedStrategy={selectedStrategy}
-            selectStrategy={selectStrategy}
-            params={params}
-            setParams={setParams}
-            runBacktest={runBacktest}
+            selectedStrategy={sidebarStrategy}
+            selectStrategy={sidebarSelectStrategy}
+            params={sidebarParams}
+            setParams={sidebarSetParams}
+            runBacktest={canRun ? runBacktest : () => {}}
             loading={loading}
             error={error}
-            autoUpdate={autoUpdate}
+            autoUpdate={autoUpdate && backtestMode === 'single'}
             setAutoUpdate={setAutoUpdate}
             autoUpdateLoading={autoUpdateLoading}
-            hasResult={result !== null}
+            hasResult={result !== null || multiResult !== null}
+            backtestMode={backtestMode}
+            setBacktestMode={setBacktestMode}
+            activeSlot={activeSlot}
+            setActiveSlot={setActiveSlot}
+            buildMultiPreset={backtestMode !== 'single' ? buildMultiPreset : undefined}
           />
 
           <Dashboard
-            filteredResult={filteredResult}
+            filteredResult={backtestMode === 'single' ? filteredResult : null}
+            multiResult={backtestMode !== 'single' ? filteredMultiResult : null}
+            backtestMode={backtestMode}
             selectedSessions={selectedSessions}
             onSessionsChange={setSelectedSessions}
             dataSource="Local"
             initialEquity={initialEquity}
-            autoUpdate={autoUpdate}
+            autoUpdate={autoUpdate && backtestMode === 'single'}
             autoUpdateLoading={autoUpdateLoading}
             previousMetrics={previousMetrics}
           />
@@ -454,9 +587,7 @@ function App() {
       )}
 
       {/* Data Management Mode */}
-      {mode === 'data' && (
-        <MarketDataPanel />
-      )}
+      {mode === 'data' && <MarketDataPanel />}
 
       {/* Favorites Mode */}
       {mode === 'favorites' && (

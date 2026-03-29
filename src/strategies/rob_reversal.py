@@ -49,6 +49,7 @@ class RobReversal(Strategy):
     name = "RobReversal"
     manual_exit = True
     use_simulator = True
+    blackout_sensitive = True
     simulator_settings = {
         "tp1_execution_mode": "touch",   # immediate exit on TP touch (matches Pine)
         "tp1_full_exit": True,           # single TP, close 100% of position
@@ -253,6 +254,11 @@ class RobReversal(Strategy):
         open_  = data["Open"]
         high   = data["High"]
         low    = data["Low"]
+        is_blackout = (
+            data["is_blackout"].fillna(False).astype(bool).values
+            if "is_blackout" in data.columns
+            else np.zeros(len(data), dtype=bool)
+        )
         volume = data["Volume"]
         hl2    = (high + low) / 2
 
@@ -395,8 +401,8 @@ class RobReversal(Strategy):
             in_long_trigger  = pending_long_order  and 1 <= bars_since_long  <= trig_bars
             in_short_trigger = pending_short_order and 1 <= bars_since_short <= trig_bars
 
-            long_triggered  = in_long_trigger  and h >= pending_long_entry
-            short_triggered = in_short_trigger and lo <= pending_short_entry
+            long_triggered  = in_long_trigger  and h >= pending_long_entry and not is_blackout[i]
+            short_triggered = in_short_trigger and lo <= pending_short_entry and not is_blackout[i]
 
             entered_this_bar = False
 
@@ -485,6 +491,7 @@ class RobReversal(Strategy):
             "osc_sig":    np_osc,
             "osc_sgd":    np_sgd,
             "mfi":        mfi_vals,
+            "is_blackout": is_blackout.astype(int),
         }, index=data.index)
 
         return {

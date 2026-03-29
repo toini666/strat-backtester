@@ -5,6 +5,7 @@ import { type Trade } from '../api';
 interface SessionAnalyticsProps {
     trades: Trade[];
     initialEquity?: number;
+    multiMode?: boolean;
 }
 
 /* ── DST-aware "reference hour" ──────────────────────────────────
@@ -118,7 +119,7 @@ const SESSION_STYLES: Record<string, { header: string; badge: string }> = {
     US: { header: 'from-purple-600/20 to-transparent', badge: 'bg-purple-500/10 text-purple-400 border-purple-500/20' },
 };
 
-export function SessionAnalytics({ trades, initialEquity = 50000 }: SessionAnalyticsProps) {
+export function SessionAnalytics({ trades, initialEquity = 50000, multiMode = false }: SessionAnalyticsProps) {
     const [expanded, setExpanded] = useState(true);
     const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
     const [expandedHours, setExpandedHours] = useState<Set<string>>(new Set());
@@ -303,6 +304,7 @@ export function SessionAnalytics({ trades, initialEquity = 50000 }: SessionAnaly
                                                                         <th className="py-1.5 px-2 font-medium">Entry</th>
                                                                         <th className="py-1.5 px-2 font-medium">Exit</th>
                                                                         <th className="py-1.5 px-2 font-medium">Side</th>
+                                                                        {multiMode && <th className="py-1.5 px-2 font-medium">Source</th>}
                                                                         <th className="py-1.5 px-2 font-medium text-right">Entry Price</th>
                                                                         <th className="py-1.5 px-2 font-medium text-right">Exit Price</th>
                                                                         <th className="py-1.5 px-2 font-medium text-right">Size</th>
@@ -322,6 +324,17 @@ export function SessionAnalytics({ trades, initialEquity = 50000 }: SessionAnaly
                                                                             <td className="py-2 px-2">
                                                                                 <SideBadge side={t.side} />
                                                                             </td>
+                                                                            {multiMode && (
+                                                                                <td className="py-2 px-2">
+                                                                                    {t.source && (
+                                                                                        <span className={`px-1.5 py-0.5 rounded text-xs font-bold border ${
+                                                                                            t.source === '1'
+                                                                                                ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                                                                                                : 'bg-violet-500/10 text-violet-400 border-violet-500/20'
+                                                                                        }`}>#{t.source}</span>
+                                                                                    )}
+                                                                                </td>
+                                                                            )}
                                                                             <td className="py-2 px-2 text-right font-mono text-gray-300">
                                                                                 {t.entry_price.toFixed(2)}
                                                                             </td>

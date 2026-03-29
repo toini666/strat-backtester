@@ -86,6 +86,7 @@ export interface Trade {
     session: string;
     legs: TradeLeg[];
     excluded?: boolean;
+    source?: string;  // "1" or "2" in multi-backtest mode
 }
 
 export interface BlackoutWindowSettings {
@@ -127,12 +128,47 @@ export const DEFAULT_BACKTEST_ENGINE_SETTINGS: BacktestEngineSettings = {
     daily_loss_limit: 700,
 };
 
+// --- Multi-backtest types ---
+
+export type BacktestMode = 'single' | 'multi_asset' | 'multi_strat';
+
+export interface MultiBacktestConfig {
+    strategy_name: string;
+    symbol: string;
+    interval: string;
+    params: Record<string, number | string | boolean>;
+    risk_per_trade: number;  // decimal (0.01 = 1%)
+    max_contracts: number;
+    engine_settings: BacktestEngineSettings;
+}
+
+export interface MultiConfigResult {
+    strategy_name: string;
+    symbol: string;
+    interval: string;
+    label: string;
+    metrics: BacktestMetrics;
+    trade_count: number;
+    blocked_count: number;
+}
+
+export interface MultiBacktestResult {
+    mode: string;
+    metrics: BacktestMetrics;
+    trades: Trade[];
+    equity_curve: EquityPoint[];
+    daily_limits_hit?: Record<string, string>;
+    config_results: MultiConfigResult[];
+}
+
 // --- Backtest Presets (Favorites) ---
 
-export interface BacktestPreset {
+/** Single-config preset (legacy format) */
+export interface SingleBacktestPreset {
     id: string;
     name: string;
     createdAt: string;
+    mode?: 'single';
     // Data
     symbol: string;
     interval: string;
@@ -148,6 +184,30 @@ export interface BacktestPreset {
     // Engine
     engineSettings: BacktestEngineSettings;
 }
+
+/** Multi-config preset */
+export interface MultiBacktestPreset {
+    id: string;
+    name: string;
+    createdAt: string;
+    mode: 'multi_asset' | 'multi_strat';
+    // Shared fields
+    startDatetime: string;
+    endDatetime: string;
+    initialEquity: number;
+    // Per-slot configs
+    configs: Array<{
+        symbol: string;
+        interval: string;
+        strategyName: string;
+        params: Record<string, number | string | boolean>;
+        riskPerTrade: number;
+        maxContracts: number;
+        engineSettings: BacktestEngineSettings;
+    }>;
+}
+
+export type BacktestPreset = SingleBacktestPreset | MultiBacktestPreset;
 
 const PRESETS_STORAGE_KEY = 'nebular_backtest_presets';
 
@@ -335,6 +395,26 @@ export const api = {
             max_contracts: maxContracts,
             params,
             engine_settings: engineSettings,
+        });
+        return res.data;
+    },
+
+    /**
+     * Run a multi-asset or multi-strategy backtest
+     */
+    runMultiBacktest: async (
+        mode: 'multi_asset' | 'multi_strat',
+        startDatetime: string,
+        endDatetime: string,
+        initialEquity: number,
+        configs: MultiBacktestConfig[],
+    ): Promise<MultiBacktestResult> => {
+        const res = await apiClient.post<MultiBacktestResult>('/backtest/multi', {
+            mode,
+            start_datetime: startDatetime,
+            end_datetime: endDatetime,
+            initial_equity: initialEquity,
+            configs,
         });
         return res.data;
     },

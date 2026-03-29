@@ -16,6 +16,7 @@ class Strategy(ABC):
     manual_exit: bool = False # If True, API wont pass SL/TP to VBT engine for execution (still used for sizing)
     use_simulator: bool = False
     simulator_settings: Dict[str, Any] = {}
+    blackout_sensitive: bool = False
     
     def __init__(self):
         # Ensure indicators are loaded

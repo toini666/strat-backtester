@@ -45,6 +45,7 @@ class EMABreakHMASSLOsc(Strategy):
     name = "EMABreakHMASSLOsc"
     manual_exit = True
     use_simulator = True
+    blackout_sensitive = True
     simulator_settings = {
         # TP1 fires at bar close when the bar has touched the level.
         "tp1_execution_mode": "bar_close_if_touched",
@@ -396,6 +397,11 @@ class EMABreakHMASSLOsc(Strategy):
         np_osc = osc_sig.values if osc_sig is not None else np.full(n, np.nan)
         np_sgd = osc_sgd.values if osc_sgd is not None else np.full(n, np.nan)
         np_mfi = mfi_vals
+        is_blackout = (
+            data["is_blackout"].fillna(False).astype(bool).values
+            if "is_blackout" in data.columns
+            else np.zeros(n, dtype=bool)
+        )
 
         def candle_pct(o, c):
             if c == 0:
@@ -613,7 +619,7 @@ class EMABreakHMASSLOsc(Strategy):
             # (cooldownOk is handled by the simulator)
             # ------------------------------------------------------------------
 
-            if stored_long_break_ok and ema_above_ssl and cg and osc_all_long_ok and sl_long_ok:
+            if stored_long_break_ok and ema_above_ssl and cg and osc_all_long_ok and sl_long_ok and not is_blackout[i]:
                 entry = round_tick(c)
                 sl = round_tick(sl_raw_long)
                 risk = entry - sl
@@ -630,7 +636,7 @@ class EMABreakHMASSLOsc(Strategy):
                     # Consume the break — no further entries from same break
                     bars_since_long_break = 9999
 
-            elif stored_short_break_ok and ema_below_ssl and not cg and osc_all_short_ok and sl_short_ok:
+            elif stored_short_break_ok and ema_below_ssl and not cg and osc_all_short_ok and sl_short_ok and not is_blackout[i]:
                 entry = round_tick(c)
                 sl = round_tick(sl_raw_short)
                 risk = sl - entry
@@ -674,6 +680,7 @@ class EMABreakHMASSLOsc(Strategy):
                 "cloud_short_allowed": cloud_short_arr.astype(int),
                 "last_confirmed_hw": last_confirmed_hw_arr,
                 "last_confirmed_hw_value": last_confirmed_hw_val_arr,
+                "is_blackout": is_blackout.astype(int),
                 "long_entry_signal": long_entries.astype(int),
                 "short_entry_signal": short_entries.astype(int),
                 "sl_long": sl_long_arr,

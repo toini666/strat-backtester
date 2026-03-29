@@ -27,6 +27,7 @@ class EMABreakOsc(Strategy):
     manual_exit = True
     # Flag: this strategy uses the new event-driven simulator
     use_simulator = True
+    blackout_sensitive = True
     simulator_settings = {
         "tp1_execution_mode": "bar_close_if_touched",
     }
@@ -297,6 +298,11 @@ class EMABreakOsc(Strategy):
         np_osc = osc_sig.values if osc_sig is not None else np.full(n, np.nan)
         np_sgd = osc_sgd.values if osc_sgd is not None else np.full(n, np.nan)
         np_mfi = mfi_vals
+        is_blackout = (
+            data["is_blackout"].fillna(False).astype(bool).values
+            if "is_blackout" in data.columns
+            else np.zeros(n, dtype=bool)
+        )
 
         def _safe(v):
             return 0.0 if np.isnan(v) else v
@@ -462,6 +468,7 @@ class EMABreakOsc(Strategy):
                 and hw_long_allowed
                 and candle_ok
                 and ema_align_long
+                and not is_blackout[i]
             ):
                 entry_price = round_tick(c)
                 base_sl = last_break_long_low if bars_since_long_break > 0 else lo_i
@@ -486,6 +493,7 @@ class EMABreakOsc(Strategy):
                 and hw_short_allowed
                 and candle_ok
                 and ema_align_short
+                and not is_blackout[i]
             ):
                 entry_price = round_tick(c)
                 base_sl = last_break_short_high if bars_since_short_break > 0 else h
@@ -539,6 +547,7 @@ class EMABreakOsc(Strategy):
                 "hw_short_allowed": hw_short_allowed_arr.astype(int),
                 "ema_align_long": ema_align_long_arr.astype(int),
                 "ema_align_short": ema_align_short_arr.astype(int),
+                "is_blackout": is_blackout.astype(int),
                 "long_entry_signal": long_entries.astype(int),
                 "short_entry_signal": short_entries.astype(int),
                 "sl_long": sl_long_arr,

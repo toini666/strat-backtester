@@ -5,11 +5,14 @@ import { type Trade, type TradeLeg } from '../api';
 
 type PnlFilter = 'all' | 'positive' | 'negative';
 type SideFilter = 'all' | 'long' | 'short';
+type SourceFilter = 'all' | '1' | '2';
 
 interface TradesTableProps {
     trades: Trade[];
     selectedSessions: string[];
     onSessionsChange: (sessions: string[]) => void;
+    /** When true, shows a Source column indicating which config each trade came from */
+    multiMode?: boolean;
 }
 
 const timeFormatter = new Intl.DateTimeFormat('fr-BE', {
@@ -55,6 +58,20 @@ function SideBadge({ side }: { side: string }) {
         }`}>
             {isLong ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
             {side}
+        </span>
+    );
+}
+
+function SourceBadge({ source }: { source?: string }) {
+    if (!source) return null;
+    const isFirst = source === '1';
+    return (
+        <span className={`px-2 py-1 rounded-md text-xs font-bold border ${
+            isFirst
+                ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                : 'bg-violet-500/10 text-violet-400 border-violet-500/20'
+        }`}>
+            #{source}
         </span>
     );
 }
@@ -118,7 +135,7 @@ function SessionMultiSelect({
     );
 }
 
-function LegRow({ leg, excluded }: { leg: TradeLeg; excluded?: boolean }) {
+function LegRow({ leg, excluded, multiMode }: { leg: TradeLeg; excluded?: boolean; multiMode?: boolean }) {
     return (
         <tr className={`bg-gray-950/40 ${excluded ? 'opacity-35' : ''}`}>
             <td className="p-4 pl-10">
@@ -128,6 +145,7 @@ function LegRow({ leg, excluded }: { leg: TradeLeg; excluded?: boolean }) {
                 <TimeCell barTime={leg.exit_time} execTime={leg.exit_execution_time} />
             </td>
             <td className="p-4 text-gray-500 text-xs">leg</td>
+            {multiMode && <td className="p-4" />}
             <td className="p-4">
                 <SideBadge side={leg.side} />
             </td>
@@ -145,10 +163,11 @@ function LegRow({ leg, excluded }: { leg: TradeLeg; excluded?: boolean }) {
 type SortColumn = 'entry_time' | 'pnl' | null;
 type SortDirection = 'asc' | 'desc';
 
-export function TradesTable({ trades, selectedSessions, onSessionsChange }: TradesTableProps) {
+export function TradesTable({ trades, selectedSessions, onSessionsChange, multiMode = false }: TradesTableProps) {
     const [expanded, setExpanded] = useState(false);
     const [pnlFilter, setPnlFilter] = useState<PnlFilter>('all');
     const [sideFilter, setSideFilter] = useState<SideFilter>('all');
+    const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
     const [sortColumn, setSortColumn] = useState<SortColumn>(null);
     const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
     const [showLegsDetail, setShowLegsDetail] = useState(true);
@@ -187,12 +206,19 @@ export function TradesTable({ trades, selectedSessions, onSessionsChange }: Trad
         }
     };
 
+    const sourceCounts = useMemo(() => ({
+        all: trades.length,
+        '1': trades.filter(t => t.source === '1').length,
+        '2': trades.filter(t => t.source === '2').length,
+    }), [trades]);
+
     const filteredTrades = useMemo(() => {
         const filtered = trades.filter(t => {
             if (pnlFilter === 'positive' && t.pnl <= 0) return false;
             if (pnlFilter === 'negative' && t.pnl >= 0) return false;
             if (sideFilter === 'long' && t.side !== 'Long') return false;
             if (sideFilter === 'short' && t.side !== 'Short') return false;
+            if (sourceFilter !== 'all' && t.source !== sourceFilter) return false;
             return true;
         });
         if (!sortColumn) return filtered;
@@ -205,7 +231,7 @@ export function TradesTable({ trades, selectedSessions, onSessionsChange }: Trad
             }
             return sortDirection === 'asc' ? cmp : -cmp;
         });
-    }, [trades, pnlFilter, sideFilter, sortColumn, sortDirection]);
+    }, [trades, pnlFilter, sideFilter, sourceFilter, sortColumn, sortDirection]);
 
     const filterCounts = useMemo(() => ({
         all: trades.length,
@@ -291,6 +317,29 @@ export function TradesTable({ trades, selectedSessions, onSessionsChange }: Trad
                         ))}
                     </div>
 
+                    {/* Source Filter (multi mode only) */}
+                    {multiMode && (
+                        <div className="flex items-center gap-1.5">
+                            {(['all', '1', '2'] as SourceFilter[]).map(f => (
+                                <button
+                                    key={f}
+                                    onClick={() => setSourceFilter(f)}
+                                    className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-all ${
+                                        sourceFilter === f
+                                            ? f === '1'
+                                                ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+                                                : f === '2'
+                                                    ? 'bg-violet-500/15 text-violet-400 border-violet-500/30'
+                                                    : 'bg-gray-700/50 text-gray-300 border-gray-600/50'
+                                            : 'bg-gray-800/50 text-gray-500 border-gray-700/50 hover:text-gray-400'
+                                    }`}
+                                >
+                                    {f === 'all' ? `All (${sourceCounts.all})` : `#${f} (${sourceCounts[f]})`}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
                     {/* Session Multi-Select */}
                     <SessionMultiSelect selected={selectedSessions} onChange={onSessionsChange} />
 
@@ -330,6 +379,7 @@ export function TradesTable({ trades, selectedSessions, onSessionsChange }: Trad
                                 </th>
                                 <th className="p-4 font-medium">Exit Bar</th>
                                 <th className="p-4 font-medium">Session</th>
+                                {multiMode && <th className="p-4 font-medium">Source</th>}
                                 <th className="p-4 font-medium">Side</th>
                                 <th className="p-4 font-medium text-right">Entry</th>
                                 <th className="p-4 font-medium text-right">Exit</th>
@@ -367,6 +417,11 @@ export function TradesTable({ trades, selectedSessions, onSessionsChange }: Trad
                                             <td className="p-4">
                                                 <SessionBadge session={trade.session} />
                                             </td>
+                                            {multiMode && (
+                                                <td className="p-4">
+                                                    <SourceBadge source={trade.source} />
+                                                </td>
+                                            )}
                                             <td className="p-4">
                                                 <SideBadge side={trade.side} />
                                             </td>
@@ -384,7 +439,7 @@ export function TradesTable({ trades, selectedSessions, onSessionsChange }: Trad
                                             </td>
                                         </tr>
                                         {showLegsDetail && showLegs && legs.map((leg, legIndex) => (
-                                            <LegRow key={`trade-${index}-leg-${legIndex}`} leg={leg} excluded={isExcluded} />
+                                            <LegRow key={`trade-${index}-leg-${legIndex}`} leg={leg} excluded={isExcluded} multiMode={multiMode} />
                                         ))}
                                     </Fragment>
                                 );

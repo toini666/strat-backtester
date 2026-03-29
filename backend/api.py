@@ -6,6 +6,7 @@ import os
 import inspect
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Dict, Any, List, Optional
 
 import pandas as pd
@@ -47,6 +48,7 @@ SIGNAL_CACHE: Dict[str, Any] = {
     "end_date": None,
     "strategy_name": None,
     "symbol": None,
+    "blackout_signature": None,
 }
 
 # --- Strategy warmup bars ---
@@ -108,10 +110,11 @@ class Trade(BaseModel):
     fees: float
     size: float
     pnl_pct: float
-    status: str 
+    status: str
     session: str # Asia, UK, US
     legs: List["TradeLeg"] = Field(default_factory=list)
     excluded: bool = False  # True if trade was taken after daily limit reached
+    source: Optional[str] = None  # "1" or "2" in multi-backtest mode
 
 
 class TradeLeg(BaseModel):
@@ -373,6 +376,49 @@ def _build_blackout_windows(engine_settings: BacktestEngineSettings) -> List[Bla
     return windows
 
 
+def _annotate_blackout_flags(
+    data: pd.DataFrame,
+    blackout_windows: List[BlackoutWindow],
+) -> pd.DataFrame:
+    """Attach per-bar blackout flags for strategy state machines.
+
+    Matches Pine/simulator semantics: blackout is evaluated on the bar close
+    timestamp, not the bar open timestamp.
+    """
+    annotated = data.copy()
+
+    if not blackout_windows or not any(window.active for window in blackout_windows):
+        annotated["is_blackout"] = False
+        return annotated
+
+    from src.engine.simulator import _is_blackout
+
+    inferred_bar_delta = (
+        annotated.index[1] - annotated.index[0]
+        if len(annotated.index) > 1
+        else pd.Timedelta(minutes=1)
+    )
+    close_times = [
+        annotated.index[i + 1] if i + 1 < len(annotated.index) else annotated.index[i] + inferred_bar_delta
+        for i in range(len(annotated.index))
+    ]
+    annotated["is_blackout"] = [_is_blackout(pd.Timestamp(ts), blackout_windows) for ts in close_times]
+    return annotated
+
+
+def _blackout_signature(engine_settings: BacktestEngineSettings) -> tuple:
+    return tuple(
+        (
+            bool(window.active),
+            int(window.start_hour),
+            int(window.start_minute),
+            int(window.end_hour),
+            int(window.end_minute),
+        )
+        for window in engine_settings.blackout_windows
+    )
+
+
 def _contract_backtest_specs(symbol: str) -> Dict[str, float]:
     tick_size = 0.25
     tick_value = 12.5
@@ -514,9 +560,11 @@ def _run_simulator_backtest(
     params["tick_size"] = specs["tick_size"]
     engine_settings = req.engine_settings
     simulator_settings = strategy_instance.get_simulator_settings(params)
+    blackout_windows = _build_blackout_windows(engine_settings)
+    signal_data = _annotate_blackout_flags(data, blackout_windows)
 
     try:
-        signals = strategy_instance.generate_signals(data, params)
+        signals = strategy_instance.generate_signals(signal_data, params)
         if not isinstance(signals, dict):
             raise ValueError("Simulator-backed strategies must return a signal dictionary")
     except Exception as e:
@@ -554,6 +602,7 @@ def _run_simulator_backtest(
     SIGNAL_CACHE["end_date"] = end_date
     SIGNAL_CACHE["strategy_name"] = req.strategy_name
     SIGNAL_CACHE["symbol"] = req.symbol
+    SIGNAL_CACHE["blackout_signature"] = _blackout_signature(engine_settings)
     SIGNAL_CACHE["params"] = params.copy()
 
     config = SimulatorConfig(
@@ -567,7 +616,7 @@ def _run_simulator_backtest(
         auto_close_enabled=engine_settings.auto_close_enabled,
         auto_close_hour=engine_settings.auto_close_hour,
         auto_close_minute=engine_settings.auto_close_minute,
-        blackout_windows=_build_blackout_windows(engine_settings),
+        blackout_windows=blackout_windows,
         cooldown_bars=int(sliced_signals.get("cooldown_bars", params.get("cooldown_bars", 0))),
         tp1_execution_mode=str(simulator_settings.get("tp1_execution_mode", "touch")),
         tp1_partial_pct=float(simulator_settings.get("tp1_partial_pct", 0.25)),
@@ -754,10 +803,21 @@ def resimulate(req: ResimulateRequest):
     if strategy_name in STRATEGIES:
         strategy_instance = STRATEGIES[strategy_name]()
         simulator_settings = strategy_instance.get_simulator_settings(merged_params)
+        blackout_sensitive = bool(getattr(strategy_instance, "blackout_sensitive", False))
     else:
         simulator_settings = base_simulator_settings
+        blackout_sensitive = False
 
     engine_settings = req.engine_settings
+
+    if blackout_sensitive and SIGNAL_CACHE.get("blackout_signature") != _blackout_signature(engine_settings):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Blackout window changes require a full backtest for {strategy_name}. "
+                "Cached resimulation is exact only when blackout windows are unchanged."
+            ),
+        )
 
     config = SimulatorConfig(
         initial_equity=req.initial_equity,
@@ -800,6 +860,290 @@ def resimulate(req: ResimulateRequest):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Resimulation error: {str(e)}") from e
+
+
+# =============================================================================
+# MULTI-BACKTEST — run two configs in parallel on the same account
+# =============================================================================
+
+class MultiBacktestConfig(BaseModel):
+    """Per-slot configuration for a multi-backtest run."""
+    strategy_name: str = Field(..., min_length=1)
+    symbol: str = Field(..., min_length=1)
+    interval: str = Field(default="15m", pattern="^(1m|2m|3m|5m|7m|15m)$")
+    params: Dict[str, Any] = Field(default_factory=dict)
+    risk_per_trade: float = Field(default=0.01, ge=0.001, le=0.1)
+    max_contracts: int = Field(default=50, ge=1, le=1000)
+    engine_settings: BacktestEngineSettings = Field(default_factory=lambda: BacktestEngineSettings())
+
+
+class MultiBacktestRequest(BaseModel):
+    """Request for a multi-asset or multi-strategy backtest."""
+    mode: str = Field(..., pattern="^(multi_asset|multi_strat)$")
+    start_datetime: str
+    end_datetime: str
+    initial_equity: float = Field(default=50000.0, ge=1000, le=10000000)
+    configs: List[MultiBacktestConfig] = Field(..., min_length=2, max_length=2)
+
+
+class MultiConfigResult(BaseModel):
+    """Per-slot results within a multi-backtest response."""
+    strategy_name: str
+    symbol: str
+    interval: str
+    label: str  # e.g. "MNQ / EMABreakOsc (5m)"
+    metrics: Dict[str, Any]
+    trade_count: int
+    blocked_count: int  # trades skipped due to shared-position lock (multi_strat only)
+
+
+class MultiBacktestResult(BaseModel):
+    """Combined result for a multi-backtest run."""
+    mode: str
+    metrics: Dict[str, Any]
+    trades: List[Trade]
+    equity_curve: List[Dict[str, Any]]
+    daily_limits_hit: Dict[str, str] = Field(default_factory=dict)
+    config_results: List[MultiConfigResult]
+
+
+def _compute_combined_metrics(initial_equity: float, trades: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compute combined backtest metrics from a merged trade list."""
+    active = [t for t in trades if not t.get("excluded", False)]
+    total = len(active)
+    wins = sum(1 for t in active if t["pnl"] > 0)
+    win_rate = wins / total * 100 if total > 0 else 0.0
+
+    equity = initial_equity
+    peak = initial_equity
+    max_dd = 0.0
+    sorted_active = sorted(active, key=lambda t: t["entry_time"])
+    for trade in sorted_active:
+        equity += trade["pnl"]
+        if equity > peak:
+            peak = equity
+        dd = (peak - equity) / peak if peak > 0 else 0.0
+        if dd > max_dd:
+            max_dd = dd
+
+    total_return = (equity - initial_equity) / initial_equity * 100 if initial_equity > 0 else 0.0
+    return {
+        "total_return": total_return,
+        "win_rate": win_rate,
+        "total_trades": total,
+        "max_drawdown": max_dd * 100,
+        "sharpe_ratio": 0.0,
+    }
+
+
+def _compute_combined_equity_curve(initial_equity: float, trades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Build combined equity curve from merged trades sorted by entry time."""
+    active = [t for t in trades if not t.get("excluded", False)]
+    sorted_active = sorted(active, key=lambda t: t["entry_time"])
+    curve = [{"time": "Start", "value": initial_equity}]
+    equity = initial_equity
+    for trade in sorted_active:
+        equity += trade["pnl"]
+        exit_ts = trade.get("exit_execution_time") or trade["exit_time"]
+        curve.append({"time": exit_ts, "value": equity})
+    return curve
+
+
+def _apply_shared_position_lock(
+    trades1: List[Dict[str, Any]],
+    trades2: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], int]:
+    """
+    For multi_strat mode: enforce that only one trade can be open at a time
+    across both strategy streams.
+
+    Processes trades in chronological order. A trade is blocked if a trade
+    from the other stream is already open (its exit_time > current entry_time).
+
+    Returns (accepted_trades, blocked_count).
+    """
+    all_trades = sorted(trades1 + trades2, key=lambda t: t["entry_time"])
+    accepted: List[Dict[str, Any]] = []
+    blocked = 0
+    last_exit_time: Optional[str] = None
+
+    for trade in all_trades:
+        entry_time = trade["entry_time"]
+        exit_time = trade["exit_time"]
+        if last_exit_time is None or entry_time >= last_exit_time:
+            accepted.append(trade)
+            last_exit_time = exit_time
+        else:
+            blocked += 1
+
+    return accepted, blocked
+
+
+def _run_config_for_multi(
+    config: MultiBacktestConfig,
+    start_datetime: str,
+    end_datetime: str,
+    initial_equity: float,
+    source_label: str,
+) -> Dict[str, Any]:
+    """
+    Run a single slot config through the full backtest pipeline.
+    Returns the raw result dict with trades tagged with source_label.
+    Raises HTTPException on any error.
+    """
+    if config.strategy_name not in STRATEGIES:
+        raise HTTPException(status_code=404, detail=f"Strategy not found: {config.strategy_name}")
+
+    from src.data.market_store import SYMBOL_CONTRACTS
+    contract_id = SYMBOL_CONTRACTS.get(config.symbol)
+    if not contract_id:
+        raise HTTPException(status_code=400, detail=f"Unknown symbol: {config.symbol}")
+
+    try:
+        original_start_date = _normalize_backtest_datetime(start_datetime)
+        end_date = _normalize_backtest_datetime(end_datetime)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid datetime: {e}")
+
+    # Warmup
+    warmup_bars = STRATEGY_WARMUP_BARS.get(config.strategy_name, DEFAULT_WARMUP_BARS)
+    map_min = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "7m": 7, "15m": 15}
+    minutes_per_bar = map_min.get(config.interval, 15)
+    trading_days = (warmup_bars * minutes_per_bar) / (23 * 60)
+    calendar_days = max(2, int(trading_days * 7 / 5) + 3)
+    start_date = original_start_date - timedelta(days=calendar_days)
+
+    ds_meta = market_store.get_dataset_by_symbol(config.symbol)
+    if ds_meta:
+        ds_start = pd.Timestamp(ds_meta["start_date"])
+        if ds_start.tzinfo is None:
+            ds_start = ds_start.tz_localize(BACKTEST_TZ)
+        if start_date < ds_start:
+            start_date = ds_start
+
+    # Load data
+    try:
+        data = market_store.load_bars(contract_id, start_date, end_date, config.interval)
+        if data.empty:
+            raise HTTPException(status_code=400, detail=f"No data for {config.symbol} in range")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Data load error: {e}")
+
+    StrategyClass = STRATEGIES[config.strategy_name]
+    strategy_instance = StrategyClass()
+    params = strategy_instance.default_params.copy()
+    params.update(config.params)
+    params["tick_size"] = _contract_backtest_specs(config.symbol)["tick_size"]
+
+    # Build a BacktestRequest-like object for _run_simulator_backtest
+    fake_req = SimpleNamespace(
+        strategy_name=config.strategy_name,
+        symbol=config.symbol,
+        interval=config.interval,
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        initial_equity=initial_equity,
+        risk_per_trade=config.risk_per_trade,
+        max_contracts=config.max_contracts,
+        engine_settings=config.engine_settings,
+    )
+
+    result = _run_simulator_backtest(
+        req=fake_req,
+        contract_id=contract_id,
+        strategy_instance=strategy_instance,
+        params=params,
+        data=data,
+        start_date=start_date,
+        end_date=end_date,
+        original_start_date=original_start_date,
+    )
+
+    # Tag all trades with the source label
+    for trade in result.get("trades", []):
+        trade["source"] = source_label
+
+    return result
+
+
+@router.post("/backtest/multi", response_model=MultiBacktestResult)
+def run_multi_backtest(req: MultiBacktestRequest):
+    """
+    Run two strategy/asset configs in parallel on the same account.
+
+    multi_asset: both configs run independently; both can have open positions
+                 simultaneously (different tickers).
+    multi_strat: both configs run on the same ticker; only one position can
+                 be open at a time across both strategies.
+    """
+    load_strategies()
+
+    if req.mode == "multi_strat" and req.configs[0].symbol != req.configs[1].symbol:
+        raise HTTPException(
+            status_code=400,
+            detail="multi_strat mode requires both configs to use the same symbol",
+        )
+
+    cfg1, cfg2 = req.configs[0], req.configs[1]
+    label1 = f"{cfg1.symbol} / {cfg1.strategy_name} ({cfg1.interval})"
+    label2 = f"{cfg2.symbol} / {cfg2.strategy_name} ({cfg2.interval})"
+
+    result1 = _run_config_for_multi(cfg1, req.start_datetime, req.end_datetime, req.initial_equity, "1")
+    result2 = _run_config_for_multi(cfg2, req.start_datetime, req.end_datetime, req.initial_equity, "2")
+
+    trades1 = result1.get("trades", [])
+    trades2 = result2.get("trades", [])
+
+    if req.mode == "multi_strat":
+        merged_trades, _ = _apply_shared_position_lock(trades1, trades2)
+    else:
+        # multi_asset: both run fully independently
+        merged_trades = sorted(trades1 + trades2, key=lambda t: t["entry_time"])
+
+    combined_metrics = _compute_combined_metrics(req.initial_equity, merged_trades)
+    combined_curve = _compute_combined_equity_curve(req.initial_equity, merged_trades)
+
+    # Per-config metrics: from their independent runs
+    def _config_result(result, cfg, label, blocked):
+        trades = result.get("trades", [])
+        active = [t for t in trades if not t.get("excluded", False)]
+        return MultiConfigResult(
+            strategy_name=cfg.strategy_name,
+            symbol=cfg.symbol,
+            interval=cfg.interval,
+            label=label,
+            metrics=result.get("metrics", {}),
+            trade_count=len(active),
+            blocked_count=blocked,
+        )
+
+    # Count how many trades from each stream were dropped by the shared-position lock
+    if req.mode == "multi_strat":
+        merged_set = set(id(t) for t in merged_trades)
+        blocked1 = sum(1 for t in trades1 if id(t) not in merged_set)
+        blocked2 = sum(1 for t in trades2 if id(t) not in merged_set)
+    else:
+        blocked1 = blocked2 = 0
+
+    config_results = [
+        _config_result(result1, cfg1, label1, blocked1),
+        _config_result(result2, cfg2, label2, blocked2),
+    ]
+
+    # Convert trade dicts to Trade objects for serialization
+    trade_objects = []
+    for t in merged_trades:
+        trade_objects.append(Trade(**{k: v for k, v in t.items() if k in Trade.model_fields}))
+
+    return MultiBacktestResult(
+        mode=req.mode,
+        metrics=combined_metrics,
+        trades=trade_objects,
+        equity_curve=combined_curve,
+        config_results=config_results,
+    )
 
 
 # =============================================================================
