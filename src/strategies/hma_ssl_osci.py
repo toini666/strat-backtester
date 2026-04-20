@@ -162,6 +162,19 @@ class HMASSLOsci(Strategy):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _compute_hma_canal_full(close, ema_len, hma1_len, hma2_len, amp_mult):
+        """Compute the amplified HMA ribbon with the underlying HMA legs."""
+        src_ema = ta.ema(close, length=ema_len)
+        raw_hma1 = ta.hma(src_ema, length=hma1_len)
+        raw_hma2 = ta.hma(src_ema, length=hma2_len)
+        hma1 = src_ema + (raw_hma1 - src_ema) * amp_mult
+        hma2 = src_ema + (raw_hma2 - src_ema) * amp_mult
+        canal_upper = hma1.combine(hma2, max)
+        canal_lower = hma1.combine(hma2, min)
+        canal_green = hma1 > hma2
+        return src_ema, hma1, hma2, canal_upper, canal_lower, canal_green
+
+    @staticmethod
     def _compute_hma_canal(close, ema_len, hma1_len, hma2_len, amp_mult):
         """Compute HMA ribbon canal.
 
@@ -172,14 +185,11 @@ class HMASSLOsci(Strategy):
             hma1    = srcEma + (rawHma1 - srcEma) * ampMult
             hma2    = srcEma + (rawHma2 - srcEma) * ampMult
         """
-        src_ema = ta.ema(close, length=ema_len)
-        raw_hma1 = ta.hma(src_ema, length=hma1_len)
-        raw_hma2 = ta.hma(src_ema, length=hma2_len)
-        hma1 = src_ema + (raw_hma1 - src_ema) * amp_mult
-        hma2 = src_ema + (raw_hma2 - src_ema) * amp_mult
-        canal_upper = hma1.combine(hma2, max)
-        canal_lower = hma1.combine(hma2, min)
-        canal_green = hma1 > hma2
+        src_ema, _, _, canal_upper, canal_lower, canal_green = (
+            HMASSLOsci._compute_hma_canal_full(
+                close, ema_len, hma1_len, hma2_len, amp_mult
+            )
+        )
         return src_ema, canal_upper, canal_lower, canal_green
 
     # ------------------------------------------------------------------

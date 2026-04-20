@@ -32,7 +32,8 @@ SYMBOL_CONTRACTS = {
     "MGC": "CON.F.US.MGC.M26",
     "MBT": "CON.F.US.MBT.J26",
     "M2K": "CON.F.US.M2K.M26",
-    "MCL": "CON.F.US.MCLE.K26",
+    # Roll to M26 for the next ingestion from the CME session opening on 2026-04-20.
+    "MCL": "CON.F.US.MCLE.M26",
 }
 
 # Timeframes to generate from 1m data
