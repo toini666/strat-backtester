@@ -264,6 +264,15 @@ export function Sidebar({
                 </select>
             );
         }
+        if (key === 'sl_mode') {
+            return (
+                <select className="input-base" value={String(value)} onChange={(e) => handleParamChange(key, e.target.value)}>
+                    <option value="cross_hma">Cross HMA</option>
+                    <option value="ssl_extreme">Extrême SSL</option>
+                    <option value="mix">Mix</option>
+                </select>
+            );
+        }
         if (typeof value === 'string') {
             return (
                 <input

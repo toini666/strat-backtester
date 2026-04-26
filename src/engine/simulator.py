@@ -95,6 +95,7 @@ class _Position:
     rr_trailing: float = 0.0         # R:R threshold for trailing activation
     trailing_active: bool = False     # whether trailing SL is active
     sl_buffer_st: float = 0.0        # buffer for Supertrend trailing SL
+    canal_exit_armed: bool = False    # for HMA break exits that require first reaching the profit side
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +249,18 @@ def simulate(
     np_sl_short = signals["sl_short"].values
     np_tp1_long = signals["tp1_long"].values
     np_tp1_short = signals["tp1_short"].values
+    has_price_tp1 = not bool(signals.get("disable_price_tp1", False))
+
+    # Optional close-based partial exits (e.g. HyperWave inverse cross).
+    _partial_long_s = signals.get("partial_close_long")
+    _partial_short_s = signals.get("partial_close_short")
+    np_partial_close_long = (
+        _partial_long_s.values if _partial_long_s is not None else np.zeros(n, dtype=bool)
+    )
+    np_partial_close_short = (
+        _partial_short_s.values if _partial_short_s is not None else np.zeros(n, dtype=bool)
+    )
+    has_close_partial = _partial_long_s is not None or _partial_short_s is not None
 
     # Optional breakeven level signals (for strategies with pre-TP1 breakeven)
     _be_long_s = signals.get("be_long")
@@ -282,6 +295,13 @@ def simulate(
     np_canal_upper = _canal_upper_s.values if _canal_upper_s is not None else None
     np_canal_green = _canal_green_s.values if _canal_green_s is not None else None
     has_canal_exit = np_canal_lower is not None and np_canal_upper is not None
+    canal_exit_requires_arming = bool(signals.get("canal_exit_requires_arming", False))
+
+    _hma_flip_up_s = signals.get("hma_flip_up")
+    _hma_flip_down_s = signals.get("hma_flip_down")
+    np_hma_flip_up = _hma_flip_up_s.values if _hma_flip_up_s is not None else None
+    np_hma_flip_down = _hma_flip_down_s.values if _hma_flip_down_s is not None else None
+    has_hma_flip_signals = np_hma_flip_up is not None and np_hma_flip_down is not None
 
     # Optional SSL baseline for TP2 trigger (overrides inside-canal TP2 logic)
     _ssl_baseline_s = signals.get("ssl_baseline")
@@ -707,7 +727,7 @@ def simulate(
                 return True, tp1_touched_this_bar, tp2_touched_this_bar
 
             # 2. Check TP1 (if not yet hit)
-            if not pos.tp1_hit and not tp1_touched_this_bar and h >= pos.tp1_price:
+            if has_price_tp1 and not pos.tp1_hit and not tp1_touched_this_bar and h >= pos.tp1_price:
                 if tp1_deferred_to_bar_close:
                     tp1_touched_this_bar = True
                 elif config.tp1_full_exit:
@@ -763,7 +783,7 @@ def simulate(
                 return True, tp1_touched_this_bar, tp2_touched_this_bar
 
             # 2. Check TP1
-            if not pos.tp1_hit and not tp1_touched_this_bar and l <= pos.tp1_price:
+            if has_price_tp1 and not pos.tp1_hit and not tp1_touched_this_bar and l <= pos.tp1_price:
                 if tp1_deferred_to_bar_close:
                     tp1_touched_this_bar = True
                 elif config.tp1_full_exit:
@@ -819,6 +839,7 @@ def simulate(
         if (
             pos is None
             or pos.tp1_hit
+            or not has_price_tp1
             or tp1_execution_mode != TP1_EXECUTION_BAR_CLOSE_IF_TOUCHED
         ):
             return
@@ -974,22 +995,47 @@ def simulate(
                             return True
                     else:
                         # Inversion check: exit when canal changes color
-                        if is_inversion_mode and np_canal_green is not None and bar_idx < len(np_canal_green):
-                            cg = bool(np_canal_green[bar_idx])
-                            if pos.side == 1 and not cg:
-                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
-                                return True
-                            elif pos.side == -1 and cg:
+                        if is_inversion_mode:
+                            inversion_exit = False
+                            if has_hma_flip_signals and bar_idx < len(np_hma_flip_up):
+                                inversion_exit = (
+                                    (pos.side == 1 and bool(np_hma_flip_down[bar_idx]))
+                                    or (pos.side == -1 and bool(np_hma_flip_up[bar_idx]))
+                                )
+                            elif np_canal_green is not None and bar_idx < len(np_canal_green):
+                                cg = bool(np_canal_green[bar_idx])
+                                inversion_exit = (pos.side == 1 and not cg) or (pos.side == -1 and cg)
+                            if inversion_exit:
                                 _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
                                 return True
                         # Break check: exit when close crosses canal boundary
                         if is_break_mode:
-                            if pos.side == 1 and close_price < cl:
+                            if canal_exit_requires_arming and not pos.canal_exit_armed:
+                                if pos.side == 1 and close_price > cu:
+                                    pos.canal_exit_armed = True
+                                elif pos.side == -1 and close_price < cl:
+                                    pos.canal_exit_armed = True
+                            break_ready = pos.canal_exit_armed if canal_exit_requires_arming else True
+                            if break_ready and pos.side == 1 and close_price < cl:
                                 _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
                                 return True
-                            elif pos.side == -1 and close_price > cu:
+                            elif break_ready and pos.side == -1 and close_price > cu:
                                 _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
                                 return True
+                    if (
+                        pos is not None
+                        and has_close_partial
+                        and config.tp1_partial_pct > 0
+                        and (
+                            (pos.side == 1 and bool(np_partial_close_long[bar_idx]) and close_price > pos.entry_price)
+                            or (pos.side == -1 and bool(np_partial_close_short[bar_idx]) and close_price < pos.entry_price)
+                        )
+                    ):
+                        first_partial = not pos.tp1_hit
+                        _partial_exit(close_price, config.tp1_partial_pct, "TP_HW", exit_bar_time, exit_exec_time)
+                        if first_partial and pos is not None:
+                            pos.tp1_hit = True
+                            pos.stop_price = pos.entry_price
             return pos is None
 
         ema_val = np_ema[bar_idx] if bar_idx < len(np_ema) else np.nan
@@ -1104,7 +1150,7 @@ def simulate(
                     entry_price = _round_tick(np_close[i], ts)
                 sl_price = np_sl_long[i]
                 tp1_price = np_tp1_long[i]
-                if np.isnan(sl_price) or np.isnan(tp1_price):
+                if np.isnan(sl_price) or (has_price_tp1 and np.isnan(tp1_price)):
                     continue
 
                 risk_ref_long = (
@@ -1130,6 +1176,15 @@ def simulate(
                     initial_risk=abs(entry_price - sl_price) if has_supertrend else 0.0,
                     rr_trailing=sig_rr_trailing,
                     sl_buffer_st=sig_sl_buffer,
+                    canal_exit_armed=(
+                        bool(
+                            canal_exit_requires_arming
+                            and has_canal_exit
+                            and i < len(np_canal_upper)
+                            and not np.isnan(np_canal_upper[i])
+                            and np_close[i] > np_canal_upper[i]
+                        )
+                    ),
                 )
 
             elif np_short_entry[i]:
@@ -1139,7 +1194,7 @@ def simulate(
                     entry_price = _round_tick(np_close[i], ts)
                 sl_price = np_sl_short[i]
                 tp1_price = np_tp1_short[i]
-                if np.isnan(sl_price) or np.isnan(tp1_price):
+                if np.isnan(sl_price) or (has_price_tp1 and np.isnan(tp1_price)):
                     continue
 
                 risk_ref_short = (
@@ -1165,6 +1220,15 @@ def simulate(
                     initial_risk=abs(sl_price - entry_price) if has_supertrend else 0.0,
                     rr_trailing=sig_rr_trailing,
                     sl_buffer_st=sig_sl_buffer,
+                    canal_exit_armed=(
+                        bool(
+                            canal_exit_requires_arming
+                            and has_canal_exit
+                            and i < len(np_canal_lower)
+                            and not np.isnan(np_canal_lower[i])
+                            and np_close[i] < np_canal_lower[i]
+                        )
+                    ),
                 )
 
     # --- Close any remaining position at end of data ---

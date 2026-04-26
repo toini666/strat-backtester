@@ -4,9 +4,9 @@
     "symbol": "MNQ",
     "contract_id": "CON.F.US.MNQ.M26",
     "start_date": "2025-01-02 00:00:00+01:00",
-    "end_date": "2026-04-17 22:59:00+02:00",
-    "bar_count_1m": 456515,
-    "total_size_mb": 62.98,
+    "end_date": "2026-04-24 22:59:00+02:00",
+    "bar_count_1m": 463415,
+    "total_size_mb": 63.93,
     "timeframes": [
       "1m",
       "2m",
@@ -16,7 +16,7 @@
       "15m"
     ],
     "timezone": "Europe/Brussels",
-    "updated_at": "2026-04-18T05:46:35.180974",
+    "updated_at": "2026-04-26T07:39:42.852675",
     "contract_segments": [
       {
         "contract": "CON.F.US.MNQ.H26",
@@ -28,7 +28,7 @@
         "contract": "CON.F.US.MNQ.M26",
         "label": "M26",
         "from": "2026-03-16",
-        "to": "2026-04-17"
+        "to": "2026-04-24"
       }
     ]
   },
@@ -37,9 +37,9 @@
     "symbol": "MES",
     "contract_id": "CON.F.US.MES.M26",
     "start_date": "2025-01-02 00:00:00+01:00",
-    "end_date": "2026-04-17 22:59:00+02:00",
-    "bar_count_1m": 456502,
-    "total_size_mb": 58.89,
+    "end_date": "2026-04-24 22:59:00+02:00",
+    "bar_count_1m": 463402,
+    "total_size_mb": 59.78,
     "timeframes": [
       "1m",
       "2m",
@@ -49,7 +49,7 @@
       "15m"
     ],
     "timezone": "Europe/Brussels",
-    "updated_at": "2026-04-18T05:46:48.470625",
+    "updated_at": "2026-04-26T07:39:57.053655",
     "contract_segments": [
       {
         "contract": "CON.F.US.MES.H26",
@@ -61,7 +61,7 @@
         "contract": "CON.F.US.MES.M26",
         "label": "M26",
         "from": "2026-03-16",
-        "to": "2026-04-17"
+        "to": "2026-04-24"
       }
     ]
   },
@@ -70,9 +70,9 @@
     "symbol": "MYM",
     "contract_id": "CON.F.US.MYM.M26",
     "start_date": "2026-01-15 00:00:00+01:00",
-    "end_date": "2026-04-17 22:59:00+02:00",
-    "bar_count_1m": 90804,
-    "total_size_mb": 11.82,
+    "end_date": "2026-04-24 22:59:00+02:00",
+    "bar_count_1m": 97659,
+    "total_size_mb": 12.71,
     "timeframes": [
       "1m",
       "2m",
@@ -82,7 +82,7 @@
       "15m"
     ],
     "timezone": "Europe/Brussels",
-    "updated_at": "2026-04-18T05:46:53.810066",
+    "updated_at": "2026-04-26T07:40:02.882294",
     "contract_segments": [
       {
         "contract": "CON.F.US.MYM.H26",
@@ -94,7 +94,7 @@
         "contract": "CON.F.US.MYM.M26",
         "label": "M26",
         "from": "2026-03-16",
-        "to": "2026-04-17"
+        "to": "2026-04-24"
       }
     ]
   },
@@ -103,9 +103,9 @@
     "symbol": "MGC",
     "contract_id": "CON.F.US.MGC.M26",
     "start_date": "2025-01-02 00:00:00+01:00",
-    "end_date": "2026-04-17 22:59:00+02:00",
-    "bar_count_1m": 456920,
-    "total_size_mb": 56.64,
+    "end_date": "2026-04-24 22:59:00+02:00",
+    "bar_count_1m": 463820,
+    "total_size_mb": 57.5,
     "timeframes": [
       "1m",
       "2m",
@@ -115,7 +115,7 @@
       "15m"
     ],
     "timezone": "Europe/Brussels",
-    "updated_at": "2026-04-18T05:47:08.707267",
+    "updated_at": "2026-04-26T07:40:16.116896",
     "contract_segments": [
       {
         "contract": "CON.F.US.MGC.G26",
@@ -133,18 +133,18 @@
         "contract": "CON.F.US.MGC.M26",
         "label": "M26",
         "from": "2026-03-27",
-        "to": "2026-04-17"
+        "to": "2026-04-24"
       }
     ]
   },
   {
     "id": "5b1715e9-052f-48bd-8a37-860df8a414da",
     "symbol": "MBT",
-    "contract_id": "CON.F.US.MBT.J26",
+    "contract_id": "CON.F.US.MBT.K26",
     "start_date": "2026-01-15 00:00:00+01:00",
-    "end_date": "2026-04-17 22:59:00+02:00",
-    "bar_count_1m": 88289,
-    "total_size_mb": 11.15,
+    "end_date": "2026-04-24 22:59:00+02:00",
+    "bar_count_1m": 94668,
+    "total_size_mb": 11.92,
     "timeframes": [
       "1m",
       "2m",
@@ -154,7 +154,7 @@
       "15m"
     ],
     "timezone": "Europe/Brussels",
-    "updated_at": "2026-04-18T05:47:13.899097",
+    "updated_at": "2026-04-26T07:59:02.921168",
     "contract_segments": [
       {
         "contract": "CON.F.US.MBT.F26",
@@ -178,7 +178,13 @@
         "contract": "CON.F.US.MBT.J26",
         "label": "J26",
         "from": "2026-03-24",
-        "to": "2026-04-17"
+        "to": "2026-04-21"
+      },
+      {
+        "contract": "CON.F.US.MBT.K26",
+        "label": "K26",
+        "from": "2026-04-21",
+        "to": "2026-04-24"
       }
     ]
   },
@@ -187,9 +193,9 @@
     "symbol": "M2K",
     "contract_id": "CON.F.US.M2K.M26",
     "start_date": "2026-01-15 00:00:00+01:00",
-    "end_date": "2026-04-17 22:59:00+02:00",
-    "bar_count_1m": 90567,
-    "total_size_mb": 10.97,
+    "end_date": "2026-04-24 22:59:00+02:00",
+    "bar_count_1m": 97387,
+    "total_size_mb": 11.79,
     "timeframes": [
       "1m",
       "2m",
@@ -199,7 +205,7 @@
       "15m"
     ],
     "timezone": "Europe/Brussels",
-    "updated_at": "2026-04-18T05:47:19.493011",
+    "updated_at": "2026-04-26T07:40:28.935979",
     "contract_segments": [
       {
         "contract": "CON.F.US.M2K.H26",
@@ -211,18 +217,18 @@
         "contract": "CON.F.US.M2K.M26",
         "label": "M26",
         "from": "2026-03-17",
-        "to": "2026-04-17"
+        "to": "2026-04-24"
       }
     ]
   },
   {
     "id": "b5d7ff44-5a11-44ae-93ab-4f037012c307",
     "symbol": "MCL",
-    "contract_id": "CON.F.US.MCLE.K26",
+    "contract_id": "CON.F.US.MCLE.M26",
     "start_date": "2025-01-02 00:00:00+01:00",
-    "end_date": "2026-04-17 22:59:00+02:00",
-    "bar_count_1m": 446755,
-    "total_size_mb": 49.24,
+    "end_date": "2026-04-24 22:59:00+02:00",
+    "bar_count_1m": 453655,
+    "total_size_mb": 50.03,
     "timeframes": [
       "1m",
       "2m",
@@ -232,7 +238,7 @@
       "15m"
     ],
     "timezone": "Europe/Brussels",
-    "updated_at": "2026-04-18T05:47:33.007950",
+    "updated_at": "2026-04-26T07:40:42.208665",
     "contract_segments": [
       {
         "contract": "DATABENTO:MCLG5",
@@ -335,6 +341,12 @@
         "label": "K26",
         "from": "2026-03-15",
         "to": "2026-04-17"
+      },
+      {
+        "contract": "CON.F.US.MCLE.M26",
+        "label": "M26",
+        "from": "2026-04-17",
+        "to": "2026-04-24"
       }
     ]
   }

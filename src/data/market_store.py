@@ -30,7 +30,7 @@ SYMBOL_CONTRACTS = {
     "MES": "CON.F.US.MES.M26",
     "MYM": "CON.F.US.MYM.M26",
     "MGC": "CON.F.US.MGC.M26",
-    "MBT": "CON.F.US.MBT.J26",
+    "MBT": "CON.F.US.MBT.K26",
     "M2K": "CON.F.US.M2K.M26",
     # Roll to M26 for the next ingestion from the CME session opening on 2026-04-20.
     "MCL": "CON.F.US.MCLE.M26",

@@ -39,6 +39,35 @@ function makeDefaultEngineSettings(): BacktestEngineSettings {
   };
 }
 
+// Per-strategy engine settings overrides applied when a strategy is selected
+const STRATEGY_ENGINE_OVERRIDES: Record<string, Partial<BacktestEngineSettings>> = {
+  HMASSLOsciV2: {
+    blackout_windows: [
+      { active: false, start_hour: 0, start_minute: 0, end_hour: 0, end_minute: 5 },
+      { active: false, start_hour: 9, start_minute: 0, end_hour: 9, end_minute: 5 },
+      { active: false, start_hour: 12, start_minute: 0, end_hour: 14, end_minute: 0 },
+      { active: false, start_hour: 15, start_minute: 30, end_hour: 15, end_minute: 35 },
+      { active: false, start_hour: 16, start_minute: 30, end_hour: 22, end_minute: 0 },
+      { active: true, start_hour: 22, start_minute: 0, end_hour: 23, end_minute: 59 },
+    ],
+  },
+};
+
+function applyStrategyEngineOverrides(
+  base: BacktestEngineSettings,
+  strategyName: string,
+): BacktestEngineSettings {
+  const overrides = STRATEGY_ENGINE_OVERRIDES[strategyName];
+  if (!overrides) return base;
+  return {
+    ...base,
+    ...overrides,
+    blackout_windows: overrides.blackout_windows
+      ? overrides.blackout_windows.map((w) => ({ ...w }))
+      : base.blackout_windows.map((w) => ({ ...w })),
+  };
+}
+
 function App() {
   // App navigation mode
   const [mode, setMode] = useState<AppMode>('backtest');
@@ -75,6 +104,7 @@ function App() {
   const selectStrategy2 = useCallback((strat: Strategy) => {
     setSelectedStrategy2(strat);
     setParams2({ ...strat.default_params });
+    setEngineSettings2((prev) => applyStrategyEngineOverrides(prev, strat.name));
   }, []);
 
   // When switching to multi mode for the first time, copy slot 1 into slot 2 as a starting point
@@ -173,6 +203,7 @@ function App() {
   const selectStrategy = useCallback((strat: Strategy) => {
     setSelectedStrategy(strat);
     setParams({ ...strat.default_params });
+    setEngineSettings((prev) => applyStrategyEngineOverrides(prev, strat.name));
   }, []);
 
   // ── Run Backtest ──
