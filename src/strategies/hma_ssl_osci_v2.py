@@ -61,6 +61,7 @@ class HMASSLOsciV2(HMASSLOsci):
         "hw_partial_pct": 25.0,
         # "both_hma", "break_hma", or "inversion_hma"
         "exit_mode": "break_hma",
+        "block_loss_exit_before_partial": True,
         # Injected by engine
         "tick_size": 0.25,
     }
@@ -85,6 +86,7 @@ class HMASSLOsciV2(HMASSLOsci):
         "max_candle_pct": [0.0, 0.5, 0.9],
         "hw_partial_pct": [0.0, 25.0, 50.0],
         "tick_buffer": [0, 1, 2],
+        "block_loss_exit_before_partial": [True, False],
     }
 
     def get_simulator_settings(self, params=None):
@@ -94,6 +96,9 @@ class HMASSLOsciV2(HMASSLOsci):
         settings["tp1_partial_pct"] = float(p.get("hw_partial_pct", 25.0)) / 100.0
         settings["tp2_partial_pct"] = 0.0
         settings["canal_exit_mode"] = p.get("exit_mode", "break_hma")
+        settings["block_loss_canal_exit_before_tp1"] = bool(
+            p.get("block_loss_exit_before_partial", True)
+        )
         return settings
 
     @staticmethod
@@ -168,6 +173,8 @@ class HMASSLOsciV2(HMASSLOsci):
 
         np_close = close.values
         np_open = open_.values
+        np_high = high.values
+        np_low = low.values
         np_hma1 = hma1_s.values
         np_hma2 = hma2_s.values
         np_canal_upper = canal_upper_s.values
@@ -197,6 +204,10 @@ class HMASSLOsciV2(HMASSLOsci):
         sl_short_arr = np.full(n, np.nan)
         tp1_long_arr = np.full(n, np.nan)
         tp1_short_arr = np.full(n, np.nan)
+        logical_sl_long_arr = np.zeros(n, dtype=bool)
+        logical_sl_short_arr = np.zeros(n, dtype=bool)
+        signal_candle_sl_long_ok_arr = np.zeros(n, dtype=bool)
+        signal_candle_sl_short_ok_arr = np.zeros(n, dtype=bool)
 
         hw_cross_over_arr = np.zeros(n, dtype=bool)
         hw_cross_under_arr = np.zeros(n, dtype=bool)
@@ -440,14 +451,22 @@ class HMASSLOsciV2(HMASSLOsci):
 
             sl_dist_long = c - sl_raw_long
             sl_dist_short = sl_raw_short - c
+            logical_sl_long = not np.isnan(sl_raw_long) and sl_raw_long < c
+            logical_sl_short = not np.isnan(sl_raw_short) and sl_raw_short > c
+            signal_candle_sl_long_ok = logical_sl_long and np_low[i] > sl_raw_long
+            signal_candle_sl_short_ok = logical_sl_short and np_high[i] < sl_raw_short
+            logical_sl_long_arr[i] = logical_sl_long
+            logical_sl_short_arr[i] = logical_sl_short
+            signal_candle_sl_long_ok_arr[i] = signal_candle_sl_long_ok
+            signal_candle_sl_short_ok_arr[i] = signal_candle_sl_short_ok
             sl_long_ok = (
-                not np.isnan(sl_raw_long)
-                and sl_raw_long < c
+                logical_sl_long
+                and signal_candle_sl_long_ok
                 and sl_dist_long <= max_sl_points
             )
             sl_short_ok = (
-                not np.isnan(sl_raw_short)
-                and sl_raw_short > c
+                logical_sl_short
+                and signal_candle_sl_short_ok
                 and sl_dist_short <= max_sl_points
             )
 
@@ -510,6 +529,10 @@ class HMASSLOsciV2(HMASSLOsci):
                 "hma_bull_recent": hma_bull_recent_arr.astype(int),
                 "hma_bear_recent": hma_bear_recent_arr.astype(int),
                 "last_cross_lvl_hma": last_cross_lvl_hma_arr,
+                "logical_sl_long": logical_sl_long_arr.astype(int),
+                "logical_sl_short": logical_sl_short_arr.astype(int),
+                "signal_candle_sl_long_ok": signal_candle_sl_long_ok_arr.astype(int),
+                "signal_candle_sl_short_ok": signal_candle_sl_short_ok_arr.astype(int),
                 "long_entry_signal": long_entries.astype(int),
                 "short_entry_signal": short_entries.astype(int),
                 "sl_long": sl_long_arr,

@@ -61,6 +61,7 @@ class SimulatorConfig:
     tp1_full_exit: bool = False          # if True, TP1 closes entire position (no partial); no breakeven move
     inverse_canal_exit: bool = False     # if True, LONG exits when close>upper, SHORT exits when close<lower
     canal_exit_mode: str = "both_hma"    # "both_hma" (default), "break_hma", or "inversion_hma"
+    block_loss_canal_exit_before_tp1: bool = False  # if True, ignore losing HMA exits until TP1/partial
 
     daily_win_limit_enabled: bool = False
     daily_win_limit: float = 500.0
@@ -968,6 +969,14 @@ def simulate(
             cu = np_canal_upper[bar_idx] if bar_idx < len(np_canal_upper) else np.nan
             is_inversion_mode = config.canal_exit_mode in ("inversion_hma", "both_hma")
             is_break_mode = config.canal_exit_mode in ("break_hma", "both_hma")
+            allow_canal_exit = (
+                not config.block_loss_canal_exit_before_tp1
+                or pos.tp1_hit
+                or (
+                    (pos.side == 1 and close_price >= pos.entry_price)
+                    or (pos.side == -1 and close_price <= pos.entry_price)
+                )
+            )
             if not np.isnan(cl) and not np.isnan(cu):
                 if not config.inverse_canal_exit and not is_inversion_mode and not has_fixed_tp2 and config.tp2_partial_pct > 0 and pos.tp1_hit and not pos.tp2_hit:
                     if has_ssl_tp2:
@@ -987,10 +996,10 @@ def simulate(
                             pos.tp2_hit = True
                 if pos is not None:
                     if config.inverse_canal_exit:
-                        if pos.side == 1 and close_price > cu:
+                        if pos.side == 1 and close_price > cu and allow_canal_exit:
                             _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
                             return True
-                        elif pos.side == -1 and close_price < cl:
+                        elif pos.side == -1 and close_price < cl and allow_canal_exit:
                             _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
                             return True
                     else:
@@ -1005,7 +1014,7 @@ def simulate(
                             elif np_canal_green is not None and bar_idx < len(np_canal_green):
                                 cg = bool(np_canal_green[bar_idx])
                                 inversion_exit = (pos.side == 1 and not cg) or (pos.side == -1 and cg)
-                            if inversion_exit:
+                            if inversion_exit and allow_canal_exit:
                                 _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
                                 return True
                         # Break check: exit when close crosses canal boundary
@@ -1016,10 +1025,20 @@ def simulate(
                                 elif pos.side == -1 and close_price < cl:
                                     pos.canal_exit_armed = True
                             break_ready = pos.canal_exit_armed if canal_exit_requires_arming else True
-                            if break_ready and pos.side == 1 and close_price < cl:
+                            if (
+                                break_ready
+                                and pos.side == 1
+                                and close_price < cl
+                                and allow_canal_exit
+                            ):
                                 _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
                                 return True
-                            elif break_ready and pos.side == -1 and close_price > cu:
+                            elif (
+                                break_ready
+                                and pos.side == -1
+                                and close_price > cu
+                                and allow_canal_exit
+                            ):
                                 _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
                                 return True
                     if (

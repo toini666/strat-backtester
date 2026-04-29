@@ -163,6 +163,7 @@ def _install_fake_indicators(
 def test_hma_ssl_osci_v2_uses_counter_hma_polarity_without_v1_ssl_gate(monkeypatch):
     data = _build_data()
     params = _params()
+    params["hma_side_on"] = False
     signal_idx = 30
 
     _install_fake_indicators(
@@ -242,3 +243,34 @@ def test_hma_ssl_osci_v2_uses_shared_last_hma_cross_level_for_stop(monkeypatch):
 
     assert v2["long_entries"].iloc[signal_idx]
     assert v2["sl_long"].iloc[signal_idx] == 105.0
+
+
+def test_hma_ssl_osci_v2_rejects_long_when_signal_candle_already_hit_selected_sl(monkeypatch):
+    data = _build_data()
+    params = _params()
+    signal_idx = 30
+
+    _install_fake_indicators(
+        monkeypatch,
+        data,
+        signal_idx=signal_idx,
+        close_signal=112.0,
+        canal_upper_signal=110.0,
+        canal_lower_signal=101.0,
+        bbmc_signal=100.0,
+        ssl_upper_signal=100.5,
+        ssl_lower_signal=98.0,
+        signal_canal_green=False,
+        flip_direction="down",
+        flip_gap=6,
+        flip_avg=105.0,
+    )
+    data.loc[data.index[signal_idx], "Low"] = 105.0
+
+    v2 = HMASSLOsciV2().generate_signals(data.copy(), params)
+    debug = v2["debug_frame"].iloc[signal_idx]
+
+    assert not v2["long_entries"].iloc[signal_idx]
+    assert np.isnan(v2["sl_long"].iloc[signal_idx])
+    assert debug["logical_sl_long"] == 1
+    assert debug["signal_candle_sl_long_ok"] == 0
