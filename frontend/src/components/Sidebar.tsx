@@ -34,6 +34,8 @@ interface SidebarProps {
     setInitialEquity: (v: number) => void;
     /** When true, equity is shown but cannot be edited (shared in multi mode, slot 2) */
     equityReadOnly?: boolean;
+    /** When true, daily win/loss limits are shown but cannot be edited (shared in multi mode, slot 2) */
+    dailyLimitsReadOnly?: boolean;
     riskPerTrade: number;
     setRiskPerTrade: (v: number) => void;
     maxContracts: number;
@@ -105,6 +107,7 @@ export function Sidebar({
     initialEquity,
     setInitialEquity,
     equityReadOnly = false,
+    dailyLimitsReadOnly = false,
     riskPerTrade,
     setRiskPerTrade,
     maxContracts,
@@ -508,10 +511,12 @@ export function Sidebar({
                                     <input
                                         type="checkbox"
                                         checked={engineSettings.daily_win_limit_enabled}
+                                        disabled={dailyLimitsReadOnly}
                                         onChange={(e) => setEngineSettings((prev) => ({ ...prev, daily_win_limit_enabled: e.target.checked }))}
                                         className="rounded border-gray-600 bg-gray-900 text-emerald-500 focus:ring-emerald-500"
                                     />
                                     Max Daily Win ($)
+                                    {dailyLimitsReadOnly && <Lock className="w-3 h-3 text-gray-600" />}
                                 </label>
                                 <input
                                     type="number"
@@ -519,9 +524,12 @@ export function Sidebar({
                                     min={0}
                                     step={50}
                                     value={engineSettings.daily_win_limit}
-                                    disabled={!engineSettings.daily_win_limit_enabled}
+                                    disabled={!engineSettings.daily_win_limit_enabled || dailyLimitsReadOnly}
                                     onChange={(e) => setEngineSettings((prev) => ({ ...prev, daily_win_limit: Number(e.target.value) }))}
                                 />
+                                {dailyLimitsReadOnly && (
+                                    <p className="text-xs text-gray-600 mt-1">Partagé avec {slotLabel[0]}</p>
+                                )}
                             </div>
 
                             <div>
@@ -529,10 +537,12 @@ export function Sidebar({
                                     <input
                                         type="checkbox"
                                         checked={engineSettings.daily_loss_limit_enabled}
+                                        disabled={dailyLimitsReadOnly}
                                         onChange={(e) => setEngineSettings((prev) => ({ ...prev, daily_loss_limit_enabled: e.target.checked }))}
                                         className="rounded border-gray-600 bg-gray-900 text-red-500 focus:ring-red-500"
                                     />
                                     Max Daily Loss ($)
+                                    {dailyLimitsReadOnly && <Lock className="w-3 h-3 text-gray-600" />}
                                 </label>
                                 <input
                                     type="number"
@@ -540,7 +550,7 @@ export function Sidebar({
                                     min={0}
                                     step={50}
                                     value={engineSettings.daily_loss_limit}
-                                    disabled={!engineSettings.daily_loss_limit_enabled}
+                                    disabled={!engineSettings.daily_loss_limit_enabled || dailyLimitsReadOnly}
                                     onChange={(e) => setEngineSettings((prev) => ({ ...prev, daily_loss_limit: Number(e.target.value) }))}
                                 />
                             </div>

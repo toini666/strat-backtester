@@ -955,6 +955,95 @@ def _compute_combined_equity_curve(initial_equity: float, trades: List[Dict[str,
     return curve
 
 
+def _apply_combined_daily_limits(
+    trades1: List[Dict[str, Any]],
+    trades2: List[Dict[str, Any]],
+    engine_settings: "BacktestEngineSettings",
+) -> tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """
+    Re-apply daily win/loss limits on a combined basis across both trade streams.
+
+    Each asset's simulator tracked daily PnL independently, so the per-asset
+    exclusions may be wrong when both assets share one account. This function
+    resets those per-asset exclusions and re-evaluates from scratch using the
+    combined PnL across both streams.
+
+    Algorithm: process ENTRY and EXIT events in chronological order.
+    At each EXIT (non-excluded), accrue that trade's PnL to the day's total.
+    At each ENTRY, check whether the combined daily limit is already reached;
+    if so, mark the trade excluded.
+    Exits at the same timestamp as entries are processed first, so a
+    limit-triggering close blocks a same-bar entry.
+
+    Returns (merged_trades_with_corrected_exclusions, daily_limits_hit_dict).
+    """
+    win_enabled = engine_settings.daily_win_limit_enabled
+    win_limit = engine_settings.daily_win_limit
+    loss_enabled = engine_settings.daily_loss_limit_enabled
+    loss_limit = engine_settings.daily_loss_limit
+
+    def _get_date(ts_str: str) -> str:
+        ts = pd.Timestamp(ts_str)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize(BACKTEST_TZ)
+        return str(ts.tz_convert(BACKTEST_TZ).date())
+
+    # Reset per-asset exclusions so we start from a clean slate.
+    all_trades = trades1 + trades2
+    for t in all_trades:
+        t["excluded"] = False
+
+    if not win_enabled and not loss_enabled:
+        merged = sorted(all_trades, key=lambda t: t["entry_time"])
+        return merged, {}
+
+    # Build a flat event list: (time_str, kind, trade)
+    # kind=0 → EXIT (processed before ENTRY at equal timestamps)
+    # kind=1 → ENTRY
+    events: List[tuple] = []
+    for trade in all_trades:
+        events.append((trade["entry_time"], 1, trade))
+        exit_time = trade.get("exit_execution_time") or trade["exit_time"]
+        events.append((exit_time, 0, trade))
+
+    events.sort(key=lambda e: (e[0], e[1]))
+
+    daily_pnl: Dict[str, float] = {}
+    daily_limit_reached: Dict[str, bool] = {}
+
+    def _check_limit(date_str: str) -> bool:
+        if date_str in daily_limit_reached:
+            return True
+        pnl = daily_pnl.get(date_str, 0.0)
+        if win_enabled and pnl >= win_limit:
+            daily_limit_reached[date_str] = True
+            return True
+        if loss_enabled and pnl <= -loss_limit:
+            daily_limit_reached[date_str] = True
+            return True
+        return False
+
+    for time_str, kind, trade in events:
+        if kind == 0:  # EXIT
+            if not trade["excluded"]:
+                date_str = _get_date(time_str)
+                daily_pnl[date_str] = daily_pnl.get(date_str, 0.0) + trade["pnl"]
+                _check_limit(date_str)
+        else:  # ENTRY
+            date_str = _get_date(time_str)
+            if _check_limit(date_str):
+                trade["excluded"] = True
+
+    merged = sorted(all_trades, key=lambda t: t["entry_time"])
+
+    daily_limits_hit: Dict[str, str] = {}
+    for date_str in daily_limit_reached:
+        pnl = daily_pnl.get(date_str, 0.0)
+        daily_limits_hit[date_str] = "win" if pnl >= 0 else "loss"
+
+    return merged, daily_limits_hit
+
+
 def _apply_shared_position_lock(
     trades1: List[Dict[str, Any]],
     trades2: List[Dict[str, Any]],
@@ -1106,11 +1195,22 @@ def run_multi_backtest(req: MultiBacktestRequest):
     trades1 = result1.get("trades", [])
     trades2 = result2.get("trades", [])
 
+    daily_limits_hit: Dict[str, str] = {}
     if req.mode == "multi_strat":
+        # Step 1: enforce one-position-at-a-time across both strategy streams.
         merged_trades, _ = _apply_shared_position_lock(trades1, trades2)
+        # Step 2: re-apply daily limits on a combined basis across both streams.
+        # Per-asset simulators tracked daily PnL independently, so their exclusions
+        # must be reset and re-evaluated against the shared account total.
+        merged_trades, daily_limits_hit = _apply_combined_daily_limits(
+            merged_trades, [], cfg1.engine_settings
+        )
     else:
-        # multi_asset: both run fully independently
-        merged_trades = sorted(trades1 + trades2, key=lambda t: t["entry_time"])
+        # multi_asset: re-apply daily limits on a combined basis so that losses
+        # on both assets count toward the same account-level daily limit.
+        merged_trades, daily_limits_hit = _apply_combined_daily_limits(
+            trades1, trades2, cfg1.engine_settings
+        )
 
     combined_metrics = _compute_combined_metrics(req.initial_equity, merged_trades)
     combined_curve = _compute_combined_equity_curve(req.initial_equity, merged_trades)
@@ -1152,6 +1252,7 @@ def run_multi_backtest(req: MultiBacktestRequest):
         metrics=combined_metrics,
         trades=trade_objects,
         equity_curve=combined_curve,
+        daily_limits_hit=daily_limits_hit,
         config_results=config_results,
     )
 

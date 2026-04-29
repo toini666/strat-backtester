@@ -655,6 +655,7 @@ function App() {
             initialEquity={initialEquity}
             setInitialEquity={setInitialEquity}
             equityReadOnly={isMulti && activeSlot === 1}
+            dailyLimitsReadOnly={isMulti && activeSlot === 1}
             riskPerTrade={sidebarRiskPerTrade}
             setRiskPerTrade={sidebarSetRiskPerTrade}
             maxContracts={sidebarMaxContracts}

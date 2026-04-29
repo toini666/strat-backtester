@@ -13,7 +13,15 @@ from pydantic import ValidationError
 
 # Import after path setup
 from backend.main import app
-from backend.api import BacktestRequest, SIGNAL_CACHE, _annotate_blackout_flags, get_session
+from backend.api import (
+    BacktestRequest,
+    SIGNAL_CACHE,
+    _annotate_blackout_flags,
+    get_session,
+    _apply_combined_daily_limits,
+    _apply_shared_position_lock,
+    BacktestEngineSettings,
+)
 from src.engine.simulator import BlackoutWindow
 
 
@@ -321,3 +329,178 @@ class TestResimulateEndpoint:
         finally:
             SIGNAL_CACHE.clear()
             SIGNAL_CACHE.update(original_cache)
+
+
+def _make_trade(entry_time, exit_time, pnl, excluded=False, source="1"):
+    """Helper: minimal trade dict for daily-limit tests."""
+    return {
+        "entry_time": entry_time,
+        "entry_execution_time": entry_time,
+        "exit_time": exit_time,
+        "exit_execution_time": exit_time,
+        "pnl": pnl,
+        "gross_pnl": pnl,
+        "fees": 0.0,
+        "side": "Long",
+        "entry_price": 100.0,
+        "exit_price": 100.0,
+        "size": 1.0,
+        "pnl_pct": 0.0,
+        "status": "SL",
+        "session": "US",
+        "legs": [],
+        "excluded": excluded,
+        "source": source,
+    }
+
+
+class TestCombinedDailyLimits:
+    """Unit tests for _apply_combined_daily_limits (multi-asset mode)."""
+
+    def _settings(self, loss_limit=None, win_limit=None):
+        return BacktestEngineSettings(
+            daily_loss_limit_enabled=loss_limit is not None,
+            daily_loss_limit=loss_limit or 700.0,
+            daily_win_limit_enabled=win_limit is not None,
+            daily_win_limit=win_limit or 500.0,
+        )
+
+    def test_blocks_entry_after_combined_loss_limit_exceeded(self):
+        """
+        Exact user scenario: $500 daily loss limit.
+        Asset 1 loses $200, asset 2 loses $400 → combined -$600 > $500.
+        Any entry after the second loss should be blocked on both assets.
+        """
+        day = "2024-01-15"
+        t1 = _make_trade(f"{day}T09:00:00+01:00", f"{day}T10:00:00+01:00", -200.0, source="1")
+        t2 = _make_trade(f"{day}T10:30:00+01:00", f"{day}T11:30:00+01:00", -400.0, source="2")
+        t3 = _make_trade(f"{day}T12:00:00+01:00", f"{day}T13:00:00+01:00", +100.0, source="1")
+        t4 = _make_trade(f"{day}T12:30:00+01:00", f"{day}T13:30:00+01:00", +100.0, source="2")
+
+        merged, limits_hit = _apply_combined_daily_limits(
+            [t1, t3], [t2, t4], self._settings(loss_limit=500.0)
+        )
+
+        assert not t1["excluded"], "t1 entered before limit was hit"
+        assert not t2["excluded"], "t2 entered before limit was hit (limit triggers at exit)"
+        assert t3["excluded"], "t3 should be blocked: combined -$600 exceeded $500 limit"
+        assert t4["excluded"], "t4 should be blocked: combined -$600 exceeded $500 limit"
+        assert day in limits_hit
+        assert limits_hit[day] == "loss"
+
+    def test_no_block_when_combined_stays_under_limit(self):
+        """Combined PnL -$400 stays under $500 limit → no trades blocked."""
+        day = "2024-01-15"
+        t1 = _make_trade(f"{day}T09:00:00+01:00", f"{day}T10:00:00+01:00", -200.0, source="1")
+        t2 = _make_trade(f"{day}T10:30:00+01:00", f"{day}T11:30:00+01:00", -200.0, source="2")
+        t3 = _make_trade(f"{day}T12:00:00+01:00", f"{day}T13:00:00+01:00", +50.0, source="1")
+
+        merged, limits_hit = _apply_combined_daily_limits(
+            [t1, t3], [t2], self._settings(loss_limit=500.0)
+        )
+
+        assert not any(t["excluded"] for t in [t1, t2, t3])
+        assert limits_hit == {}
+
+    def test_resets_per_asset_exclusion_when_combined_still_under_limit(self):
+        """
+        Per-asset simulator wrongly excluded t3 (asset 1 alone hit $500).
+        Combined PnL is only -$400 when t3 enters → t3 should be un-excluded.
+        """
+        day = "2024-01-15"
+        # Asset 1 loses $600 total: t1=-$300, t2=-$300 → per-asset excludes t3
+        t1 = _make_trade(f"{day}T09:00:00+01:00", f"{day}T10:00:00+01:00", -300.0, source="1")
+        t2 = _make_trade(f"{day}T10:00:00+01:00", f"{day}T11:00:00+01:00", -300.0, source="1")
+        # t3 was excluded by per-asset run; combined PnL at entry is -$600 → still excluded
+        t3 = _make_trade(f"{day}T11:30:00+01:00", f"{day}T12:30:00+01:00", +100.0, excluded=True, source="1")
+        # Asset 2: no trades — combined limit already hit at -$600
+        merged, limits_hit = _apply_combined_daily_limits(
+            [t1, t2, t3], [], self._settings(loss_limit=500.0)
+        )
+        # t1+t2 combined -$600 → limit hit before t3's entry
+        assert t3["excluded"]
+
+    def test_no_limits_enabled_returns_all_active(self):
+        """When daily limits are disabled, no trades should be excluded."""
+        day = "2024-01-15"
+        t1 = _make_trade(f"{day}T09:00:00+01:00", f"{day}T10:00:00+01:00", -800.0, source="1")
+        t2 = _make_trade(f"{day}T11:00:00+01:00", f"{day}T12:00:00+01:00", -800.0, source="2")
+        t3 = _make_trade(f"{day}T13:00:00+01:00", f"{day}T14:00:00+01:00", +100.0, source="1")
+
+        merged, limits_hit = _apply_combined_daily_limits(
+            [t1, t3], [t2], BacktestEngineSettings()
+        )
+
+        assert not any(t["excluded"] for t in [t1, t2, t3])
+        assert limits_hit == {}
+
+    def test_win_limit_blocks_entries_after_daily_gain_exceeded(self):
+        """Daily win limit: after combined +$600 > $500, further entries are blocked."""
+        day = "2024-01-15"
+        t1 = _make_trade(f"{day}T09:00:00+01:00", f"{day}T10:00:00+01:00", +300.0, source="1")
+        t2 = _make_trade(f"{day}T10:30:00+01:00", f"{day}T11:30:00+01:00", +300.0, source="2")
+        t3 = _make_trade(f"{day}T12:00:00+01:00", f"{day}T13:00:00+01:00", +100.0, source="1")
+
+        merged, limits_hit = _apply_combined_daily_limits(
+            [t1, t3], [t2], self._settings(win_limit=500.0)
+        )
+
+        assert not t1["excluded"]
+        assert not t2["excluded"]
+        assert t3["excluded"], "t3 should be blocked: combined +$600 exceeded $500 win limit"
+        assert limits_hit.get(day) == "win"
+
+
+class TestMultiStratCombinedDailyLimits:
+    """
+    Combined daily limits for multi_strat: position lock runs first, then
+    combined daily limits are re-applied on the accepted trades.
+    """
+
+    def _settings(self, loss_limit=None):
+        return BacktestEngineSettings(
+            daily_loss_limit_enabled=loss_limit is not None,
+            daily_loss_limit=loss_limit or 700.0,
+        )
+
+    def test_combined_loss_blocks_entry_after_both_strategies_contribute(self):
+        """
+        Strategy A loses $300, strategy B loses $300 → combined -$600 > $500 limit.
+        A subsequent entry from either strategy should be blocked.
+        The position lock allows one-at-a-time; after lock, combined daily
+        limits should mark further entries excluded.
+        """
+        day = "2024-01-15"
+        # Non-overlapping trades so position lock accepts all of them.
+        tA1 = _make_trade(f"{day}T09:00:00+01:00", f"{day}T10:00:00+01:00", -300.0, source="1")
+        tB1 = _make_trade(f"{day}T10:30:00+01:00", f"{day}T11:30:00+01:00", -300.0, source="2")
+        tA2 = _make_trade(f"{day}T12:00:00+01:00", f"{day}T13:00:00+01:00", +100.0, source="1")
+
+        # Simulate the multi_strat pipeline: position lock then combined limits.
+        accepted, _ = _apply_shared_position_lock([tA1, tA2], [tB1])
+        merged, limits_hit = _apply_combined_daily_limits(accepted, [], self._settings(loss_limit=500.0))
+
+        assert not tA1["excluded"]
+        assert not tB1["excluded"]
+        assert tA2["excluded"], "tA2 should be blocked: combined -$600 exceeded $500 limit"
+        assert day in limits_hit
+
+    def test_position_lock_blocked_trades_do_not_affect_daily_pnl(self):
+        """
+        A trade blocked by the position lock (overlapping) should not contribute
+        to the daily PnL used for the combined limit check.
+        """
+        day = "2024-01-15"
+        # tA1 and tB1 overlap → position lock drops tB1.
+        tA1 = _make_trade(f"{day}T09:00:00+01:00", f"{day}T12:00:00+01:00", -400.0, source="1")
+        tB1 = _make_trade(f"{day}T10:00:00+01:00", f"{day}T11:00:00+01:00", -400.0, source="2")
+        tA2 = _make_trade(f"{day}T13:00:00+01:00", f"{day}T14:00:00+01:00", +50.0, source="1")
+
+        accepted, _ = _apply_shared_position_lock([tA1, tA2], [tB1])
+        # tB1 is dropped by lock; only tA1 (-$400) and tA2 are accepted.
+        # Combined PnL at tA2 entry is -$400, under the $500 limit.
+        merged, limits_hit = _apply_combined_daily_limits(accepted, [], self._settings(loss_limit=500.0))
+
+        assert tB1 not in merged, "tB1 should have been dropped by position lock"
+        assert not tA1["excluded"]
+        assert not tA2["excluded"], "tA2 should be allowed: only -$400 in accepted trades"

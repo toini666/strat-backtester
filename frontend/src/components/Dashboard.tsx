@@ -144,7 +144,9 @@ export function Dashboard({
 
     const { metrics, equity_curve, trades } = activeResult;
     const debugFile = !isMulti ? (filteredResult as BacktestResult)?.debug_file : null;
-    const dailyLimitsHit = !isMulti ? (filteredResult as BacktestResult)?.daily_limits_hit : undefined;
+    const dailyLimitsHit = isMulti
+        ? multiResult?.daily_limits_hit
+        : (filteredResult as BacktestResult)?.daily_limits_hit;
 
     const returnDelta = previousMetrics ? computeDelta(metrics.total_return, previousMetrics.total_return, '%', true) : null;
     const winRateDelta = previousMetrics ? computeDelta(metrics.win_rate, previousMetrics.win_rate, '%', true) : null;
