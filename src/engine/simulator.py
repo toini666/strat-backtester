@@ -62,6 +62,7 @@ class SimulatorConfig:
     inverse_canal_exit: bool = False     # if True, LONG exits when close>upper, SHORT exits when close<lower
     canal_exit_mode: str = "both_hma"    # "both_hma" (default), "break_hma", or "inversion_hma"
     block_loss_canal_exit_before_tp1: bool = False  # if True, ignore losing HMA exits until TP1/partial
+    close_partial_min_rr: float = 0.0     # minimum current RR for close-based partial exits; 0 disables
 
     daily_win_limit_enabled: bool = False
     daily_win_limit: float = 500.0
@@ -97,6 +98,7 @@ class _Position:
     trailing_active: bool = False     # whether trailing SL is active
     sl_buffer_st: float = 0.0        # buffer for Supertrend trailing SL
     canal_exit_armed: bool = False    # for HMA break exits that require first reaching the profit side
+    initial_stop_price: float = 0.0  # stop price at entry, never modified (used for partial RR calc)
 
 
 # ---------------------------------------------------------------------------
@@ -1045,16 +1047,28 @@ def simulate(
                         pos is not None
                         and has_close_partial
                         and config.tp1_partial_pct > 0
-                        and (
-                            (pos.side == 1 and bool(np_partial_close_long[bar_idx]) and close_price > pos.entry_price)
-                            or (pos.side == -1 and bool(np_partial_close_short[bar_idx]) and close_price < pos.entry_price)
-                        )
                     ):
-                        first_partial = not pos.tp1_hit
-                        _partial_exit(close_price, config.tp1_partial_pct, "TP_HW", exit_bar_time, exit_exec_time)
-                        if first_partial and pos is not None:
-                            pos.tp1_hit = True
-                            pos.stop_price = pos.entry_price
+                        if pos.side == 1:
+                            partial_signal = bool(np_partial_close_long[bar_idx]) and close_price > pos.entry_price
+                            partial_risk = pos.entry_price - pos.initial_stop_price
+                            partial_reward = close_price - pos.entry_price
+                        else:
+                            partial_signal = bool(np_partial_close_short[bar_idx]) and close_price < pos.entry_price
+                            partial_risk = pos.initial_stop_price - pos.entry_price
+                            partial_reward = pos.entry_price - close_price
+                        partial_rr_ok = (
+                            config.close_partial_min_rr == 0.0
+                            or (
+                                partial_risk > 0
+                                and partial_reward / partial_risk >= config.close_partial_min_rr
+                            )
+                        )
+                        if partial_signal and partial_rr_ok:
+                            first_partial = not pos.tp1_hit
+                            _partial_exit(close_price, config.tp1_partial_pct, "TP_HW", exit_bar_time, exit_exec_time)
+                            if first_partial and pos is not None:
+                                pos.tp1_hit = True
+                                pos.stop_price = pos.entry_price
             return pos is None
 
         ema_val = np_ema[bar_idx] if bar_idx < len(np_ema) else np.nan
@@ -1195,6 +1209,7 @@ def simulate(
                     initial_risk=abs(entry_price - sl_price) if has_supertrend else 0.0,
                     rr_trailing=sig_rr_trailing,
                     sl_buffer_st=sig_sl_buffer,
+                    initial_stop_price=sl_price,
                     canal_exit_armed=(
                         bool(
                             canal_exit_requires_arming
@@ -1239,6 +1254,7 @@ def simulate(
                     initial_risk=abs(sl_price - entry_price) if has_supertrend else 0.0,
                     rr_trailing=sig_rr_trailing,
                     sl_buffer_st=sig_sl_buffer,
+                    initial_stop_price=sl_price,
                     canal_exit_armed=(
                         bool(
                             canal_exit_requires_arming

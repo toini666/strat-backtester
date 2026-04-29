@@ -55,6 +55,7 @@ i_maxSlPoints  = input.float(300.0,"Distance SL max (points)",     group=grp_ris
 i_cooldownBars = input.int(1,      "Bougies d'attente post-close", group=grp_risk, minval=0)
 i_maxCandlePct = input.float(0.9,  "Taille max bougie Entry (%)",  group=grp_risk, step=0.1, minval=0.0, tooltip="Trade ignoré si abs(close - open) / close > N%. 0 = désactivé.")
 i_hwPartialPct = input.float(25.0, "TP partiel Hyperwave (%)",     group=grp_risk, minval=0.0, maxval=100.0, step=0.5, tooltip="Taille cible côté indicateur. Le JSON PARTIAL reste standard; l'exécution utilise la configuration PARTIAL du bot.")
+i_hwPartialMinRr = input.float(0.0, "RR min TP partiel Hyperwave", group=grp_risk, minval=0.0, step=0.25, tooltip="TP partiel Hyperwave ignoré si le RR courant est inférieur à ce seuil. 0 = désactivé.")
 simple string i_exitMode = input.string("Break HMA", "Mode de clôture TP Final", group=grp_risk, options=["Break ou Inversion", "Break HMA", "Inversion HMA"], tooltip="Break ou Inversion : clôture dès que l'un des deux signaux se déclenche. Break HMA : clôture quand le prix sort de l'autre côté du canal. Inversion HMA : clôture quand le canal change de couleur.")
 i_blockLossExitBeforePartial = input.bool(true, "Bloquer clôture finale en perte avant TP partiel", group=grp_risk, tooltip="Si activé, un signal de clôture finale HMA/inversion est ignoré tant que le TP partiel n'a pas été pris et que le trade est en perte. Le SL et le BE restent inchangés.")
 
@@ -146,6 +147,7 @@ var int   lastActionBar     = -1
 var bool  tpPartialHit      = false
 var bool  hmaExitArmed      = false
 var int   lastCloseBarIndex = -9999
+var float initialStopPrice  = na
 
 var line lineEntry = na
 var line lineStop  = na
@@ -454,26 +456,28 @@ if positionActive and i_autoCloseOn and autoCloseBar and canAct
 
 // --- 1. ENTRÉE LONGUE ---
 if not positionActive and finalLongEntry and canAct and not inBlackout
-    positionActive := true
-    currentSide    := 1
-    entryPrice     := roundToTick(calcEntryLong)
-    stopPrice      := roundToTick(calcStopLong)
-    lastActionBar  := bar_index
-    tpPartialHit   := false
-    hmaExitArmed   := close > canalUpper
+    positionActive   := true
+    currentSide      := 1
+    entryPrice       := roundToTick(calcEntryLong)
+    stopPrice        := roundToTick(calcStopLong)
+    initialStopPrice := roundToTick(calcStopLong)
+    lastActionBar    := bar_index
+    tpPartialHit     := false
+    hmaExitArmed     := close > canalUpper
     lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue,   style=line.style_dotted, width=1)
     lineStop  := line.new(bar_index, stopPrice,  bar_index + 1, stopPrice,  color=color.red,    style=line.style_dotted, width=1)
     alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
 
 // --- 2. ENTRÉE COURTE ---
 else if not positionActive and finalShortEntry and canAct and not inBlackout
-    positionActive := true
-    currentSide    := -1
-    entryPrice     := roundToTick(calcEntryShort)
-    stopPrice      := roundToTick(calcStopShort)
-    lastActionBar  := bar_index
-    tpPartialHit   := false
-    hmaExitArmed   := close < canalLower
+    positionActive   := true
+    currentSide      := -1
+    entryPrice       := roundToTick(calcEntryShort)
+    stopPrice        := roundToTick(calcStopShort)
+    initialStopPrice := roundToTick(calcStopShort)
+    lastActionBar    := bar_index
+    tpPartialHit     := false
+    hmaExitArmed     := close < canalLower
     lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue,   style=line.style_dotted, width=1)
     lineStop  := line.new(bar_index, stopPrice,  bar_index + 1, stopPrice,  color=color.red,    style=line.style_dotted, width=1)
     alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
@@ -508,7 +512,10 @@ if positionActive and canAct and bar_index > lastActionBar
         if exitCondLong and allowFinalExitLong and not hitBreakeven and not hitStopLoss
             hitCanalExit := true
 
-        if i_hwPartialPct > 0 and hwCrossUnder and close > entryPrice and not hitCanalExit and not hitBreakeven and not hitStopLoss
+        float partialRiskLong = entryPrice - initialStopPrice
+        float partialRewardLong = close - entryPrice
+        bool partialRrLongOk = i_hwPartialMinRr == 0.0 or (partialRiskLong > 0 and partialRewardLong / partialRiskLong >= i_hwPartialMinRr)
+        if i_hwPartialPct > 0 and hwCrossUnder and close > entryPrice and partialRrLongOk and not hitCanalExit and not hitBreakeven and not hitStopLoss
             hwPartialJustHitLong := true
             if not tpPartialHit
                 tpPartialHit := true
@@ -535,7 +542,10 @@ if positionActive and canAct and bar_index > lastActionBar
         if exitCondShort and allowFinalExitShort and not hitBreakeven and not hitStopLoss
             hitCanalExit := true
 
-        if i_hwPartialPct > 0 and hwCrossOver and close < entryPrice and not hitCanalExit and not hitBreakeven and not hitStopLoss
+        float partialRiskShort = initialStopPrice - entryPrice
+        float partialRewardShort = entryPrice - close
+        bool partialRrShortOk = i_hwPartialMinRr == 0.0 or (partialRiskShort > 0 and partialRewardShort / partialRiskShort >= i_hwPartialMinRr)
+        if i_hwPartialPct > 0 and hwCrossOver and close < entryPrice and partialRrShortOk and not hitCanalExit and not hitBreakeven and not hitStopLoss
             hwPartialJustHitShort := true
             if not tpPartialHit
                 tpPartialHit := true

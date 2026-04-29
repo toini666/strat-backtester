@@ -274,3 +274,9 @@ def test_hma_ssl_osci_v2_rejects_long_when_signal_candle_already_hit_selected_sl
     assert np.isnan(v2["sl_long"].iloc[signal_idx])
     assert debug["logical_sl_long"] == 1
     assert debug["signal_candle_sl_long_ok"] == 0
+
+
+def test_hma_ssl_osci_v2_passes_hyperwave_partial_min_rr_to_simulator():
+    settings = HMASSLOsciV2().get_simulator_settings({"hw_partial_min_rr": 0.5})
+
+    assert settings["close_partial_min_rr"] == 0.5

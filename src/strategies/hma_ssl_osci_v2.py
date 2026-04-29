@@ -59,6 +59,7 @@ class HMASSLOsciV2(HMASSLOsci):
         "cooldown_bars": 1,
         "max_candle_pct": 0.9,
         "hw_partial_pct": 25.0,
+        "hw_partial_min_rr": 0.0,
         # "both_hma", "break_hma", or "inversion_hma"
         "exit_mode": "break_hma",
         "block_loss_exit_before_partial": True,
@@ -85,6 +86,7 @@ class HMASSLOsciV2(HMASSLOsci):
         "cooldown_bars": [0, 1, 2],
         "max_candle_pct": [0.0, 0.5, 0.9],
         "hw_partial_pct": [0.0, 25.0, 50.0],
+        "hw_partial_min_rr": [0.0, 0.5, 1.0],
         "tick_buffer": [0, 1, 2],
         "block_loss_exit_before_partial": [True, False],
     }
@@ -99,6 +101,7 @@ class HMASSLOsciV2(HMASSLOsci):
         settings["block_loss_canal_exit_before_tp1"] = bool(
             p.get("block_loss_exit_before_partial", True)
         )
+        settings["close_partial_min_rr"] = float(p.get("hw_partial_min_rr", 0.0))
         return settings
 
     @staticmethod

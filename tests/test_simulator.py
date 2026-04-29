@@ -210,6 +210,91 @@ def test_simulator_supports_close_based_hyperwave_partial_and_breakeven():
     assert trade["legs"][1]["exit_price"] == 100.0
 
 
+def test_simulator_applies_min_rr_to_close_based_hyperwave_partial():
+    index = pd.DatetimeIndex(
+        [
+            "2024-01-01 09:00:00+01:00",
+            "2024-01-01 09:05:00+01:00",
+            "2024-01-01 09:10:00+01:00",
+        ]
+    )
+    data = pd.DataFrame(
+        {
+            "Open": [100.0, 100.0, 100.4],
+            "High": [100.5, 100.6, 100.6],
+            "Low": [99.5, 100.2, 100.2],
+            "Close": [100.0, 100.4, 100.4],
+            "Volume": [1000, 1000, 1000],
+        },
+        index=index,
+    )
+    signals = {
+        "long_entries": _series([True, False, False], index),
+        "short_entries": _series([False, False, False], index),
+        "sl_long": _series([98.0, math.nan, math.nan], index),
+        "sl_short": _series([math.nan, math.nan, math.nan], index),
+        "tp1_long": _series([math.nan, math.nan, math.nan], index),
+        "tp1_short": _series([math.nan, math.nan, math.nan], index),
+        "disable_price_tp1": True,
+        "partial_close_long": _series([False, True, False], index),
+        "partial_close_short": _series([False, False, False], index),
+        "canal_lower": _series([90.0, 90.0, 90.0], index),
+        "canal_upper": _series([110.0, 110.0, 110.0], index),
+        "canal_green": _series([False, False, False], index),
+        "hma_flip_up": _series([False, False, False], index),
+        "hma_flip_down": _series([False, False, False], index),
+        "canal_exit_requires_arming": True,
+        "ema_main": _series([0.0, 0.0, 0.0], index),
+        "ema_secondary": _series([0.0, 0.0, 0.0], index),
+    }
+
+    blocked = simulate(
+        data=data,
+        data_1m=pd.DataFrame(columns=data.columns),
+        signals=signals,
+        config=SimulatorConfig(
+            initial_equity=10000.0,
+            risk_per_trade=0.01,
+            max_contracts=10,
+            tick_size=0.25,
+            tick_value=0.5,
+            point_value=2.0,
+            fee_per_trade=0.0,
+            tp1_partial_pct=0.25,
+            tp2_partial_pct=0.0,
+            auto_close_enabled=False,
+            canal_exit_mode="break_hma",
+            close_partial_min_rr=0.25,
+        ),
+        ema_main=signals["ema_main"],
+        ema_secondary=signals["ema_secondary"],
+    )
+    allowed = simulate(
+        data=data,
+        data_1m=pd.DataFrame(columns=data.columns),
+        signals=signals,
+        config=SimulatorConfig(
+            initial_equity=10000.0,
+            risk_per_trade=0.01,
+            max_contracts=10,
+            tick_size=0.25,
+            tick_value=0.5,
+            point_value=2.0,
+            fee_per_trade=0.0,
+            tp1_partial_pct=0.25,
+            tp2_partial_pct=0.0,
+            auto_close_enabled=False,
+            canal_exit_mode="break_hma",
+            close_partial_min_rr=0.0,
+        ),
+        ema_main=signals["ema_main"],
+        ema_secondary=signals["ema_secondary"],
+    )
+
+    assert [leg["status"] for leg in blocked["trades"][0]["legs"]] == ["End of Data"]
+    assert [leg["status"] for leg in allowed["trades"][0]["legs"]] == ["TP_HW", "End of Data"]
+
+
 def test_simulator_can_block_losing_hma_exit_before_close_based_partial():
     index = pd.DatetimeIndex(
         [
