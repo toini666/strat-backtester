@@ -54,6 +54,7 @@ simple string i_slMode = input.string("Mix", "Mode Stop Loss", group=grp_risk, o
 i_maxSlPoints  = input.float(300.0,"Distance SL max (points)",     group=grp_risk, minval=1.0, tooltip="Trade ignoré si le SL sélectionné se trouve à plus de N points.")
 i_cooldownBars = input.int(1,      "Bougies d'attente post-close", group=grp_risk, minval=0)
 i_maxCandlePct = input.float(0.9,  "Taille max bougie Entry (%)",  group=grp_risk, step=0.1, minval=0.0, tooltip="Trade ignoré si abs(close - open) / close > N%. 0 = désactivé.")
+i_signalCandleSlOn = input.bool(true, "Vérifier bougie signal vs SL", group=grp_risk, tooltip="Si activé, rejette les entrées où le low (long) ou le high (short) de la bougie d'entrée touche le SL.")
 i_hwPartialPct = input.float(25.0, "TP partiel Hyperwave (%)",     group=grp_risk, minval=0.0, maxval=100.0, step=0.5, tooltip="Taille cible côté indicateur. Le JSON PARTIAL reste standard; l'exécution utilise la configuration PARTIAL du bot.")
 i_hwPartialMinRr = input.float(0.0, "RR min TP partiel Hyperwave", group=grp_risk, minval=0.0, step=0.25, tooltip="TP partiel Hyperwave ignoré si le RR courant est inférieur à ce seuil. 0 = désactivé.")
 simple string i_exitMode = input.string("Break HMA", "Mode de clôture TP Final", group=grp_risk, options=["Break ou Inversion", "Break HMA", "Inversion HMA"], tooltip="Break ou Inversion : clôture dès que l'un des deux signaux se déclenche. Break HMA : clôture quand le prix sort de l'autre côté du canal. Inversion HMA : clôture quand le canal change de couleur.")
@@ -406,8 +407,8 @@ float slDistShort = slShort - close
 // On ignore le trade si le SL est incohérent (SL >= Prix pour Long ou SL <= Prix pour Short)
 bool logicalSlLong  = not na(slLong) and slLong < close
 bool logicalSlShort = not na(slShort) and slShort > close
-bool signalCandleSlLongOk  = logicalSlLong  and low > slLong
-bool signalCandleSlShortOk = logicalSlShort and high < slShort
+bool signalCandleSlLongOk  = not i_signalCandleSlOn or (logicalSlLong  and low > slLong)
+bool signalCandleSlShortOk = not i_signalCandleSlOn or (logicalSlShort and high < slShort)
 
 bool  slLongOk    = logicalSlLong  and signalCandleSlLongOk  and slDistLong  <= i_maxSlPoints
 bool  slShortOk   = logicalSlShort and signalCandleSlShortOk and slDistShort <= i_maxSlPoints

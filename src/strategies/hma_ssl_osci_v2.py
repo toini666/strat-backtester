@@ -58,6 +58,7 @@ class HMASSLOsciV2(HMASSLOsci):
         "max_sl_points": 300.0,
         "cooldown_bars": 1,
         "max_candle_pct": 0.9,
+        "signal_candle_sl_on": True,
         "hw_partial_pct": 25.0,
         "hw_partial_min_rr": 0.0,
         # "both_hma", "break_hma", or "inversion_hma"
@@ -89,6 +90,7 @@ class HMASSLOsciV2(HMASSLOsci):
         "hw_partial_min_rr": [0.0, 0.5, 1.0],
         "tick_buffer": [0, 1, 2],
         "block_loss_exit_before_partial": [True, False],
+        "signal_candle_sl_on": [True, False],
     }
 
     def get_simulator_settings(self, params=None):
@@ -149,6 +151,7 @@ class HMASSLOsciV2(HMASSLOsci):
         sl_mode = self._normalize_sl_mode(p.get("sl_mode", "cross_hma"))
         max_sl_points = p["max_sl_points"]
         max_candle_pct = p["max_candle_pct"]
+        signal_candle_sl_on = p.get("signal_candle_sl_on", True)
         hw_partial_enabled = float(p.get("hw_partial_pct", 25.0)) > 0
         tick_size = p["tick_size"]
 
@@ -456,8 +459,8 @@ class HMASSLOsciV2(HMASSLOsci):
             sl_dist_short = sl_raw_short - c
             logical_sl_long = not np.isnan(sl_raw_long) and sl_raw_long < c
             logical_sl_short = not np.isnan(sl_raw_short) and sl_raw_short > c
-            signal_candle_sl_long_ok = logical_sl_long and np_low[i] > sl_raw_long
-            signal_candle_sl_short_ok = logical_sl_short and np_high[i] < sl_raw_short
+            signal_candle_sl_long_ok = not signal_candle_sl_on or (logical_sl_long and np_low[i] > sl_raw_long)
+            signal_candle_sl_short_ok = not signal_candle_sl_on or (logical_sl_short and np_high[i] < sl_raw_short)
             logical_sl_long_arr[i] = logical_sl_long
             logical_sl_short_arr[i] = logical_sl_short
             signal_candle_sl_long_ok_arr[i] = signal_candle_sl_long_ok
