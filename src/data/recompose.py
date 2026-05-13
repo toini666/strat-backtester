@@ -15,6 +15,7 @@ TIMEFRAME_FREQ_MAP = {
     "3m": "3min",
     "5m": "5min",
     "7m": "7min",
+    "10m": "10min",
     "15m": "15min",
     "30m": "30min",
     "1h": "1h",
@@ -28,6 +29,7 @@ _MINUTES_PER_TF = {
     "3m": 3,
     "5m": 5,
     "7m": 7,
+    "10m": 10,
     "15m": 15,
     "30m": 30,
     "1h": 60,
@@ -109,7 +111,7 @@ def recompose_bars(df_1m: pd.DataFrame, target_timeframe: str) -> pd.DataFrame:
     Incomplete bars at the start of each trading session are removed.
     The last bar before the daily market break is preserved even if it is a
     partial timeframe bar, so indicator state matches the source session close.
-    A session restarts after the market closure gap, so 7m/15m bars realign
+    A session restarts after the market closure gap, so 7m/10m/15m bars realign
     from the first 1-minute bar available after the reopen.
 
     Args:

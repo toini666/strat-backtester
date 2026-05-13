@@ -62,6 +62,7 @@ STRATEGY_WARMUP_BARS = {
     "HMAOsci": 250,         # EMA(7)→28 + HMA(84)→135 + MFI(35)→41 + margin
     "HMASSLOsci": 250,          # EMA(7)→28 + HMA(84)→135 + EMA(60) SSL rangema→240 + margin
     "HMASSLOsciV2": 250,        # HMA/SSL/oscillator stack; SSL EMA(60) remains the dominant convergence window
+    "HMASSLOsciV3": 250,        # Same indicator stack as v2 (HMA + SSL EMA(60) + 4Kings + MFI); v3-specific entry/exit/SL logic
     "EMABreakHMASSLOsc": 250,  # EMA(13)→52 + EMA(60) SSL rangema→240 + margin
     "RobReversal": 150,         # EMA(13)→52 + MFI(35)+cloud(35)→112 + margin
 
@@ -75,7 +76,7 @@ class BacktestRequest(BaseModel):
     """Request model for backtest with validation."""
     strategy_name: str = Field(..., min_length=1, description="Name of the strategy to run")
     symbol: str = Field(..., min_length=1, description="Symbol (e.g. MNQ, MES)")
-    interval: str = Field(default="15m", pattern="^(1m|2m|3m|5m|7m|15m)$", description="Data interval")
+    interval: str = Field(default="15m", pattern="^(1m|2m|3m|5m|7m|10m|15m)$", description="Data interval")
     start_datetime: str = Field(..., description="Start datetime (ISO format YYYY-MM-DDTHH:mm)")
     end_datetime: str = Field(..., description="End datetime (ISO format YYYY-MM-DDTHH:mm)")
     params: Dict[str, Any] = Field(default_factory=dict, description="Strategy parameters")
@@ -283,7 +284,7 @@ def get_available_data():
             min_starts[strat_name] = {}
             for tf in ds.get("timeframes", []):
                 # Convert warmup bars to calendar time, same formula as /backtest
-                map_min = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "7m": 7, "15m": 15}
+                map_min = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "7m": 7, "10m": 10, "15m": 15}
                 mpb = map_min.get(tf, 15)
                 trading_mins = warmup_bars * mpb
                 t_days = trading_mins / (23 * 60)
@@ -630,6 +631,7 @@ def _run_simulator_backtest(
         canal_exit_mode=str(simulator_settings.get("canal_exit_mode", "break_hma")),
         block_loss_canal_exit_before_tp1=bool(simulator_settings.get("block_loss_canal_exit_before_tp1", False)),
         close_partial_min_rr=float(simulator_settings.get("close_partial_min_rr", 0.0)),
+        one_trade_per_setup_window=bool(simulator_settings.get("one_trade_per_setup_window", False)),
         daily_win_limit_enabled=engine_settings.daily_win_limit_enabled,
         daily_win_limit=engine_settings.daily_win_limit,
         daily_loss_limit_enabled=engine_settings.daily_loss_limit_enabled,
@@ -693,7 +695,7 @@ def run_backtest(req: BacktestRequest):
     # Convert bars to calendar days, accounting for weekends and overnight closes.
     # Futures trade ~23h/day, 5 days/week → we need 7/5 calendar days per trading day.
     warmup_bars = STRATEGY_WARMUP_BARS.get(req.strategy_name, DEFAULT_WARMUP_BARS)
-    map_min = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "7m": 7, "15m": 15}
+    map_min = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "7m": 7, "10m": 10, "15m": 15}
     minutes_per_bar = map_min.get(req.interval, 15)
     trading_minutes_needed = warmup_bars * minutes_per_bar
     # 23h trading per day, 5 days per 7 calendar days, + 3 days buffer for holidays
@@ -846,6 +848,7 @@ def resimulate(req: ResimulateRequest):
         canal_exit_mode=str(simulator_settings.get("canal_exit_mode", "break_hma")),
         block_loss_canal_exit_before_tp1=bool(simulator_settings.get("block_loss_canal_exit_before_tp1", False)),
         close_partial_min_rr=float(simulator_settings.get("close_partial_min_rr", 0.0)),
+        one_trade_per_setup_window=bool(simulator_settings.get("one_trade_per_setup_window", False)),
         daily_win_limit_enabled=engine_settings.daily_win_limit_enabled,
         daily_win_limit=engine_settings.daily_win_limit,
         daily_loss_limit_enabled=engine_settings.daily_loss_limit_enabled,
@@ -876,7 +879,7 @@ class MultiBacktestConfig(BaseModel):
     """Per-slot configuration for a multi-backtest run."""
     strategy_name: str = Field(..., min_length=1)
     symbol: str = Field(..., min_length=1)
-    interval: str = Field(default="15m", pattern="^(1m|2m|3m|5m|7m|15m)$")
+    interval: str = Field(default="15m", pattern="^(1m|2m|3m|5m|7m|10m|15m)$")
     params: Dict[str, Any] = Field(default_factory=dict)
     risk_per_trade: float = Field(default=0.01, ge=0.001, le=0.1)
     max_contracts: int = Field(default=50, ge=1, le=1000)
@@ -1102,7 +1105,7 @@ def _run_config_for_multi(
 
     # Warmup
     warmup_bars = STRATEGY_WARMUP_BARS.get(config.strategy_name, DEFAULT_WARMUP_BARS)
-    map_min = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "7m": 7, "15m": 15}
+    map_min = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "7m": 7, "10m": 10, "15m": 15}
     minutes_per_bar = map_min.get(config.interval, 15)
     trading_days = (warmup_bars * minutes_per_bar) / (23 * 60)
     calendar_days = max(2, int(trading_days * 7 / 5) + 3)
@@ -1340,7 +1343,7 @@ class OptimizationRequest(BaseModel):
     ticker: str = "BTC-USD"
     source: str = Field(default="Topstep", pattern="^(Yahoo|Topstep)$")
     contract_id: Optional[str] = None
-    interval: str = Field(default="15m", pattern="^(1m|2m|3m|5m|7m|15m|30m|1h|4h|1d)$")
+    interval: str = Field(default="15m", pattern="^(1m|2m|3m|5m|7m|10m|15m|30m|1h|4h|1d)$")
     days: int = Field(default=14, ge=1, le=365)
 
     # Parameters to optimize (if empty, uses strategy's param_ranges)
@@ -1632,7 +1635,7 @@ def run_optimization(req: OptimizationRequest):
 
     # Warmup
     warmup_bars = 1000
-    map_min = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "7m": 7, "15m": 15, "30m": 30, "60m": 60, "1h": 60, "4h": 240, "1d": 1440}
+    map_min = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "7m": 7, "10m": 10, "15m": 15, "30m": 30, "60m": 60, "1h": 60, "4h": 240, "1d": 1440}
     minutes_per_bar = map_min.get(req.interval, 15)
     total_minutes = warmup_bars * minutes_per_bar * 1.5
     warmup_delta = timedelta(minutes=total_minutes)

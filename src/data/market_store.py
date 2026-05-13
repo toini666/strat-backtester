@@ -3,7 +3,7 @@ Persistent market data store.
 
 Manages local storage of 1-minute OHLCV bars as CSV files,
 organized by asset symbol with Europe/Brussels timezone.
-Recomposed timeframes (2m, 3m, 5m, 7m, 15m) are generated from 1m base data.
+Recomposed timeframes (2m, 3m, 5m, 7m, 10m, 15m) are generated from 1m base data.
 """
 import json
 import logging
@@ -37,7 +37,7 @@ SYMBOL_CONTRACTS = {
 }
 
 # Timeframes to generate from 1m data
-RECOMPOSE_TIMEFRAMES = ["2m", "3m", "5m", "7m", "15m"]
+RECOMPOSE_TIMEFRAMES = ["2m", "3m", "5m", "7m", "10m", "15m"]
 
 
 def _to_brussels(df: pd.DataFrame) -> pd.DataFrame:

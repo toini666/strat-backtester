@@ -241,7 +241,7 @@ class TopstepClient:
             contract_id: The ID of the contract to fetch data for.
             start: Start datetime for the data range.
             end: End datetime for the data range.
-            timeframe: Candle timeframe ('1m', '5m', '15m', '1h', '4h', '1d').
+            timeframe: Candle timeframe ('1m', '5m', '10m', '15m', '1h', '4h', '1d').
             live: Whether to fetch data for active/live contracts (True) or legacy/sim (False).
 
         Returns:
@@ -264,6 +264,7 @@ class TopstepClient:
             '3m': (2, 3),
             '5m': (2, 5),
             '7m': (2, 7),
+            '10m': (2, 10),
             '15m': (2, 15),
             '30m': (2, 30),
             '1h': (3, 1),

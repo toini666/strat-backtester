@@ -60,9 +60,10 @@ class SimulatorConfig:
     no_sl_after_tp1: bool = False  # if True, intra-bar SL/BE disabled after TP1 (exit only via close-based logic)
     tp1_full_exit: bool = False          # if True, TP1 closes entire position (no partial); no breakeven move
     inverse_canal_exit: bool = False     # if True, LONG exits when close>upper, SHORT exits when close<lower
-    canal_exit_mode: str = "both_hma"    # "both_hma" (default), "break_hma", or "inversion_hma"
+    canal_exit_mode: str = "both_hma"    # "both_hma" (default), "break_hma", "inversion_hma", or "v3_fast_hma_ssl"
     block_loss_canal_exit_before_tp1: bool = False  # if True, ignore losing HMA exits until TP1/partial
     close_partial_min_rr: float = 0.0     # minimum current RR for close-based partial exits; 0 disables
+    one_trade_per_setup_window: bool = False  # v3: only one trade per HMA-slow/SSL setup window per side
 
     daily_win_limit_enabled: bool = False
     daily_win_limit: float = 500.0
@@ -99,6 +100,8 @@ class _Position:
     sl_buffer_st: float = 0.0        # buffer for Supertrend trailing SL
     canal_exit_armed: bool = False    # for HMA break exits that require first reaching the profit side
     initial_stop_price: float = 0.0  # stop price at entry, never modified (used for partial RR calc)
+    loss_exit_blocked: bool = False   # v3: fast HMA/SSL exit fired while in loss, fallback canal-break exit armed
+    entry_setup_bar: int = -1         # v3: the setup-window bar this trade was opened in
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +308,29 @@ def simulate(
     np_hma_flip_up = _hma_flip_up_s.values if _hma_flip_up_s is not None else None
     np_hma_flip_down = _hma_flip_down_s.values if _hma_flip_down_s is not None else None
     has_hma_flip_signals = np_hma_flip_up is not None and np_hma_flip_down is not None
+
+    # v3: fast HMA / SSL baseline cross series (final TP signal)
+    _fast_exit_long_s = signals.get("fast_hma_exit_long")
+    _fast_exit_short_s = signals.get("fast_hma_exit_short")
+    np_fast_exit_long = (
+        _fast_exit_long_s.values if _fast_exit_long_s is not None else None
+    )
+    np_fast_exit_short = (
+        _fast_exit_short_s.values if _fast_exit_short_s is not None else None
+    )
+    is_v3_exit_mode = config.canal_exit_mode == "v3_fast_hma_ssl"
+
+    # v3: per-side setup-window bar tracking (sentinel -1 = no setup yet)
+    _setup_bar_long_s = signals.get("setup_bar_long")
+    _setup_bar_short_s = signals.get("setup_bar_short")
+    np_setup_bar_long = (
+        _setup_bar_long_s.values if _setup_bar_long_s is not None else None
+    )
+    np_setup_bar_short = (
+        _setup_bar_short_s.values if _setup_bar_short_s is not None else None
+    )
+    last_long_traded_setup_bar = -1
+    last_short_traded_setup_bar = -1
 
     # Optional SSL baseline for TP2 trigger (overrides inside-canal TP2 logic)
     _ssl_baseline_s = signals.get("ssl_baseline")
@@ -997,7 +1023,35 @@ def simulate(
                         if exited > 0:
                             pos.tp2_hit = True
                 if pos is not None:
-                    if config.inverse_canal_exit:
+                    if is_v3_exit_mode:
+                        # v3 TP Final: fast HMA crosses the SSL baseline in the
+                        # opposite direction to the trade.  If the cross happens
+                        # while the trade is still in loss and the partial has
+                        # not been taken, latch ``loss_exit_blocked`` so the
+                        # canal-break fallback can still close the position on
+                        # a subsequent bar.  Order mirrors v3 PineScript:
+                        # fast-HMA check → loss-block fallback → partial.
+                        fast_exit_fired = False
+                        if pos.side == 1 and np_fast_exit_long is not None and bar_idx < len(np_fast_exit_long):
+                            fast_exit_fired = bool(np_fast_exit_long[bar_idx])
+                        elif pos.side == -1 and np_fast_exit_short is not None and bar_idx < len(np_fast_exit_short):
+                            fast_exit_fired = bool(np_fast_exit_short[bar_idx])
+                        if fast_exit_fired:
+                            if allow_canal_exit:
+                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                return True
+                            else:
+                                pos.loss_exit_blocked = True
+                        # Fallback: once loss_exit_blocked is latched, exit on
+                        # close out of the opposite canal side.
+                        if pos is not None and pos.loss_exit_blocked:
+                            if pos.side == 1 and close_price < cl:
+                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                return True
+                            elif pos.side == -1 and close_price > cu:
+                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                return True
+                    elif config.inverse_canal_exit:
                         if pos.side == 1 and close_price > cu and allow_canal_exit:
                             _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
                             return True
@@ -1176,6 +1230,16 @@ def simulate(
             entry_excluded = _check_daily_limit(entry_date)
 
             if np_long_entry[i]:
+                # v3: skip if the current HMA-slow/SSL setup window already
+                # produced a long trade.
+                if (
+                    config.one_trade_per_setup_window
+                    and np_setup_bar_long is not None
+                    and i < len(np_setup_bar_long)
+                    and int(np_setup_bar_long[i]) >= 0
+                    and int(np_setup_bar_long[i]) == last_long_traded_setup_bar
+                ):
+                    continue
                 # Use custom entry price if provided (e.g. retracement level)
                 if np_entry_price_long is not None and not np.isnan(np_entry_price_long[i]):
                     entry_price = _round_tick(np_entry_price_long[i], ts)
@@ -1194,6 +1258,11 @@ def simulate(
                 size = _calc_size(entry_price, risk_ref_long)
                 be_val = np_be_long[i]
                 tp2_val = np_tp2_long[i] if np_tp2_long is not None else np.nan
+                entry_setup = (
+                    int(np_setup_bar_long[i])
+                    if np_setup_bar_long is not None and i < len(np_setup_bar_long)
+                    else -1
+                )
                 pos = _Position(
                     side=1,
                     entry_price=entry_price,
@@ -1219,9 +1288,21 @@ def simulate(
                             and np_close[i] > np_canal_upper[i]
                         )
                     ),
+                    entry_setup_bar=entry_setup,
                 )
+                last_long_traded_setup_bar = entry_setup
 
             elif np_short_entry[i]:
+                # v3: skip if the current HMA-slow/SSL setup window already
+                # produced a short trade.
+                if (
+                    config.one_trade_per_setup_window
+                    and np_setup_bar_short is not None
+                    and i < len(np_setup_bar_short)
+                    and int(np_setup_bar_short[i]) >= 0
+                    and int(np_setup_bar_short[i]) == last_short_traded_setup_bar
+                ):
+                    continue
                 if np_entry_price_short is not None and not np.isnan(np_entry_price_short[i]):
                     entry_price = _round_tick(np_entry_price_short[i], ts)
                 else:
@@ -1239,6 +1320,11 @@ def simulate(
                 size = _calc_size(entry_price, risk_ref_short)
                 be_val = np_be_short[i]
                 tp2_val = np_tp2_short[i] if np_tp2_short is not None else np.nan
+                entry_setup = (
+                    int(np_setup_bar_short[i])
+                    if np_setup_bar_short is not None and i < len(np_setup_bar_short)
+                    else -1
+                )
                 pos = _Position(
                     side=-1,
                     entry_price=entry_price,
@@ -1264,7 +1350,9 @@ def simulate(
                             and np_close[i] < np_canal_lower[i]
                         )
                     ),
+                    entry_setup_bar=entry_setup,
                 )
+                last_short_traded_setup_bar = entry_setup
 
     # --- Close any remaining position at end of data ---
     if pos is not None:

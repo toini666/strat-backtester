@@ -61,7 +61,7 @@ Frontend (React/Vite :3001) → HTTP → Backend (FastAPI :8001)
 
 **Moteur événementiel** (`src/engine/simulator.py`) : traite chaque bar séquentiellement avec résolution intra-bar à la minute. Gère les sorties partielles (TP1/TP2), le breakeven, l'auto-close, les fenêtres de blackout, et le trailing stop.
 
-**Recomposition timeframe** (`src/data/recompose.py`) : reconstruit les bars 3m/5m/7m/15m depuis la 1m en respectant les frontières de session — reproduit exactement le comportement de TradingView.
+**Recomposition timeframe** (`src/data/recompose.py`) : reconstruit les bars 2m/3m/5m/7m/10m/15m depuis la 1m en respectant les frontières de session — reproduit exactement le comportement de TradingView.
 
 ---
 
@@ -72,8 +72,14 @@ Toutes les stratégies ont un fichier PineScript de référence dans `Pinescript
 | Stratégie | Fichier | PineScript | Warmup |
 |-----------|---------|-----------|--------|
 | EMABreakOsc | `ema_break_osc.py` | `EMA-Break-Osc.txt` | 250 bars |
-| EMA9Scalp | `ema9_scalp.py` | `EMA9-scalp.txt` | 80 bars |
+| EMA9Scalp | `ema9_scalp.py` | `EMA9-scalp.txt` | 150 bars |
 | UTBotAlligatorST | `utbot_alligator_st.py` | `UTBot-Alligator-ST.txt` | 120 bars |
+| HMAOsci | `hma_osci.py` | `HMA-Osci.txt` | 250 bars |
+| HMASSLOsci | `hma_ssl_osci.py` | `HMA-SSL-Osci.txt` | 250 bars |
+| HMASSLOsciV2 | `hma_ssl_osci_v2.py` | `HMA-SSL-Osci-v2.txt` | 250 bars |
+| EMABreakHMASSLOsc | `ema_break_hma_ssl_osc.py` | `EMA-Break-HMA-SSL-Osc.txt` | 250 bars |
+| RobReversal | `rob_reversal.py` | `RobReversal.txt` | 150 bars |
+| GatorHMAEpure | `gator_hma_epure.py` | `Gator-HMA-Epure.txt` | 200 bars (défaut) |
 
 Les stratégies sont **auto-découvertes** au démarrage : tout fichier héritant de `Strategy` dans `src/strategies/` apparaît automatiquement dans le frontend.
 

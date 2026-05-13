@@ -1,276 +1,321 @@
-# CLAUDE.md — Nebular Apollo Backtesting Engine
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-Nebular Apollo is a quantitative backtesting engine for futures trading strategies. It backtests algorithmic strategies on historical 1-minute OHLCV data, with higher-timeframe bar recomposition, an event-driven simulator for complex position management, and a React frontend for visualization.
+**Nebular Apollo** is a quantitative backtesting engine for CME micro-futures strategies. It runs algorithmic strategies translated from TradingView PineScript on local 1-minute OHLCV data, with higher-timeframe recomposition, an event-driven simulator with intra-bar 1m resolution, and a React frontend for visualization, optimization, and market-data management.
 
-**Key technical constraint**: All indicator computations must match TradingView PineScript indicators exactly. Strategies are translated from PineScript and the backtester must produce trades identical to what TradingView shows.
+**Key technical constraint**: indicator computations must match TradingView PineScript indicators exactly. Strategies are translated from PineScript and the backtester is expected to produce trades identical to TradingView's.
 
 ## Quick Start
 
 ```bash
-# Backend
-cd /Users/awagon/Documents/dev/nebular-apollo
-source venv/bin/activate
-uvicorn backend.main:app --reload --port 8001
+# One-shot — installs Homebrew/Python/Node, creates venv, installs deps,
+# creates .env from .env.example
+bash install.sh
 
-# Frontend (separate terminal)
-cd frontend && npm run dev
+# Daily run — kills port 8001/3001, starts backend + frontend, opens browser
+bash start.sh
+
+# Manual run (separate terminals)
+source venv/bin/activate
+uvicorn backend.main:app --reload --port 8001    # http://localhost:8001
+cd frontend && npm run dev -- --port 3001 --host # http://localhost:3001
 
 # Tests
-pytest -xvs
+pytest -xvs                                  # all tests
+pytest tests/test_simulator.py -xvs          # event-driven simulator
+pytest tests/test_api.py -xvs                # API endpoints, sessions
+pytest tests/test_recompose.py -xvs          # timeframe recomposition
+pytest tests/test_hma_canal.py -xvs          # HMA canal exit logic
+pytest tests/test_hma_ssl_osci_v2.py -xvs    # HMA-SSL-Osci v2 strategy
+pytest tests/test_data_providers.py -xvs     # data providers / market store
+pytest tests/test_simulator.py::test_xxx -xvs  # single test
+
+# Lint frontend
+cd frontend && npm run lint
 ```
+
+Frontend dev server runs on **port 3001** (not Vite's default 5173). `ALLOWED_ORIGINS` defaults to `http://localhost:3001` in `.env.example`; in `ENV=development` (the default), CORS is wide open.
 
 ## Architecture
 
 ```
-Frontend (React/Vite :5173) → HTTP → Backend (FastAPI :8001)
-                                         │
-                    ┌────────────────────┼────────────────────┐
-                    ▼                    ▼                    ▼
-            Data Layer           Strategy Engine        Backtest Engine
-         market_store.py         strategies/*.py        simulator.py
-         recompose.py            base.py (ABC)          (Event-driven)
-         topstep.py              ema_break_osc.py
-                                 ema9_scalp.py
-                                 utbot_alligator_st.py
+Frontend (React/Vite :3001) ──HTTP──▶ Backend (FastAPI :8001)
+                                          │
+                    ┌─────────────────────┼─────────────────────┐
+                    ▼                     ▼                     ▼
+            Data Layer             Strategy Engine      Backtest Engine
+         market_store.py           strategies/*.py       simulator.py
+         recompose.py              base.py (ABC)         (event-driven,
+         topstep.py / topstepx.py  indicators.py         intra-bar 1m)
+         csv_provider.py           ⟵ pandas_ta_classic
 ```
+
+Entry points:
+- `backend/main.py` — FastAPI app, CORS, mounts `api.router` and `market_data_router`.
+- `backend/api.py` — backtest orchestration, strategy registry, optimization, presets (~2200 lines, the largest single file).
+- `backend/market_data_routes.py` — CRUD on local market datasets, async download from TopstepX.
 
 ## Backtest Engine — Event-Driven Simulator (`src/engine/simulator.py`)
 
-All strategies use the event-driven simulator. It processes bars sequentially with intra-bar 1-minute resolution. The simulator provides building blocks that strategies can use or not:
-- **Partial take-profit** (optional): TP1 closes `tp1_partial_pct` of position at a price level. TP2 closes `tp2_partial_pct` on a secondary condition (e.g. EMA cross). Strategies control whether they use 0, 1, or 2 partial TPs, and what conditions trigger them.
-- **Breakeven** (optional): Can move stop loss to entry price after TP1. Strategies can also trigger breakeven on other conditions.
-- **Intra-bar resolution**: When a bar's range spans both SL and TP1, zooms into 1-minute data to determine which was hit first
-- **TP1 execution modes**: `"touch"` (immediate) or `"bar_close_if_touched"` (deferred to bar close)
-- **Auto-close**: Closes open positions at a configured time (default 22:00 reference Brussels time)
-- **Blackout windows**: Prevents new entries during configured time slots
-- **Cooldown**: Minimum bars between trade close and next entry
+All strategies run through the event-driven simulator (`use_simulator = True` is set on every active strategy). There is **no live VectorBT path** for backtesting; the only remaining VectorBT consumer is the legacy `/optimize` endpoint (it imports `vectorbt` defensively via `try/except`, and the optimization module is flagged as pending refactor).
 
-The exit logic is strategy-agnostic: the simulator handles SL/TP1 touch, bar-close-if-touched TP1, EMA-cross TP2, optional fixed TP2 prices, optional Supertrend trailing SL, and optional pre-TP1 breakeven levels — all driven by keys returned from `generate_signals()`.
+The simulator processes timeframe bars sequentially. Per bar it:
+1. Checks auto-close.
+2. Processes intra-bar exits (SL, TP1, breakeven) — zooms into 1m data when a single bar's range spans both SL and TP1 to determine which was hit first.
+3. Processes close-based exits (TP2 on EMA cross, fixed-price TP2, SSL baseline cross, HMA canal exits, Supertrend reversal, EMA cross final exit).
+4. Processes entries (skipped if blackout, cooldown, or already open).
+
+Building blocks the strategy can opt into:
+- **TP1 execution modes**: `"touch"` (immediate) or `"bar_close_if_touched"` (deferred to bar close).
+- **Partial exits**: TP1 closes `tp1_partial_pct` of position; TP2 closes `tp2_partial_pct` on EMA cross, fixed price, SSL baseline cross, or HMA inversion. Both default to 0.25.
+- **Full TP1**: `tp1_full_exit = True` makes TP1 close the entire position (no breakeven move).
+- **Breakeven**: SL moves to entry after TP1 by default; strategies can provide custom `be_long/be_short` series for pre-TP1 breakeven triggers.
+- **Supertrend trailing**: optional `supertrend` + `supertrend_trend` series, with `rr_trailing` activation threshold and `sl_buffer` distance.
+- **HMA canal exits**: `canal_lower`/`canal_upper`/`canal_green` series + `canal_exit_mode` (`"both_hma"`, `"break_hma"`, `"inversion_hma"`); `inverse_canal_exit` flips long/short logic; `block_loss_canal_exit_before_tp1` suppresses losing exits before TP1.
+- **SSL baseline TP2**: `ssl_baseline` series triggers partial exit on close cross with optional `close_partial_min_rr` floor.
+- **EMA-cross gating**: `ema_exit_after_tp1_only = True` defers the EMA-cross final exit until TP1 has been hit. `no_sl_after_tp1 = True` disables intra-bar SL/BE after TP1.
+- **Custom entry price**: `entry_price_long`/`entry_price_short` override the bar-close entry (used by UTBotAlligatorST for retracement entries).
+- **Auto-close**: closes any open position at `auto_close_hour:auto_close_minute` (default **21:00** in reference Brussels time).
+- **Blackout windows**: list of active `(start, end)` windows blocking new entries.
+- **Cooldown**: minimum bars between trade close and next entry, settable per-strategy or per-signal.
+- **Daily win/loss limits**: when enabled, marks subsequent same-day entries as `excluded` (kept in trades list for visibility, excluded from equity).
+
+The exit logic is strategy-agnostic — the simulator drives everything from keys returned by `generate_signals()`.
 
 ## Active Strategies
 
-All strategies have corresponding PineScript files in `Pinescripts/`:
+All strategies inherit from `Strategy` (`src/strategies/base.py`), use the simulator, and have a corresponding PineScript file in `Pinescripts/`. They are auto-discovered: every `Strategy` subclass found in `src/strategies/*.py` (excluding `base.py`, `indicators.py`, `__init__.py`) is registered at startup, and `load_strategies()` is re-run on every `/backtest` POST so code changes are picked up without a restart.
 
-| Strategy | File | PineScript | Warmup Bars |
-|----------|------|-----------|-------------|
-| EMABreakOsc | `ema_break_osc.py` | `EMA-Break-Osc.txt` | 250 |
-| EMA9Scalp | `ema9_scalp.py` | `EMA9-scalp.txt` | 80 |
-| UTBotAlligatorST | `utbot_alligator_st.py` | `UTBot-Alligator-ST.txt` | 120 |
+| Strategy           | File                          | PineScript                    | Warmup bars |
+|--------------------|-------------------------------|-------------------------------|-------------|
+| EMABreakOsc        | `ema_break_osc.py`            | `EMA-Break-Osc.txt`           | 250         |
+| EMA9Scalp          | `ema9_scalp.py`               | `EMA9-scalp.txt`              | 150         |
+| UTBotAlligatorST   | `utbot_alligator_st.py`       | `UTBot-Alligator-ST.txt`      | 120         |
+| HMAOsci            | `hma_osci.py`                 | `HMA-Osci.txt`                | 250         |
+| HMASSLOsci         | `hma_ssl_osci.py`             | `HMA-SSL-Osci.txt`            | 250         |
+| HMASSLOsciV2       | `hma_ssl_osci_v2.py`          | `HMA-SSL-Osci-v2.txt`         | 250         |
+| HMASSLOsciV3       | `hma_ssl_osci_v3.py`          | `HMA-SSL-Osci-v3.txt`         | 250         |
+| EMABreakHMASSLOsc  | `ema_break_hma_ssl_osc.py`    | `EMA-Break-HMA-SSL-Osc.txt`   | 250         |
+| RobReversal        | `rob_reversal.py`             | `RobReversal.txt`             | 150         |
+| GatorHMAEpure      | `gator_hma_epure.py`          | `Gator-HMA-Epure.txt`         | DEFAULT (200) |
+
+Warmup defaults to `DEFAULT_WARMUP_BARS = 200` if a strategy is not listed in `STRATEGY_WARMUP_BARS` (in `backend/api.py`). `GatorHMAEpure` currently uses the default — add an explicit entry if you tune its periods.
+
+Strategy class attributes (`src/strategies/base.py`):
+- `use_simulator: bool` — must be `True` for the simulator path.
+- `manual_exit: bool` — legacy VectorBT flag; harmless on the simulator path.
+- `blackout_sensitive: bool` — when `True`, the strategy reads `is_blackout` from the annotated dataframe and adapts its state machine (used by `GatorHMAEpure`).
+- `simulator_settings: dict` — class-level defaults; `get_simulator_settings(params)` can override per-call.
 
 ## Data Flow
 
 ### 1. Data Loading
-All data comes from local CSV files via `market_store.py`. The store holds 1-minute OHLCV bars per symbol (MNQ, MES, MGC, etc.).
+1-minute OHLCV CSVs live in `data/market_data/<SYMBOL>/<SYMBOL>_<TF>.csv`. `MarketDataStore` (`src/data/market_store.py`) reads them, regenerates higher-timeframe files via `recompose_bars()`, and maintains `data/market_data/index.json` with per-dataset metadata and `contract_segments`.
 
-**Data sources:**
-- **Historical backfill**: Databento OHLCV-1m CSVs (one-time import per ticker). Requires front-month contract resolution from multi-contract data. See agent memory for full import procedure.
-- **Ongoing updates**: Topstep API via `save_bars()`, which handles merge, timezone conversion, and timeframe recomposition automatically.
+Active symbols and current front-month contracts (`SYMBOL_CONTRACTS` in `market_store.py`):
+- MNQ, MES, MYM, MGC, M2K → `*.M26`
+- MBT → `*.K26`
+- MCL → `CON.F.US.MCLE.M26`
 
-### Contract Switches (Rollovers)
-
-When a futures contract expires and the front-month rolls to the next contract:
-
-1. **Write a one-time script** (see `scripts/contract_switch_MBT_J26.py` as template) that:
-   - Fetches the remaining bars for the **old contract** (from last known bar to the day before the switch closes)
-   - Saves with `save_bars(symbol, OLD_CONTRACT_ID, data)` — appends to existing data, same contract
-   - Fetches bars for the **new contract** starting from the **first bar of the new session** (CME open = 17:00 EDT = 22:00 UTC when Brussels is CET/UTC+1, or 21:00 UTC when Brussels is CEST/UTC+2)
-   - Saves with `save_bars(symbol, NEW_CONTRACT_ID, data)` — `save_bars` detects the contract change, appends only bars after `existing_end`, and adds a new segment to `contract_segments`
-
-2. **Update `SYMBOL_CONTRACTS`** in `src/data/market_store.py` to point to the new contract ID.
-
-3. **CME month codes**: F=Jan, G=Feb, H=Mar, J=Apr, K=May, M=Jun, N=Jul, Q=Aug, U=Sep, V=Oct, X=Nov, Z=Dec
-
-**Time reference for contract switch dates:**
-- Brussels UTC offset: CET=UTC+1 (Oct→last Sunday March), CEST=UTC+2 (last Sunday March→Oct)
-- US EDT/EST offset: EDT=UTC-4 (2nd Sunday Mar→1st Sunday Nov), EST=UTC-5
-- CME opens at 17:00 EDT / 18:00 EST = 22:00 UTC (summer, Brussels CEST) or 22:00 UTC (winter, Brussels CET)
-- The gap between the last H26 bar and first J26 bar is the inter-session gap (e.g., 21:58 Brussels → 23:00 Brussels)
-
-**CSV format**: `Date,Open,High,Low,Close,Volume` with `Date` as Brussels tz-aware timestamps. CSVs may contain mixed UTC offsets (+01:00 winter / +02:00 summer) — `market_store.py` reads them via `pd.to_datetime(utc=True)` then `tz_convert('Europe/Brussels')`.
+Data providers in `src/data/`:
+- `topstep.py` / `topstepx.py` — Topstep / TopstepX API client (live updates).
+- `csv_provider.py` — read-only CSV provider.
+- `yfinance_provider.py` — Yahoo Finance fallback (used by the optimizer).
+- `base.py` — provider ABC.
+- `recompose.py` — 1m → 2m/3m/5m/7m/10m/15m recomposition.
 
 ### 2. Timeframe Recomposition (`src/data/recompose.py`)
-Higher-timeframe bars (3m, 5m, 7m, 15m, etc.) are recomposed from 1-minute data:
-- Bars re-anchor at each **session start** (detected via gaps > 30 minutes in the 1m data)
-- Incomplete bars at session start are dropped; partial bars at session end are kept
-- This matches TradingView's bar formation behavior
+- Session detection: gaps > 30 minutes in 1m data start a new session.
+- Each session is resampled independently with `origin=segment.index[0]`, so bars **re-anchor** at the session open — matches TradingView's bar formation.
+- Incomplete leading bars are dropped. The final bar of a session is kept even if partial **iff** another session follows or the bar ends at the daily close (hour 21 or 22 Brussels).
+- Supported timeframes: 1m, 2m, 3m, 5m, 7m, 10m, 15m, 30m, 1h, 4h, 1d (only the first seven are recomposed eagerly into CSV; others on demand).
 
 ### 3. Warmup Buffer
-Indicators need historical data before the backtest start date. The warmup is calculated per-strategy:
+Indicators need history before the backtest start. Per-strategy warmup is converted to calendar days with weekend awareness:
 ```python
-STRATEGY_WARMUP_BARS = {
-    "EMABreakOsc": 250,     # EMA(30)→100 + MFI(35)+cloud(35)→112 + margin
-    "EMA9Scalp": 80,        # EMA(7)→28 + setup detection margin
-    "UTBotAlligatorST": 120, # SMMA(13)+offset(8)→~60 + ATR(10) + margin
-}
-```
-The buffer is converted to calendar days with weekend awareness:
-```python
-trading_minutes_needed = warmup_bars * minutes_per_bar
+trading_minutes_needed = STRATEGY_WARMUP_BARS[strategy] * minutes_per_bar
 trading_days = trading_minutes_needed / (23 * 60)
 calendar_days = max(2, int(trading_days * 7 / 5) + 3)
+start_date = original_start_date - timedelta(days=calendar_days)
 ```
+The warmup slice is loaded and used for indicator computation, then discarded before simulation. Debug exports only contain the requested backtest range.
 
 ### 4. Signal Generation
-Each strategy's `generate_signals()` returns a dict with required and optional keys:
+`generate_signals(data, params)` returns a dict.
 
-**Required:**
-- `long_entries`, `short_entries`: boolean Series
-- `sl_long`, `sl_short`, `tp1_long`, `tp1_short`: float Series (price levels)
-- `ema_main`, `ema_secondary`: Series (for EMA-cross exit logic)
+**Required keys:**
+- `long_entries`, `short_entries` — bool Series
+- `sl_long`, `sl_short`, `tp1_long`, `tp1_short` — float Series (price levels)
+- `ema_main`, `ema_secondary` — Series (final-exit and TP2 EMA-cross logic)
 
-**Optional (simulator handles via `.get()`):**
-- `be_long`, `be_short`: float Series — custom breakeven price levels (EMA9Scalp)
-- `entry_price_long`, `entry_price_short`: float Series — override bar-close entry price (UTBotAlligatorST)
-- `tp2_long`, `tp2_short`: float Series — fixed TP2 price levels (UTBotAlligatorST)
-- `supertrend`, `supertrend_trend`: Series — Supertrend trailing SL (UTBotAlligatorST)
-- `cooldown_bars`: int — per-signal cooldown override
-- `debug_frame`: DataFrame — all indicator values for CSV export
+**Optional keys** (simulator reads via `signals.get(...)`):
+- `cooldown_bars: int` — per-signal cooldown override
+- `debug_frame: DataFrame` — full indicator dump for CSV export
+- `disable_price_tp1: bool` — skip price-based TP1 entirely (use only close-based partials)
+- `be_long`, `be_short` — pre-TP1 breakeven trigger price levels
+- `entry_price_long`, `entry_price_short` — override bar-close entry price
+- `tp2_long`, `tp2_short` — fixed TP2 price levels (instead of EMA-cross TP2)
+- `size_risk_long`, `size_risk_short` — alt price used for position sizing (e.g. size by TP distance for inverse strategies)
+- `partial_close_long`, `partial_close_short` — bool Series for close-based partial exits (HyperWave inverse cross etc.)
+- `canal_lower`, `canal_upper`, `canal_green` — HMA canal series for canal-based exits
+- `canal_exit_requires_arming: bool` — exit only after price first reaches profit side of canal
+- `hma_flip_up`, `hma_flip_down` — HMA flip events for inversion-mode canal exits
+- `ssl_baseline` — SSL baseline for TP2 cross trigger
+- `supertrend`, `supertrend_trend` — Supertrend trailing SL
+- `rr_trailing: float` — R:R threshold to activate trailing
+- `sl_buffer: float` — buffer for Supertrend trailing SL
 
-### 5. Simulation
-The simulator processes each timeframe bar sequentially. For each bar:
-1. Check auto-close
-2. Process exits (SL, TP1, breakeven) — with intra-bar 1m resolution if ambiguous
-3. Process close-based exits (TP2 EMA cross, EMA cross for final close)
-4. Process entries (if no blackout, no cooldown, no position open)
+### 5. Simulation Output
+`simulate()` returns `{metrics, trades, equity_curve, daily_limits_hit}`. Trades list intent: each trade has `legs` (one per partial exit + the final close), an `excluded` flag (true when blocked by a daily limit but still recorded for analytics), and `source` (`"1"`/`"2"` in multi-backtest mode).
 
 ## DST-Aware Sessions and Time Handling
 
-**Critical**: All time-based logic (sessions, blackout windows, auto-close) is DST-aware.
+CME futures follow US/Eastern. Brussels and ET are normally 6h apart, but DST transition windows (~3 weeks in March, ~1 week in Oct/Nov) drop the offset to 5h, shifting all market times by -1h in Brussels.
 
-### The Problem
-CME futures follow US/Eastern time. Brussels and US/Eastern are normally 6h apart, but during DST transition periods (~3 weeks in March, ~1 week in Oct/Nov), the offset drops to 5h. This shifts all market times by -1h in Brussels.
+**All configured times** (session boundaries, blackout windows, auto-close) are in **reference Brussels time** — the wall-clock time when Brussels–ET = 6h. `_get_market_hour_offset(ts)` computes the DST-driven offset (`0` or `-1`) and `_to_ref_minutes(ts)` shifts the wall-clock back into the reference frame before any comparison.
 
-### The Solution
-All configured times (session boundaries, blackout windows, auto-close) are in **reference Brussels time** (= when Brussels-ET = 6h). The system auto-detects the offset:
+Consequences:
+- No manual config change is needed when backtesting across a DST transition.
+- Session labels, blackout windows, and auto-close shift automatically.
 
-```python
-def _get_market_hour_offset(ts):
-    # Compare Brussels vs US/Eastern UTC offsets
-    # diff=6 → offset=0 (standard), diff=5 → offset=-1 (shifted)
-```
+### Session Boundaries (reference Brussels time)
+| Session | Reference hours |
+|---------|-----------------|
+| Asia    | 00:00 – 08:59   |
+| UK      | 09:00 – 15:29   |
+| US      | 15:30 – end     |
 
-Wall-clock Brussels time is normalized to the reference frame via `_to_ref_minutes()` before any comparison. This means:
-- **No manual adjustment needed** when backtesting across DST transitions
-- Blackout windows, session labels, and auto-close all shift automatically
+There is no "Outside" session — every bar maps to Asia/UK/US. Periods to exclude are configured via blackout windows.
 
-### Session Definitions (Reference Brussels Time)
-| Session | Reference Hours |
-|---------|----------------|
-| Asia    | 00:00 – 08:59  |
-| UK      | 09:00 – 15:29  |
-| US      | 15:30 – end    |
+### Default Blackout Windows (`BacktestEngineSettings`)
+Active by default: **11:00–13:00**, **15:30–21:00**, **21:00–23:00**. Other windows defined but inactive: 08:00–08:05, 14:30–14:35, 23:00–23:05. Per-strategy overrides exist in the frontend (`STRATEGY_ENGINE_OVERRIDES` in `frontend/src/App.tsx`) — e.g. `HMASSLOsciV2` ships with a different active window.
 
-There is **no "Outside" session** — all times map to Asia/UK/US. Blackout windows handle any periods where entries should be blocked.
-
-### Default Blackout Windows (Reference Brussels Time)
-Configured in `BacktestEngineSettings`. Users see/edit these in the frontend sidebar. The system auto-adjusts for DST.
+Default auto-close: **21:00** reference Brussels time. Default daily limits are off; when enabled the defaults are +$500 win / -$700 loss.
 
 ## Strategy Implementation Guide
 
 ### Adding a New Strategy
 
-1. Create `src/strategies/my_strategy.py`
-2. Inherit from `Strategy`, set `use_simulator = True`
-3. Set class attributes and implement `generate_signals()`
-4. The strategy is auto-discovered at startup (no registration needed)
-5. Add warmup value to `STRATEGY_WARMUP_BARS` in `backend/api.py`
-6. Add corresponding PineScript file in `Pinescripts/`
+1. Create `src/strategies/my_strategy.py` inheriting from `Strategy`.
+2. Set `use_simulator = True`, class attributes (`name`, `default_params`, `param_ranges`, `simulator_settings`).
+3. Implement `generate_signals()` returning the dict above.
+4. Optionally override `get_simulator_settings(params)` for params that toggle simulator behavior.
+5. Add the warmup count to `STRATEGY_WARMUP_BARS` in `backend/api.py`.
+6. Drop the reference PineScript file into `Pinescripts/`.
+
+The strategy is auto-registered on the next request (or at startup).
 
 ```python
 from .base import Strategy
 import pandas as pd
-import numpy as np
+import pandas_ta_classic as ta
 
 class MyStrategy(Strategy):
     name = "MyStrategy"
-    default_params = {"ema_len": 20, "threshold": 0.5}
-    param_ranges = {"ema_len": [10, 20, 30], "threshold": [0.3, 0.5, 0.7]}
-
     use_simulator = True
-    simulator_settings = {
-        "tp1_execution_mode": "bar_close_if_touched",
-    }
+    simulator_settings = {"tp1_execution_mode": "bar_close_if_touched"}
+    default_params = {"ema_len": 20, "tick_size": 0.25}  # tick_size is injected
+    param_ranges = {"ema_len": [10, 20, 30]}
 
     def generate_signals(self, data, params=None):
         p = self.get_params(params)
-        # ... compute indicators and signals ...
+        # ... compute indicators / signals ...
         return {
-            "long_entries": long_entries,    # bool Series
-            "short_entries": short_entries,  # bool Series
-            "sl_long": sl_long,             # float Series (price)
-            "sl_short": sl_short,           # float Series (price)
-            "tp1_long": tp1_long,           # float Series (price)
-            "tp1_short": tp1_short,         # float Series (price)
-            "ema_main": ema_main,           # Series (for exit logic)
-            "ema_secondary": ema_secondary, # Series (for TP2 EMA cross)
-            "cooldown_bars": int,           # Optional: per-signal cooldown
-            "debug_frame": debug_df,        # Optional DataFrame
-            # Optional additional keys (simulator handles via .get()):
-            # "be_long", "be_short"                       — custom breakeven levels
-            # "entry_price_long", "entry_price_short"     — override entry price
-            # "tp2_long", "tp2_short"                     — fixed TP2 price levels
-            # "supertrend", "supertrend_trend"            — Supertrend trailing SL
+            "long_entries": long_entries, "short_entries": short_entries,
+            "sl_long": sl_long, "sl_short": sl_short,
+            "tp1_long": tp1_long, "tp1_short": tp1_short,
+            "ema_main": ema_main, "ema_secondary": ema_secondary,
+            "debug_frame": debug_df,  # optional
         }
 
-    # For configurable TP partial sizes:
     def get_simulator_settings(self, params=None):
         p = self.get_params(params)
-        settings = self.simulator_settings.copy()
-        settings["tp1_partial_pct"] = p.get("tp1_partial_pct", 0.25)
-        settings["tp2_partial_pct"] = p.get("tp2_partial_pct", 0.25)
-        return settings
+        s = self.simulator_settings.copy()
+        s["tp1_partial_pct"] = p.get("tp1_partial_pct", 0.25)
+        return s
 ```
 
-### Critical: Matching PineScript Indicators
+### Matching PineScript Indicators
 
-When translating from PineScript:
-- **EMA**: Use `pd.Series.ewm(span=n, adjust=False).mean()` — this matches Pine's recursive `ta.ema()`
-- **SMA**: Use `pd.Series.rolling(n).mean()`
-- **LinReg**: Use `ta.linreg()` from pandas-ta (local lib in `libs/pandas-ta/`)
-- **MFI**: Custom implementation — Pine uses `hl2` as source (not `hlc3`), centered at 0
-- **Convergence**: EMA(n) needs ~4n bars after first valid value for 99% convergence. Account for this in warmup.
-- **Session boundaries**: Data gaps between sessions cause resampling anchors to reset. The recompose module handles this.
+- **EMA**: `pd.Series.ewm(span=n, adjust=False).mean()` — matches Pine's recursive `ta.ema()`.
+- **SMA**: `pd.Series.rolling(n).mean()`.
+- **HMA / LinReg / others**: use `pandas_ta_classic` (imported as `ta`). The package lives in `libs/pandas-ta/` (folder name kept, but the installed dist is `pandas-ta-classic`). Do **not** install `pandas-ta` from PyPI — formulas diverge.
+- **MFI (custom)**: Pine uses `hl2` as source, centered at 0 — see existing strategies for the implementation.
+- **Convergence**: EMA(n) reaches ~99% accuracy after ~4n bars after its first valid value. Size warmup for the longest chain (e.g. HMA(84) recomposed from EMAs requires ≥250 bars at 7m).
+- **Session boundaries**: gaps between sessions reset resampling anchors — handled by `recompose.py`. Do not depend on continuous bars across the daily break.
 
-## Position Sizing
+## Position Sizing (`src/engine/simulator.py::_calc_size`)
 
 ```
-Risk Amount = Equity × Risk Per Trade (e.g. 1%)
-SL Ticks    = |Entry - SL| / Tick Size
-Contracts   = floor(Risk Amount / (SL Ticks × Tick Value))
+risk_amount = initial_equity × risk_per_trade
+risk_ticks  = |entry - sl| / tick_size
+raw         = risk_amount / (risk_ticks × tick_value)
+contracts   = min(max_contracts, max(1.0, int(raw)))
 ```
 
-Partial exits use the **initial** contract count (not remaining):
-- TP1: `floor(initial_size × tp1_partial_pct)` contracts
-- TP2: `floor(initial_size × tp2_partial_pct)` contracts
-- Remainder closes at final exit (EMA cross, auto-close, or end of data)
+Position sizing always returns at least 1 contract (it does not "skip" a trade when the risk distance is too large — that's an intentional behavior for the analytics, but be aware of it when reading equity curves on wide SLs).
+
+Partial exits use the **initial** contract count:
+- TP1: `floor(initial × tp1_partial_pct)` contracts
+- TP2: `floor(initial × tp2_partial_pct)` contracts
+- Remainder closes at the final exit (EMA cross, auto-close, end-of-data).
 
 Example: 9 contracts with 25%/25% → 2 at TP1, 2 at TP2, 5 at final close.
 
-## Key Files
+## Multi-Backtest (`POST /backtest/multi`)
 
-| File | Purpose |
-|------|---------|
-| `backend/api.py` | FastAPI endpoints, backtest orchestration, warmup calculation |
-| `backend/main.py` | App entry, CORS, route mounting |
-| `backend/market_data_routes.py` | Market data CRUD endpoints |
-| `src/engine/simulator.py` | Event-driven simulator with partial TP and intra-bar resolution |
-| `src/data/recompose.py` | Timeframe recomposition from 1m bars |
-| `src/data/market_store.py` | Local market data storage (CSV) |
-| `src/strategies/base.py` | Abstract Strategy class |
-| `src/strategies/ema_break_osc.py` | EMA Break + Oscillator strategy |
-| `src/strategies/ema9_scalp.py` | EMA9 Scalp strategy |
-| `src/strategies/utbot_alligator_st.py` | UTBot Alligator SuperTrend strategy |
-| `src/optimizer/parameter_optimizer.py` | Grid search with session combinations (legacy, to be refactored) |
-| `frontend/src/App.tsx` | React app root, state management |
-| `frontend/src/api.ts` | API client, types, defaults |
-| `frontend/src/components/Sidebar.tsx` | Backtest configuration UI |
-| `frontend/src/components/Dashboard.tsx` | Results display, session filters |
+Runs **two** configs in parallel on a shared account:
+- `mode = "multi_asset"`: two different symbols/strategies; both can hold simultaneously.
+- `mode = "multi_strat"`: same symbol, two strategies; a "shared position lock" allows only one open at a time across both streams (the second is dropped). Requires both configs' `symbol` to match.
+
+After running both legs, `_apply_combined_daily_limits()` resets per-asset exclusions and re-runs the daily win/loss limit logic on the merged stream — so the limit reflects the shared account, not each leg in isolation.
+
+## Backtest API
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET  /strategies` | Registered strategies + `default_params`. |
+| `GET  /strategy-param-ranges/{name}` | `param_ranges` for the optimizer. |
+| `GET  /available-data` | Symbols, timeframes, date ranges, per-strategy min start datetime. |
+| `POST /backtest` | Full single-config backtest. Re-runs `load_strategies()` each call. |
+| `POST /backtest/resimulate` | Fast path that reuses cached signals (only re-runs the simulator with new risk/engine params). |
+| `POST /backtest/multi` | Two-config multi-asset / multi-strat backtest. |
+| `POST /optimize` | Legacy grid search (uses VectorBT via `try/except`; pending refactor). |
+| `GET  /optimization-history` | List past runs from `~/.nebular-apollo/optimization_history.json`. |
+| `GET  /optimization-history/{id}` | Full run details. |
+| `DELETE /optimization-history/{id}` | Remove one run. |
+| `POST /optimization-history/bulk-delete` | Remove many. |
+| `POST /optimization-history/{id}/favorite` | Toggle favorite flag. |
+| `GET/POST/DELETE/PUT /presets` | CRUD on saved backtest configurations (`~/.nebular-apollo/backtest_presets.json`). |
+| `GET  /market-data` | Local datasets metadata. |
+| `POST /market-data/download` | Async download from TopstepX. |
+| `GET  /market-data/download/{id}/status` | Poll download progress. |
+| `DELETE /market-data/{dataset_id}` | Drop a dataset. |
+
+The `/backtest` flow populates `SIGNAL_CACHE` so that subsequent `/backtest/resimulate` calls (triggered by UI sliders for risk/engine params) skip signal generation entirely.
+
+## Contract Switches (Rollovers)
+
+When a futures contract expires:
+
+1. **Write a one-time script** following the templates in `scripts/contract_switch_*.py`:
+   - Fetch remaining bars for the **old contract** up to the day before the rollover and `save_bars(symbol, OLD_CONTRACT_ID, data)` — same contract, appended.
+   - Fetch bars for the **new contract** starting at the first bar of the new CME session and `save_bars(symbol, NEW_CONTRACT_ID, data)` — `save_bars` detects the contract change, appends only post-`existing_end` rows, and adds a new entry to `contract_segments`.
+2. **Update `SYMBOL_CONTRACTS`** in `src/data/market_store.py` to the new contract ID.
+3. Existing scripts in `scripts/`: `contract_switch_MBT_J26.py`, `contract_switch_MBT_K26.py`, `contract_switch_MGC_M26.py`, `fix_contract_switch_MBT_J26.py`, `import_mcl_databento_2025.py`, `update_market_data.py`.
+
+**CME month codes**: F=Jan, G=Feb, H=Mar, J=Apr, K=May, M=Jun, N=Jul, Q=Aug, U=Sep, V=Oct, X=Nov, Z=Dec.
+
+**Time reference for switch dates**: Brussels is CET (UTC+1) from late October to late March, CEST (UTC+2) otherwise. CME opens at 17:00 ET — which is 22:00 UTC in summer / 23:00 UTC in winter (Brussels local time both ~22:00–23:00). The gap between the last bar of the old contract and the first of the new contract is the inter-session gap.
+
+**CSV format**: `Date,Open,High,Low,Close,Volume` with Brussels tz-aware timestamps. Mixed offsets within a file are fine — `market_store.py` reads via `pd.to_datetime(utc=True)` then `tz_convert("Europe/Brussels")`.
 
 ## Contract Specifications
 
-Defined in `CONTRACT_SPECS` and `FEES_MAP` dicts in `backend/api.py`:
+`CONTRACT_SPECS` and `FEES_MAP` are in `backend/api.py` (lines ~309 and ~328). Active micro-futures:
 
 | Symbol | Tick Size | Tick Value | Point Value | Fee RT |
 |--------|-----------|------------|-------------|--------|
@@ -282,30 +327,40 @@ Defined in `CONTRACT_SPECS` and `FEES_MAP` dicts in `backend/api.py`:
 | MNQ    | 0.25      | $0.50      | $2.00       | $0.74  |
 | MYM    | 1.00      | $0.50      | $0.50       | $0.74  |
 
-
-## Testing
-
-```bash
-pytest -xvs                          # All tests
-pytest tests/test_simulator.py -xvs  # Simulator tests
-pytest tests/test_api.py -xvs        # API + session tests
-pytest tests/test_recompose.py -xvs  # Recomposition tests
-```
-
-Key test areas:
-- Blackout window blocking
-- TP1 touch vs bar-close-if-touched execution
-- Partial exit sizing (25% default)
-- Auto-close at configured time
-- DST-shifted session classification
-- Timeframe recomposition with session gaps
+Full-size ES/NQ/RTY/YM/GC/CL/SI/HG/6A/6E/6B specs are also present for FEES_MAP/CONTRACT_SPECS lookups, even though no historical data is loaded for them.
 
 ## Important Conventions
 
-1. **All times in Brussels timezone** — data is stored/indexed in UTC but all business logic converts to `Europe/Brussels`
-2. **Reference frame for configured times** — blackout, auto-close, session boundaries use "reference" Brussels time (offset=0). The system auto-adjusts for DST misalignment.
-3. **No "Outside" session** — removed. All bars are Asia, UK, or US.
-4. **Warmup is not backtest data** — warmup bars are loaded before the requested start date and discarded after indicator computation. Debug exports only contain the backtest range.
-5. **Strategy auto-discovery** — any `Strategy` subclass in `src/strategies/` is automatically registered at startup.
-6. **pandas-ta is local** — the library lives in `libs/pandas-ta/`, not installed via pip.
-7. **All strategies use the event-driven simulator** — there is no legacy VectorBT path for backtesting. The optimization module still uses VectorBT and is pending refactoring.
+1. **All times in Brussels timezone** — data is stored/indexed in UTC, business logic operates in `Europe/Brussels`.
+2. **Reference frame for configured times** — blackout, auto-close, session boundaries use reference Brussels time (offset 0). DST misalignment shifts ref→wall-clock automatically.
+3. **No "Outside" session** — every bar is Asia, UK, or US.
+4. **Warmup ≠ backtest data** — warmup bars are loaded before the requested start, used only to converge indicators, and dropped before simulation and debug export.
+5. **Strategy auto-discovery** — any `Strategy` subclass under `src/strategies/` is registered automatically; `load_strategies()` is re-run on every `/backtest` request, so code edits are picked up without server restart.
+6. **`pandas-ta-classic`, not `pandas-ta`** — the installed package is `pandas-ta-classic` (path `libs/pandas-ta/`, import name `pandas_ta_classic`). The PyPI `pandas-ta` package has divergent formulas. The `Indicators` helper is a no-op stub kept for backwards compatibility.
+7. **Single backtest engine** — all strategies use the event-driven simulator. The legacy VectorBT path is gone for `/backtest`; only `/optimize` still tries to import `vectorbt` (defensively, via `try/except`).
+8. **`tick_size` is injected** — `_run_simulator_backtest` writes the active symbol's `tick_size` into `params` before calling `generate_signals`, so strategies that round to ticks can read `params["tick_size"]` directly.
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `backend/main.py` | FastAPI app, CORS, logging, rate limiter mount. |
+| `backend/api.py` | Backtest orchestration, strategy registry, optimization, presets, signal cache. |
+| `backend/market_data_routes.py` | Market data CRUD + async download. |
+| `src/engine/simulator.py` | Event-driven simulator with intra-bar 1m resolution and all exit modes. |
+| `src/data/market_store.py` | Local CSV storage, index, `SYMBOL_CONTRACTS`, contract-segment tracking. |
+| `src/data/recompose.py` | Per-session 1m → higher-TF recomposition. |
+| `src/data/topstep.py` / `topstepx.py` | Topstep / TopstepX API clients. |
+| `src/strategies/base.py` | `Strategy` ABC. |
+| `src/strategies/*.py` | One file per strategy (see table above). |
+| `src/optimizer/parameter_optimizer.py` | Grid-search optimizer (legacy VectorBT, pending refactor). |
+| `src/optimizer/grid_search.py` | Helper for grid-search combinations. |
+| `frontend/src/App.tsx` | React root, app modes (backtest / optimization / data / favorites), strategy-specific engine overrides. |
+| `frontend/src/api.ts` | API client, TypeScript types, defaults. |
+| `frontend/src/components/Sidebar.tsx` | Backtest configuration UI. |
+| `frontend/src/components/Dashboard.tsx` | Results, KPIs, equity curve, trades. |
+| `frontend/src/components/MarketDataPanel.tsx` | Local dataset management UI. |
+| `frontend/src/components/OptimizationConfig.tsx` / `OptimizationResults.tsx` / `OptimizationHistory.tsx` | Optimizer screens. |
+| `frontend/src/components/FavoritesPage.tsx` | Saved presets / favorited optimization runs. |
+| `pytest.ini` | pytest config (`testpaths=tests`). |
+| `requirements.txt` | Python deps; installs `-e ./libs/pandas-ta` (= the `pandas-ta-classic` package). |
