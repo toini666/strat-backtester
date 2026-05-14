@@ -224,11 +224,17 @@ def test_v3_partial_close_and_loss_exit_blocked_via_simulator():
         "tp1_long": pd.Series([np.nan] * length, index=index),
         "tp1_short": pd.Series([np.nan] * length, index=index),
         "disable_price_tp1": True,
-        # Fast-HMA exit signal fires at bar 3 (in loss → should latch loss_exit_blocked).
+        # Fast-HMA exit fires on bar 3 → arms pendingFinalExit.  A confirmed
+        # hyperwave cross on the same bar lifts the gate, but the trade is
+        # in loss so the exit is blocked and ``loss_exit_blocked`` latches.
         "fast_hma_exit_long": pd.Series(
             [False, False, False, True, False, False], index=index
         ),
         "fast_hma_exit_short": pd.Series([False] * length, index=index),
+        "hw_cross_over": pd.Series(
+            [False, False, False, True, False, False], index=index
+        ),
+        "hw_cross_under": pd.Series([False] * length, index=index),
         "canal_lower": canal_lower,
         "canal_upper": canal_upper,
         "canal_green": pd.Series([False] * length, index=index),
@@ -259,9 +265,10 @@ def test_v3_partial_close_and_loss_exit_blocked_via_simulator():
     trades = result["trades"]
     assert len(trades) == 1
     trade = trades[0]
-    # The trade entered on bar 1.  Bar 3 fast-HMA exit was in loss (close=99 < entry=100)
-    # so the simulator must NOT close on bar 3.  Bar 4 has close (98.5) above canal_lower
-    # (98.0), so still no fallback.  Bar 5: close=97.0 < canal_lower=97.5 → fallback exit.
+    # The trade entered on bar 1.  Bar 3 fast-HMA exit + hyperwave cross is in
+    # loss (close=99 < entry=100) so the simulator must NOT close on bar 3.
+    # Bar 4 has close (98.5) above canal_lower (98.0), so still no fallback.
+    # Bar 5: close=97.0 < canal_lower=97.5 → fallback exit.
     assert trade["status"] == "Canal Exit"
     assert pd.Timestamp(trade["exit_execution_time"]) >= index[4]
 
@@ -366,6 +373,11 @@ def test_v3_canal_fallback_uses_strict_less_than(monkeypatch):
             [False, False, False, True, False, False], index=index
         ),
         "fast_hma_exit_short": pd.Series([False] * length, index=index),
+        # Same-bar hyperwave cross lifts the v3 exit gate on bar 3.
+        "hw_cross_over": pd.Series(
+            [False, False, False, True, False, False], index=index
+        ),
+        "hw_cross_under": pd.Series([False] * length, index=index),
         "canal_lower": canal_lower,
         "canal_upper": canal_upper,
         "setup_bar_long": pd.Series([1] * length, index=index),
@@ -433,6 +445,14 @@ def test_v3_partial_then_fast_hma_exit_closes_in_profit():
             [False, False, False, False, False, True, False], index=index
         ),
         "fast_hma_exit_short": pd.Series([False] * length, index=index),
+        # Bar 4: hw_cross_under fires (drives the partial).  Bar 5: confirmed
+        # hyperwave cross gates the v3 final exit.
+        "hw_cross_over": pd.Series(
+            [False, False, False, False, False, True, False], index=index
+        ),
+        "hw_cross_under": pd.Series(
+            [False, False, False, False, True, False, False], index=index
+        ),
         "canal_lower": pd.Series([99.5] * length, index=index),
         "canal_upper": pd.Series([102.5] * length, index=index),
         "setup_bar_long": pd.Series([1] * length, index=index),
@@ -495,6 +515,146 @@ def test_v3_hw_sl_falls_back_to_previous_cross_within_lookaround(monkeypatch):
     assert int(sigs["setup_bar_long"].iloc[30]) == 30
     assert not bool(sigs["long_entries"].iloc[30])
     assert np.isnan(sigs["sl_long"].iloc[30])
+
+
+def test_v3_pending_final_exit_waits_for_next_hyperwave():
+    """A fast-HMA / SSL cross arms ``pending_final_exit`` but the position
+    must stay open until the next confirmed hyperwave cross.  Once it
+    arrives — even several bars later — the position closes on that bar."""
+    length = 8
+    index = pd.date_range("2024-01-01", periods=length, freq="5min", tz="Europe/Brussels")
+    df = pd.DataFrame(
+        {
+            "Open":  [100.0, 100.0, 100.0, 101.0, 101.5, 101.5, 101.5, 101.5],
+            "High":  [100.5, 100.5, 100.5, 101.5, 102.0, 102.0, 102.0, 102.0],
+            # All lows stay above BE=100 so intra-bar BE never pre-empts the
+            # canal exit.
+            "Low":   [ 99.5,  99.5,  99.5, 100.5, 101.0, 101.0, 101.0, 101.0],
+            "Close": [100.0, 100.0, 100.0, 101.0, 101.5, 101.5, 101.5, 101.5],
+            "Volume": [1000] * length,
+        },
+        index=index,
+    )
+
+    signals = {
+        "long_entries": pd.Series(
+            [False, True, False, False, False, False, False, False], index=index
+        ),
+        "short_entries": pd.Series([False] * length, index=index),
+        "sl_long": pd.Series([np.nan, 95.0, 95.0, 95.0, 95.0, 95.0, 95.0, 95.0], index=index),
+        "sl_short": pd.Series([np.nan] * length, index=index),
+        "tp1_long": pd.Series([np.nan] * length, index=index),
+        "tp1_short": pd.Series([np.nan] * length, index=index),
+        "disable_price_tp1": True,
+        # Fast-HMA exit on bar 3 arms pendingFinalExit but no hyperwave cross
+        # there, so the position must stay open.
+        "fast_hma_exit_long": pd.Series(
+            [False, False, False, True, False, False, False, False], index=index
+        ),
+        "fast_hma_exit_short": pd.Series([False] * length, index=index),
+        # Confirmed hyperwave cross arrives only on bar 6 → exit there.
+        "hw_cross_over": pd.Series(
+            [False, False, False, False, False, False, True, False], index=index
+        ),
+        "hw_cross_under": pd.Series([False] * length, index=index),
+        "canal_lower": pd.Series([99.0] * length, index=index),
+        "canal_upper": pd.Series([102.5] * length, index=index),
+        "setup_bar_long": pd.Series([1] * length, index=index),
+        "setup_bar_short": pd.Series([-1] * length, index=index),
+        "ema_main": pd.Series([100.0] * length, index=index),
+        "ema_secondary": pd.Series([100.0] * length, index=index),
+    }
+
+    cfg = SimulatorConfig(
+        initial_equity=50000,
+        risk_per_trade=0.01,
+        max_contracts=50,
+        tick_size=0.25,
+        tick_value=0.5,
+        point_value=2.0,
+        fee_per_trade=0.0,
+        auto_close_enabled=False,
+        blackout_windows=[],
+        cooldown_bars=0,
+        tp1_execution_mode="touch",
+        tp1_partial_pct=0.0,
+        tp2_partial_pct=0.0,
+        canal_exit_mode="v3_fast_hma_ssl",
+        block_loss_canal_exit_before_tp1=True,
+    )
+
+    result = simulate(df, df, signals, cfg, signals["ema_main"], signals["ema_secondary"])
+    trades = result["trades"]
+    assert len(trades) == 1
+    trade = trades[0]
+    assert trade["status"] == "Canal Exit"
+    # Exit fires on bar 6 → exec time is the next bar's open.
+    assert pd.Timestamp(trade["exit_execution_time"]) == index[7]
+
+
+def test_v3_delta_filter_both_off_falls_back_to_mfi(monkeypatch):
+    """Filter ⑥ with both deltas off requires the contrarian MFI condition
+    (mfi < 0 for long, mfi > 0 for short)."""
+    length = 36
+    data = _build_data(length)
+    # Keep hma1 < hma2 throughout so canal stays red (cg=False) and the
+    # ``hma_long_ok = not cg`` branch lets entries through regardless of
+    # the polarity-recency check.
+    hma1 = np.full(length, 98.0)
+    hma2 = np.full(length, 101.5)
+    bbmc = np.full(length, 100.0)
+    hma2[30:] = 99.0  # slow_cross_long on bar 30
+
+    # Seed HW crosses well before bar 30 so the SL window is valid.
+    _install_fake_indicators(
+        monkeypatch,
+        data,
+        hma1=pd.Series(hma1, index=data.index),
+        hma2=pd.Series(hma2, index=data.index),
+        bbmc=pd.Series(bbmc, index=data.index),
+        hw_cross_over_idx=list(range(20, 28, 2)),
+    )
+
+    # Force osc_sig = 0 at the entry bar so both deltas are off.
+    def _zero_osc(close, high, low, hl2, mL, sT, sL):
+        osc_sig = np.zeros(length)
+        osc_sgd = np.zeros(length)
+        for k in range(20, 28, 2):
+            osc_sig[k - 1] = -1.0
+            osc_sgd[k - 1] = 1.0
+            osc_sig[k] = 1.0
+            osc_sgd[k] = -1.0
+        return (
+            pd.Series(osc_sig, index=data.index),
+            pd.Series(osc_sgd, index=data.index),
+        )
+
+    monkeypatch.setattr(HMASSLOsciV3, "_compute_oscillator", staticmethod(_zero_osc))
+
+    # Case A: mfi > 0 with i_deltaOn=True → long blocked (both deltas off,
+    # but the contrarian MFI condition for long (mfi < 0) is not met).
+    monkeypatch.setattr(
+        HMASSLOsciV3,
+        "_compute_mfi",
+        staticmethod(lambda hl2, volume, mfL, mfS: pd.Series(
+            np.full(length, 5.0), index=data.index
+        )),
+    )
+    params = _base_params()
+    params["delta_on"] = True
+    sigs = HMASSLOsciV3().generate_signals(data.copy(), params)
+    assert not bool(sigs["long_entries"].iloc[30])
+
+    # Case B: mfi < 0 with i_deltaOn=True → long allowed by the ⑥ fallback.
+    monkeypatch.setattr(
+        HMASSLOsciV3,
+        "_compute_mfi",
+        staticmethod(lambda hl2, volume, mfL, mfS: pd.Series(
+            np.full(length, -5.0), index=data.index
+        )),
+    )
+    sigs = HMASSLOsciV3().generate_signals(data.copy(), params)
+    assert bool(sigs["long_entries"].iloc[30])
 
 
 def test_v3_one_trade_per_setup_window_off_allows_reentry():

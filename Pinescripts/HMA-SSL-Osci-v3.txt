@@ -43,7 +43,7 @@ i_sigExtreme   = input.float(20.0, "   Niveau extrême SIG (+/-)",    group=grp_
 i_hwRangeOn    = input.bool(false,  "④ Activer range HW",             group=grp_fil, tooltip="Aucun trade si abs(HW au cross) <= N.")
 i_hwRange      = input.float(10.0, "   Niveau range (+/-)",          group=grp_fil, minval=0.0)
 i_cloudOn      = input.bool(false,  "⑤ Activer nuage MFI",            group=grp_fil, tooltip="Vérifie la position MFI par rapport à sa référence. Compensable par ⑥.")
-i_deltaOn      = input.bool(false,  "⑥ Activer deltas",               group=grp_fil, tooltip="Long OK si delta short non actif. Short OK si delta long non actif. Fallback pour ⑤.")
+i_deltaOn      = input.bool(false,  "⑥ Activer deltas",               group=grp_fil, tooltip="Long OK si delta long actif. Short OK si delta short actif. Si les deux deltas sont éteints : exige nuage MFI < 0 (long) / > 0 (short), comme ⑦. Reste fallback pour ⑤.")
 i_cloudZeroOn  = input.bool(false,  "⑦ Activer nuage < 0 / > 0",      group=grp_fil, tooltip="Long OK si nuage MFI < 0. Short OK si nuage MFI > 0.")
 i_deltaExtOn   = input.bool(false,  "⑧ Activer extinction deltas",     group=grp_fil, tooltip="Long OK si delta short vient de s'éteindre. Short OK si delta long vient de s'éteindre.")
 
@@ -158,6 +158,8 @@ var bool  tpPartialHit      = false
 var int   lastCloseBarIndex = -9999
 var float initialStopPrice  = na
 var bool  lossExitBlocked   = false
+var bool  pendingFinalExitLong  = false
+var bool  pendingFinalExitShort = false
 
 var line lineEntry = na
 var line lineStop  = na
@@ -347,10 +349,11 @@ bool  cloudLongOk       = hasActiveMfiCloud and activeMfiRefLine < activeMfiClou
 bool  cloudShortOk      = hasActiveMfiCloud and activeMfiRefLine > activeMfiCloud
 
 // ⑥ Deltas
-bool deltaLongOn  = oscSig > 0 and mf.mfi > 0
-bool deltaShortOn = oscSig < 0 and mf.mfi < 0
-bool deltaLongOk  = not i_deltaOn or not deltaShortOn
-bool deltaShortOk = not i_deltaOn or not deltaLongOn
+bool deltaLongOn   = oscSig > 0 and mf.mfi > 0
+bool deltaShortOn  = oscSig < 0 and mf.mfi < 0
+bool bothDeltasOff = not deltaLongOn and not deltaShortOn
+bool deltaLongOk   = not i_deltaOn or deltaLongOn  or (bothDeltasOff and mf.mfi < 0)
+bool deltaShortOk  = not i_deltaOn or deltaShortOn or (bothDeltasOff and mf.mfi > 0)
 
 // ⑦ Nuage < 0 / > 0
 bool cloudZeroLongOk  = not i_cloudZeroOn or mf.mfi < 0
@@ -473,6 +476,8 @@ if positionActive and i_autoCloseOn and autoCloseBar and canAct
     lastCloseBarIndex   := bar_index
     tpPartialHit        := false
     lossExitBlocked     := false
+    pendingFinalExitLong  := false
+    pendingFinalExitShort := false
     canAct              := false
     if not na(lineEntry)
         line.delete(lineEntry)
@@ -530,8 +535,11 @@ if positionActive and canAct and bar_index > lastActionBar
         if tpPartialHit and low <= stopPrice and not hitStopLoss
             hitBreakeven := true
 
-        // TP Final V3 : HMA rapide recroise au-dessus de la baseline SSL.
-        bool exitCondLong = fastHmaExitLong
+        // TP Final V3 : signal = cross HMA rapide / baseline SSL,
+        // exécution = à la clôture de la prochaine hyperwave confirmée (peu importe son sens).
+        if fastHmaExitLong
+            pendingFinalExitLong := true
+        bool exitCondLong = pendingFinalExitLong and (hwCrossOver or hwCrossUnder)
         bool allowFinalExitLong = not i_blockLossExitBeforePartial or tpPartialHit or close >= entryPrice
         if exitCondLong and not allowFinalExitLong and not hitBreakeven and not hitStopLoss
             lossExitBlocked := true
@@ -563,8 +571,11 @@ if positionActive and canAct and bar_index > lastActionBar
         if tpPartialHit and high >= stopPrice and not hitStopLoss
             hitBreakeven := true
 
-        // TP Final V3 : HMA rapide recroise en dessous de la baseline SSL.
-        bool exitCondShort = fastHmaExitShort
+        // TP Final V3 : signal = cross HMA rapide / baseline SSL,
+        // exécution = à la clôture de la prochaine hyperwave confirmée (peu importe son sens).
+        if fastHmaExitShort
+            pendingFinalExitShort := true
+        bool exitCondShort = pendingFinalExitShort and (hwCrossOver or hwCrossUnder)
         bool allowFinalExitShort = not i_blockLossExitBeforePartial or tpPartialHit or close <= entryPrice
         if exitCondShort and not allowFinalExitShort and not hitBreakeven and not hitStopLoss
             lossExitBlocked := true
@@ -614,6 +625,8 @@ if positionActive and canAct and bar_index > lastActionBar
         lastCloseBarIndex := bar_index
         tpPartialHit      := false
         lossExitBlocked   := false
+        pendingFinalExitLong  := false
+        pendingFinalExitShort := false
         if not na(lineEntry)
             line.delete(lineEntry)
             lineEntry := na
@@ -837,9 +850,10 @@ if barstate.islast
     table.cell(tbl, 2, 18, positionActive and currentSide == -1 ? hwTpStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == -1 ? hwTpColor : f_bgNa())
 
     // ── TP Final (autre côté canal) ───────────────────────
-    string tpFinalStatus = positionActive ? "actif" : "—"
-    color  tpFinalColor  = positionActive ? color.new(color.lime, 40) : f_bgNa()
-    string tpFinalLabel  = "TP Final (HMA rapide/SSL)"
+    bool   tpFinalPending = (currentSide == 1 and pendingFinalExitLong) or (currentSide == -1 and pendingFinalExitShort)
+    string tpFinalStatus = positionActive ? (tpFinalPending ? "attente HW" : "actif") : "—"
+    color  tpFinalColor  = positionActive ? (tpFinalPending ? color.new(color.orange, 35) : color.new(color.lime, 40)) : f_bgNa()
+    string tpFinalLabel  = "TP Final (HMA rapide/SSL → HW)"
     table.cell(tbl, 0, 19, tpFinalLabel, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=HDR_BG, text_halign=text.align_left)
     table.cell(tbl, 1, 19, positionActive and currentSide == 1  ? tpFinalStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == 1  ? tpFinalColor : f_bgNa())
     table.cell(tbl, 2, 19, positionActive and currentSide == -1 ? tpFinalStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == -1 ? tpFinalColor : f_bgNa())

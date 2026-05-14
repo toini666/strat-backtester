@@ -101,6 +101,7 @@ class _Position:
     canal_exit_armed: bool = False    # for HMA break exits that require first reaching the profit side
     initial_stop_price: float = 0.0  # stop price at entry, never modified (used for partial RR calc)
     loss_exit_blocked: bool = False   # v3: fast HMA/SSL exit fired while in loss, fallback canal-break exit armed
+    pending_final_exit: bool = False  # v3: fast HMA/SSL cross fired; waiting for next hyperwave cross to actually exit
     entry_setup_bar: int = -1         # v3: the setup-window bar this trade was opened in
 
 
@@ -309,7 +310,8 @@ def simulate(
     np_hma_flip_down = _hma_flip_down_s.values if _hma_flip_down_s is not None else None
     has_hma_flip_signals = np_hma_flip_up is not None and np_hma_flip_down is not None
 
-    # v3: fast HMA / SSL baseline cross series (final TP signal)
+    # v3: fast HMA / SSL baseline cross series (final TP signal) and the
+    # confirmed hyperwave cross series that gates the actual exit.
     _fast_exit_long_s = signals.get("fast_hma_exit_long")
     _fast_exit_short_s = signals.get("fast_hma_exit_short")
     np_fast_exit_long = (
@@ -317,6 +319,14 @@ def simulate(
     )
     np_fast_exit_short = (
         _fast_exit_short_s.values if _fast_exit_short_s is not None else None
+    )
+    _hw_cross_over_s = signals.get("hw_cross_over")
+    _hw_cross_under_s = signals.get("hw_cross_under")
+    np_hw_cross_over = (
+        _hw_cross_over_s.values if _hw_cross_over_s is not None else None
+    )
+    np_hw_cross_under = (
+        _hw_cross_under_s.values if _hw_cross_under_s is not None else None
     )
     is_v3_exit_mode = config.canal_exit_mode == "v3_fast_hma_ssl"
 
@@ -1024,19 +1034,29 @@ def simulate(
                             pos.tp2_hit = True
                 if pos is not None:
                     if is_v3_exit_mode:
-                        # v3 TP Final: fast HMA crosses the SSL baseline in the
-                        # opposite direction to the trade.  If the cross happens
-                        # while the trade is still in loss and the partial has
-                        # not been taken, latch ``loss_exit_blocked`` so the
-                        # canal-break fallback can still close the position on
-                        # a subsequent bar.  Order mirrors v3 PineScript:
-                        # fast-HMA check → loss-block fallback → partial.
+                        # v3 TP Final: a fast HMA / SSL baseline cross *arms*
+                        # the exit; the actual close only fires on the next
+                        # confirmed hyperwave cross (either direction).  If
+                        # the armed exit fires while still in loss and the
+                        # partial has not been taken, ``loss_exit_blocked``
+                        # latches so the canal-break fallback can close the
+                        # position on a later bar.  Order mirrors v3
+                        # PineScript: arm pending → exit-cond → loss-block
+                        # fallback → partial.
                         fast_exit_fired = False
                         if pos.side == 1 and np_fast_exit_long is not None and bar_idx < len(np_fast_exit_long):
                             fast_exit_fired = bool(np_fast_exit_long[bar_idx])
                         elif pos.side == -1 and np_fast_exit_short is not None and bar_idx < len(np_fast_exit_short):
                             fast_exit_fired = bool(np_fast_exit_short[bar_idx])
                         if fast_exit_fired:
+                            pos.pending_final_exit = True
+                        hw_cross_any = False
+                        if np_hw_cross_over is not None and bar_idx < len(np_hw_cross_over):
+                            hw_cross_any = hw_cross_any or bool(np_hw_cross_over[bar_idx])
+                        if np_hw_cross_under is not None and bar_idx < len(np_hw_cross_under):
+                            hw_cross_any = hw_cross_any or bool(np_hw_cross_under[bar_idx])
+                        exit_cond_fired = pos.pending_final_exit and hw_cross_any
+                        if exit_cond_fired:
                             if allow_canal_exit:
                                 _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
                                 return True

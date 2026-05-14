@@ -428,8 +428,17 @@ class HMASSLOsciV3(HMASSLOsciV2):
             cloud_long_ok = cloud_long_arr[i]
             cloud_short_ok = cloud_short_arr[i]
 
-            delta_long_ok = not delta_on or not delta_short_on
-            delta_short_ok = not delta_on or not delta_long_on
+            # v3 filter ⑥: when both deltas are off, fall back to the same
+            # contrarian MFI cloud condition as filter ⑦.
+            both_deltas_off = (not delta_long_on) and (not delta_short_on)
+            mfi_neg = (not np.isnan(mfi_i_raw)) and mfi_i_raw < 0
+            mfi_pos = (not np.isnan(mfi_i_raw)) and mfi_i_raw > 0
+            delta_long_ok = (
+                not delta_on or delta_long_on or (both_deltas_off and mfi_neg)
+            )
+            delta_short_ok = (
+                not delta_on or delta_short_on or (both_deltas_off and mfi_pos)
+            )
 
             cloud_zero_long_ok = not cloud_zero_on or (
                 not np.isnan(mfi_i_raw) and mfi_i_raw < 0
@@ -673,6 +682,8 @@ class HMASSLOsciV3(HMASSLOsciV2):
             # v3-specific signals consumed by the simulator
             "fast_hma_exit_long": pd.Series(fast_exit_long_arr, index=data.index),
             "fast_hma_exit_short": pd.Series(fast_exit_short_arr, index=data.index),
+            "hw_cross_over": pd.Series(hw_cross_over_arr, index=data.index),
+            "hw_cross_under": pd.Series(hw_cross_under_arr, index=data.index),
             "setup_bar_long": pd.Series(setup_bar_long_arr, index=data.index),
             "setup_bar_short": pd.Series(setup_bar_short_arr, index=data.index),
             "ema_main": src_ema,
