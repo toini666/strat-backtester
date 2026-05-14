@@ -107,6 +107,7 @@ export interface BacktestEngineSettings {
     daily_win_limit: number;
     daily_loss_limit_enabled: boolean;
     daily_loss_limit: number;
+    daily_limit_mode: 'after_close' | 'intra_bar';
 }
 
 export const DEFAULT_BACKTEST_ENGINE_SETTINGS: BacktestEngineSettings = {
@@ -126,6 +127,7 @@ export const DEFAULT_BACKTEST_ENGINE_SETTINGS: BacktestEngineSettings = {
     daily_win_limit: 500,
     daily_loss_limit_enabled: false,
     daily_loss_limit: 700,
+    daily_limit_mode: 'after_close',
 };
 
 // --- Multi-backtest types ---

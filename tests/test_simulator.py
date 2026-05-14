@@ -908,3 +908,232 @@ def test_simulator_enforces_cooldown_in_engine():
     trade = result["trades"][0]
     assert trade["status"] == "EMA Cross"
     assert trade["entry_time"] == "2024-01-01 09:00:00+01:00"
+
+
+# ---------------------------------------------------------------------------
+# Intra-bar daily limit mode
+# ---------------------------------------------------------------------------
+
+def _intra_bar_index():
+    return pd.DatetimeIndex(
+        [
+            "2024-01-01 09:00:00+01:00",
+            "2024-01-01 09:07:00+01:00",
+        ]
+    )
+
+
+def test_simulator_intra_bar_daily_win_limit_force_closes_long_at_exact_trigger():
+    """A long position is force-closed mid-bar when its floating PnL crosses
+    the daily win limit, at the exact trigger price (not the bar's high or close).
+    """
+    index = _intra_bar_index()
+    # Bar 1: entry at close=100. Bar 2: price ramps from 110 up to 350 then back.
+    data = pd.DataFrame(
+        {
+            "Open": [100.0, 110.0],
+            "High": [100.5, 350.0],
+            "Low": [99.5, 110.0],
+            "Close": [100.0, 200.0],
+            "Volume": [1000, 1000],
+        },
+        index=index,
+    )
+    # 1m sub-bars for bar 2 (09:07 → 09:14, exclusive end). The third sub-bar
+    # (09:09) is the first that contains the win trigger price (300) within its
+    # [low, high] range.
+    data_1m = pd.DataFrame(
+        {
+            "Open": [110.0, 120.0, 150.0, 305.0, 290.0, 270.0, 200.0],
+            "High": [150.0, 200.0, 350.0, 320.0, 300.0, 280.0, 210.0],
+            "Low":  [110.0, 115.0, 140.0, 280.0, 270.0, 260.0, 200.0],
+            "Close":[120.0, 150.0, 300.0, 290.0, 270.0, 260.0, 200.0],
+            "Volume":[100]*7,
+        },
+        index=pd.DatetimeIndex(
+            [f"2024-01-01 09:{m:02d}:00+01:00" for m in range(7, 14)]
+        ),
+    )
+    signals = {
+        "long_entries": _series([True, False], index),
+        "short_entries": _series([False, False], index),
+        "sl_long": _series([99.0, math.nan], index),
+        "sl_short": _series([math.nan, math.nan], index),
+        # TP1 deliberately far away so it doesn't fire before the daily-limit check.
+        "tp1_long": _series([1000.0, math.nan], index),
+        "tp1_short": _series([math.nan, math.nan], index),
+        # ema_main below close so EMA-cross exit can't fire either.
+        "ema_main": _series([50.0, 50.0], index),
+        "ema_secondary": _series([50.0, 50.0], index),
+    }
+
+    result = simulate(
+        data=data,
+        data_1m=data_1m,
+        signals=signals,
+        config=SimulatorConfig(
+            initial_equity=100.0,
+            risk_per_trade=0.01,
+            max_contracts=10,
+            tick_size=1.0,
+            tick_value=1.0,
+            point_value=1.0,
+            fee_per_trade=0.0,
+            auto_close_enabled=False,
+            daily_win_limit_enabled=True,
+            daily_win_limit=200.0,
+            daily_limit_mode="intra_bar",
+        ),
+        ema_main=signals["ema_main"],
+        ema_secondary=signals["ema_secondary"],
+    )
+
+    assert result["metrics"]["total_trades"] == 1
+    trade = result["trades"][0]
+    # Exit price is the win trigger (entry + win_limit / (R*pv) = 100 + 200/1 = 300),
+    # NOT the bar's high (350) nor close (200).
+    assert trade["exit_price"] == 300.0
+    assert trade["status"] == "Daily Win Limit"
+    assert trade["pnl"] == 200.0
+    # The day should be flagged as a win-limit day.
+    assert result["daily_limits_hit"].get("2024-01-01") == "win"
+
+
+def test_simulator_intra_bar_daily_loss_limit_force_closes_long_before_sl():
+    """A long position is force-closed at the loss-limit trigger price even
+    though its hard SL has not been hit. The limit fires INSIDE the bar at the
+    exact threshold price, not at the bar's low.
+    """
+    index = _intra_bar_index()
+    data = pd.DataFrame(
+        {
+            "Open": [100.0, 100.0],
+            "High": [100.5, 100.5],
+            "Low":  [99.7, 98.7],   # Bar 2 low above SL (98) but below loss trigger (99.5).
+            "Close":[100.0, 99.0],
+            "Volume": [1000, 1000],
+        },
+        index=index,
+    )
+    data_1m = pd.DataFrame(
+        {
+            "Open": [100.0, 100.0, 99.9, 99.7, 99.5, 99.0, 99.0],
+            "High": [100.5, 100.3, 100.0, 99.8, 99.6, 99.1, 99.0],
+            "Low":  [99.9, 99.8, 99.7, 99.6, 98.7, 98.9, 99.0],
+            "Close":[100.0, 99.9, 99.7, 99.6, 99.0, 99.0, 99.0],
+            "Volume":[100]*7,
+        },
+        index=pd.DatetimeIndex(
+            [f"2024-01-01 09:{m:02d}:00+01:00" for m in range(7, 14)]
+        ),
+    )
+    signals = {
+        "long_entries": _series([True, False], index),
+        "short_entries": _series([False, False], index),
+        "sl_long": _series([98.0, math.nan], index),
+        "sl_short": _series([math.nan, math.nan], index),
+        "tp1_long": _series([1000.0, math.nan], index),
+        "tp1_short": _series([math.nan, math.nan], index),
+        "ema_main": _series([50.0, 50.0], index),
+        "ema_secondary": _series([50.0, 50.0], index),
+    }
+
+    # daily_loss_limit=0.5, R=1, pv=1 → loss trigger price = 100 - 0.5 = 99.5
+    # The 5th 1m sub-bar (09:11) has L=98.7 < 99.5 < H=99.6 and O=99.5 → fires at 99.5.
+    result = simulate(
+        data=data,
+        data_1m=data_1m,
+        signals=signals,
+        config=SimulatorConfig(
+            initial_equity=100.0,
+            risk_per_trade=0.01,
+            max_contracts=10,
+            tick_size=0.1,
+            tick_value=0.1,
+            point_value=1.0,
+            fee_per_trade=0.0,
+            auto_close_enabled=False,
+            daily_loss_limit_enabled=True,
+            daily_loss_limit=0.5,
+            daily_limit_mode="intra_bar",
+        ),
+        ema_main=signals["ema_main"],
+        ema_secondary=signals["ema_secondary"],
+    )
+
+    assert result["metrics"]["total_trades"] == 1
+    trade = result["trades"][0]
+    assert trade["status"] == "Daily Loss Limit"
+    assert trade["exit_price"] == 99.5
+    assert trade["pnl"] == -0.5
+    assert result["daily_limits_hit"].get("2024-01-01") == "loss"
+
+
+def test_simulator_after_close_mode_does_not_force_close_intrabar():
+    """Same scenario as the intra-bar win test, but with the legacy
+    after_close mode the position runs to end-of-data instead of being
+    closed at the trigger price."""
+    index = _intra_bar_index()
+    data = pd.DataFrame(
+        {
+            "Open": [100.0, 110.0],
+            "High": [100.5, 350.0],
+            "Low": [99.5, 110.0],
+            "Close": [100.0, 200.0],
+            "Volume": [1000, 1000],
+        },
+        index=index,
+    )
+    data_1m = pd.DataFrame(
+        {
+            "Open": [110.0, 120.0, 150.0, 305.0, 290.0, 270.0, 200.0],
+            "High": [150.0, 200.0, 350.0, 320.0, 300.0, 280.0, 210.0],
+            "Low":  [110.0, 115.0, 140.0, 280.0, 270.0, 260.0, 200.0],
+            "Close":[120.0, 150.0, 300.0, 290.0, 270.0, 260.0, 200.0],
+            "Volume":[100]*7,
+        },
+        index=pd.DatetimeIndex(
+            [f"2024-01-01 09:{m:02d}:00+01:00" for m in range(7, 14)]
+        ),
+    )
+    signals = {
+        "long_entries": _series([True, False], index),
+        "short_entries": _series([False, False], index),
+        "sl_long": _series([99.0, math.nan], index),
+        "sl_short": _series([math.nan, math.nan], index),
+        "tp1_long": _series([1000.0, math.nan], index),
+        "tp1_short": _series([math.nan, math.nan], index),
+        "ema_main": _series([50.0, 50.0], index),
+        "ema_secondary": _series([50.0, 50.0], index),
+    }
+
+    result = simulate(
+        data=data,
+        data_1m=data_1m,
+        signals=signals,
+        config=SimulatorConfig(
+            initial_equity=100.0,
+            risk_per_trade=0.01,
+            max_contracts=10,
+            tick_size=1.0,
+            tick_value=1.0,
+            point_value=1.0,
+            fee_per_trade=0.0,
+            auto_close_enabled=False,
+            daily_win_limit_enabled=True,
+            daily_win_limit=200.0,
+            daily_limit_mode="after_close",  # legacy mode
+        ),
+        ema_main=signals["ema_main"],
+        ema_secondary=signals["ema_secondary"],
+    )
+
+    trade = result["trades"][0]
+    # No intra-bar force-close: trade exits at end-of-data on bar 2's close (200).
+    assert trade["status"] == "End of Data"
+    assert trade["exit_price"] == 200.0
+    # Realized PnL on close is only $100 — under the $200 win limit — so the
+    # day is NOT flagged. (In intra_bar mode, the SAME data hits the trigger
+    # at $300 mid-bar and flags the day; that contrast is the whole point.)
+    assert trade["pnl"] == 100.0
+    assert result["daily_limits_hit"] == {}

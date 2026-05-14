@@ -60,15 +60,22 @@ class SimulatorConfig:
     no_sl_after_tp1: bool = False  # if True, intra-bar SL/BE disabled after TP1 (exit only via close-based logic)
     tp1_full_exit: bool = False          # if True, TP1 closes entire position (no partial); no breakeven move
     inverse_canal_exit: bool = False     # if True, LONG exits when close>upper, SHORT exits when close<lower
-    canal_exit_mode: str = "both_hma"    # "both_hma" (default), "break_hma", "inversion_hma", or "v3_fast_hma_ssl"
+    canal_exit_mode: str = "both_hma"    # "both_hma" (default), "break_hma", "inversion_hma", "v3_fast_hma_ssl", or "v3_fixed_points"
     block_loss_canal_exit_before_tp1: bool = False  # if True, ignore losing HMA exits until TP1/partial
     close_partial_min_rr: float = 0.0     # minimum current RR for close-based partial exits; 0 disables
     one_trade_per_setup_window: bool = False  # v3: only one trade per HMA-slow/SSL setup window per side
+    final_exit_points: float = 0.0       # v3 "Points fixes en profit": intra-bar TP at entry ± N points; 0 disables
 
     daily_win_limit_enabled: bool = False
     daily_win_limit: float = 500.0
     daily_loss_limit_enabled: bool = False
     daily_loss_limit: float = 700.0
+    # "after_close": limit is checked only at trade close (legacy behaviour).
+    # "intra_bar":   limit is checked on every 1m sub-bar against the open
+    #                position's floating PnL; when crossed, the position is
+    #                force-closed at the exact trigger price. Not supported in
+    #                multi-asset / multi-strat (rejected at the API layer).
+    daily_limit_mode: str = "after_close"
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +336,7 @@ def simulate(
         _hw_cross_under_s.values if _hw_cross_under_s is not None else None
     )
     is_v3_exit_mode = config.canal_exit_mode == "v3_fast_hma_ssl"
+    is_v3_fixed_exit_mode = config.canal_exit_mode == "v3_fixed_points"
 
     # v3: per-side setup-window bar tracking (sentinel -1 = no setup yet)
     _setup_bar_long_s = signals.get("setup_bar_long")
@@ -370,6 +378,14 @@ def simulate(
         TP1_EXECUTION_BAR_CLOSE_IF_TOUCHED,
     }:
         raise ValueError(f"Unsupported TP1 execution mode: {tp1_execution_mode}")
+
+    if config.daily_limit_mode not in {"after_close", "intra_bar"}:
+        raise ValueError(
+            f"Unsupported daily_limit_mode: {config.daily_limit_mode}"
+        )
+    intra_bar_daily_limit = config.daily_limit_mode == "intra_bar" and (
+        config.daily_win_limit_enabled or config.daily_loss_limit_enabled
+    )
 
     inferred_bar_delta = (
         idx[1] - idx[0] if n > 1 else pd.Timedelta(minutes=1)
@@ -608,6 +624,101 @@ def simulate(
         pos.remaining_size -= exit_size
         return float(exit_size)
 
+    def _check_intra_bar_daily_limit(
+        sub_o: float,
+        sub_h: float,
+        sub_l: float,
+        exit_bar_time: str,
+        exit_exec_time: str,
+    ) -> bool:
+        """Force-close the open position if its floating daily PnL would cross
+        the win/loss limit anywhere inside this sub-bar's [low, high] range.
+
+        Floating PnL = realized PnL from prior closed trades today
+                     + already-realized partial-exit PnL of this trade
+                     + unrealized PnL on the remaining contracts at the candidate price
+                     − the round-trip fee that would be paid on those remaining contracts.
+
+        Returns True iff the position was closed by this check.
+        """
+        nonlocal pos
+        if pos is None or not intra_bar_daily_limit:
+            return False
+        # Excluded positions don't contribute to the live account, so their
+        # floating PnL doesn't drive a real-account limit either.
+        if pos.excluded:
+            return False
+        R = pos.remaining_size
+        if R <= 0 or pv <= 0:
+            return False
+
+        exit_date = _get_brussels_date(exit_exec_time)
+        realized = daily_pnl.get(exit_date, 0.0)
+        partial_gross = sum(p["gross_pnl"] for p in pos.partial_exits)
+        partial_fees = sum(p["fee"] for p in pos.partial_exits)
+        partial_net = partial_gross - partial_fees
+
+        E = pos.entry_price
+        sign = 1.0 if pos.side == 1 else -1.0
+        denom = R * pv
+
+        # P_trigger solves: realized + partial_net + sign*(P-E)*R*pv - fee*R = threshold
+        win_trigger = None
+        loss_trigger = None
+        if config.daily_win_limit_enabled:
+            win_trigger = E + sign * (
+                config.daily_win_limit - realized - partial_net + fee * R
+            ) / denom
+        if config.daily_loss_limit_enabled:
+            loss_trigger = E + sign * (
+                -config.daily_loss_limit - realized - partial_net + fee * R
+            ) / denom
+
+        def _resolve(trigger: float, is_win: bool):
+            # For long: win triggers when price moves UP (P >= trigger).
+            #           loss triggers when price moves DOWN (P <= trigger).
+            # For short: roles of up/down swap.
+            going_up_triggers = (pos.side == 1 and is_win) or (
+                pos.side == -1 and not is_win
+            )
+            if going_up_triggers:
+                if sub_h < trigger:
+                    return None
+                # Sub-bar opened already past the trigger → fires at the open.
+                if sub_o >= trigger:
+                    return sub_o
+                return trigger
+            else:
+                if sub_l > trigger:
+                    return None
+                if sub_o <= trigger:
+                    return sub_o
+                return trigger
+
+        win_price = _resolve(win_trigger, True) if win_trigger is not None else None
+        loss_price = (
+            _resolve(loss_trigger, False) if loss_trigger is not None else None
+        )
+
+        if win_price is None and loss_price is None:
+            return False
+
+        # If both fire in the same sub-bar, attribute to whichever level lies
+        # closer to the sub-bar's open price — i.e. the one price would hit
+        # first under a monotonic move from the open.
+        if win_price is not None and loss_price is not None:
+            if abs(win_price - sub_o) <= abs(loss_price - sub_o):
+                chosen_price, reason = win_price, "Daily Win Limit"
+            else:
+                chosen_price, reason = loss_price, "Daily Loss Limit"
+        elif win_price is not None:
+            chosen_price, reason = win_price, "Daily Win Limit"
+        else:
+            chosen_price, reason = loss_price, "Daily Loss Limit"
+
+        _close_position(chosen_price, exit_bar_time, exit_exec_time, reason)
+        return True
+
     def _cross_under(current_a: float, current_b: float, prev_a: float, prev_b: float) -> bool:
         return (
             not np.isnan(current_a)
@@ -765,6 +876,13 @@ def simulate(
                 _close_position(effective_sl, exit_bar_time, exit_exec_time, sl_reason)
                 return True, tp1_touched_this_bar, tp2_touched_this_bar
 
+            # 1b. v3 "Points fixes en profit": fixed TP at entry + N points (intra-bar touch).
+            if is_v3_fixed_exit_mode and config.final_exit_points > 0:
+                target_long = pos.entry_price + config.final_exit_points
+                if h >= target_long:
+                    _close_position(target_long, exit_bar_time, exit_exec_time, "TP")
+                    return True, tp1_touched_this_bar, tp2_touched_this_bar
+
             # 2. Check TP1 (if not yet hit)
             if has_price_tp1 and not pos.tp1_hit and not tp1_touched_this_bar and h >= pos.tp1_price:
                 if tp1_deferred_to_bar_close:
@@ -820,6 +938,13 @@ def simulate(
             if h >= effective_sl:
                 _close_position(effective_sl, exit_bar_time, exit_exec_time, sl_reason)
                 return True, tp1_touched_this_bar, tp2_touched_this_bar
+
+            # 1b. v3 "Points fixes en profit": fixed TP at entry − N points (intra-bar touch).
+            if is_v3_fixed_exit_mode and config.final_exit_points > 0:
+                target_short = pos.entry_price - config.final_exit_points
+                if l <= target_short:
+                    _close_position(target_short, exit_bar_time, exit_exec_time, "TP")
+                    return True, tp1_touched_this_bar, tp2_touched_this_bar
 
             # 2. Check TP1
             if has_price_tp1 and not pos.tp1_hit and not tp1_touched_this_bar and l <= pos.tp1_price:
@@ -933,6 +1058,7 @@ def simulate(
             if pos is None:
                 return True, tp1_touched_this_bar, tp2_touched_this_bar
 
+            sub_o = sub_bars["Open"].iloc[sub_i]
             sub_h = sub_bars["High"].iloc[sub_i]
             sub_l = sub_bars["Low"].iloc[sub_i]
             sub_c = sub_bars["Close"].iloc[sub_i]
@@ -956,6 +1082,11 @@ def simulate(
                 tp2_touched_this_bar,
             )
             if closed_this_bar:
+                return True, tp1_touched_this_bar, tp2_touched_this_bar
+
+            if _check_intra_bar_daily_limit(
+                sub_o, sub_h, sub_l, exit_bar_time, sub_exec_time
+            ):
                 return True, tp1_touched_this_bar, tp2_touched_this_bar
 
             if (
@@ -1033,7 +1164,12 @@ def simulate(
                         if exited > 0:
                             pos.tp2_hit = True
                 if pos is not None:
-                    if is_v3_exit_mode:
+                    if is_v3_fixed_exit_mode:
+                        # v3 "Points fixes en profit": the final exit fires
+                        # intra-bar inside ``_process_touch_exit``.  Close-based
+                        # logic is limited to the HW partial below.
+                        pass
+                    elif is_v3_exit_mode:
                         # v3 TP Final: a fast HMA / SSL baseline cross *arms*
                         # the exit; the actual close only fires on the next
                         # confirmed hyperwave cross (either direction).  If
@@ -1212,6 +1348,11 @@ def simulate(
                     False,
                     False,
                 )
+                if pos is not None and not closed_this_bar:
+                    if _check_intra_bar_daily_limit(
+                        np_open[i], h, l, bar_time_str, close_time_str
+                    ):
+                        closed_this_bar = True
 
             if (
                 pos is not None

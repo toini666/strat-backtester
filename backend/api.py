@@ -162,6 +162,11 @@ class BacktestEngineSettings(BaseModel):
     daily_win_limit: float = Field(default=500.0, ge=0)
     daily_loss_limit_enabled: bool = False
     daily_loss_limit: float = Field(default=700.0, ge=0)
+    # "after_close": limit is checked when each trade closes (legacy).
+    # "intra_bar":   limit is evaluated against the open position's floating
+    #                PnL on every 1m sub-bar and the position is force-closed
+    #                at the exact trigger price. Not allowed in multi mode.
+    daily_limit_mode: str = Field(default="after_close", pattern="^(after_close|intra_bar)$")
 
 def get_session(dt_str: str) -> str:
     """Determine trading session from a timestamp string.
@@ -632,10 +637,12 @@ def _run_simulator_backtest(
         block_loss_canal_exit_before_tp1=bool(simulator_settings.get("block_loss_canal_exit_before_tp1", False)),
         close_partial_min_rr=float(simulator_settings.get("close_partial_min_rr", 0.0)),
         one_trade_per_setup_window=bool(simulator_settings.get("one_trade_per_setup_window", False)),
+        final_exit_points=float(simulator_settings.get("final_exit_points", 0.0)),
         daily_win_limit_enabled=engine_settings.daily_win_limit_enabled,
         daily_win_limit=engine_settings.daily_win_limit,
         daily_loss_limit_enabled=engine_settings.daily_loss_limit_enabled,
         daily_loss_limit=engine_settings.daily_loss_limit,
+        daily_limit_mode=engine_settings.daily_limit_mode,
     )
 
     try:
@@ -849,10 +856,12 @@ def resimulate(req: ResimulateRequest):
         block_loss_canal_exit_before_tp1=bool(simulator_settings.get("block_loss_canal_exit_before_tp1", False)),
         close_partial_min_rr=float(simulator_settings.get("close_partial_min_rr", 0.0)),
         one_trade_per_setup_window=bool(simulator_settings.get("one_trade_per_setup_window", False)),
+        final_exit_points=float(simulator_settings.get("final_exit_points", 0.0)),
         daily_win_limit_enabled=engine_settings.daily_win_limit_enabled,
         daily_win_limit=engine_settings.daily_win_limit,
         daily_loss_limit_enabled=engine_settings.daily_loss_limit_enabled,
         daily_loss_limit=engine_settings.daily_loss_limit,
+        daily_limit_mode=engine_settings.daily_limit_mode,
     )
 
     try:
@@ -1183,6 +1192,19 @@ def run_multi_backtest(req: MultiBacktestRequest):
             status_code=400,
             detail="multi_strat mode requires both configs to use the same symbol",
         )
+
+    for slot, cfg in enumerate(req.configs, start=1):
+        if cfg.engine_settings.daily_limit_mode == "intra_bar":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Config #{slot}: daily_limit_mode='intra_bar' is not supported in "
+                    "multi-asset / multi-strat mode. The intra-bar limit relies on a single "
+                    "live equity stream; with two independent legs the combined account PnL "
+                    "is only known after both have run. Use 'after_close' for multi-mode "
+                    "backtests."
+                ),
+            )
 
     cfg1, cfg2 = req.configs[0], req.configs[1]
     label1 = f"{cfg1.symbol} / {cfg1.strategy_name} ({cfg1.interval})"

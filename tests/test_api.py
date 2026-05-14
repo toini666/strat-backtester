@@ -504,3 +504,45 @@ class TestMultiStratCombinedDailyLimits:
         assert tB1 not in merged, "tB1 should have been dropped by position lock"
         assert not tA1["excluded"]
         assert not tA2["excluded"], "tA2 should be allowed: only -$400 in accepted trades"
+
+
+class TestMultiBacktestRejectsIntraBarDailyLimit:
+    """The intra-bar daily limit mode relies on a single live equity stream
+    and is not supported in multi-asset / multi-strat. The /backtest/multi
+    endpoint must reject either config requesting it."""
+
+    def _payload(self, slot_with_intra: int, mode: str = "multi_asset"):
+        def cfg(intra: bool):
+            engine = {
+                "daily_loss_limit_enabled": True,
+                "daily_loss_limit": 500.0,
+            }
+            if intra:
+                engine["daily_limit_mode"] = "intra_bar"
+            return {
+                "strategy_name": "EMABreakOsc",
+                "symbol": "MNQ",
+                "interval": "5m",
+                "params": {},
+                "risk_per_trade": 0.01,
+                "max_contracts": 10,
+                "engine_settings": engine,
+            }
+        return {
+            "mode": mode,
+            "start_datetime": "2024-01-02T00:00:00+01:00",
+            "end_datetime": "2024-01-03T00:00:00+01:00",
+            "initial_equity": 50000.0,
+            "configs": [cfg(slot_with_intra == 1), cfg(slot_with_intra == 2)],
+        }
+
+    def test_rejects_intra_bar_on_slot_1(self, client):
+        resp = client.post("/backtest/multi", json=self._payload(slot_with_intra=1))
+        assert resp.status_code == 400
+        assert "intra_bar" in resp.json()["detail"]
+        assert "Config #1" in resp.json()["detail"]
+
+    def test_rejects_intra_bar_on_slot_2(self, client):
+        resp = client.post("/backtest/multi", json=self._payload(slot_with_intra=2))
+        assert resp.status_code == 400
+        assert "Config #2" in resp.json()["detail"]

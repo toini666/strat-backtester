@@ -276,6 +276,14 @@ export function Sidebar({
                 </select>
             );
         }
+        if (key === 'final_exit_mode') {
+            return (
+                <select className="input-base" value={String(value)} onChange={(e) => handleParamChange(key, e.target.value)}>
+                    <option value="HMA rapide/SSL → HW">HMA rapide/SSL → HW</option>
+                    <option value="Points fixes en profit">Points fixes en profit</option>
+                </select>
+            );
+        }
         if (typeof value === 'string') {
             return (
                 <input
@@ -553,6 +561,27 @@ export function Sidebar({
                                     disabled={!engineSettings.daily_loss_limit_enabled || dailyLimitsReadOnly}
                                     onChange={(e) => setEngineSettings((prev) => ({ ...prev, daily_loss_limit: Number(e.target.value) }))}
                                 />
+                            </div>
+
+                            <div className="md:col-span-2 xl:col-span-3">
+                                <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider font-medium">
+                                    Daily Limit Mode
+                                    {isMulti && <span className="ml-1 text-[10px] text-gray-600 normal-case">(intra-bar non disponible en multi)</span>}
+                                </label>
+                                <select
+                                    className="input-base"
+                                    value={engineSettings.daily_limit_mode}
+                                    disabled={dailyLimitsReadOnly || (!engineSettings.daily_win_limit_enabled && !engineSettings.daily_loss_limit_enabled)}
+                                    onChange={(e) => {
+                                        const mode = e.target.value as 'after_close' | 'intra_bar';
+                                        // Guard: never allow intra_bar in multi mode (API rejects it too).
+                                        if (mode === 'intra_bar' && isMulti) return;
+                                        setEngineSettings((prev) => ({ ...prev, daily_limit_mode: mode }));
+                                    }}
+                                >
+                                    <option value="after_close">After Close (legacy) — limite vérifiée après chaque clôture</option>
+                                    <option value="intra_bar" disabled={isMulti}>Intra-Bar (live) — coupe la position dès que la limite est atteinte</option>
+                                </select>
                             </div>
                         </div>
                     </div>

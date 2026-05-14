@@ -79,6 +79,10 @@ class HMASSLOsciV3(HMASSLOsciV2):
         "hw_partial_pct": 25.0,
         "hw_partial_min_rr": 0.0,
         "block_loss_exit_before_partial": True,
+        # Final exit mode (v3): "HMA rapide/SSL → HW" (legacy) or
+        # "Points fixes en profit" (intra-bar TP at entry ± final_exit_points).
+        "final_exit_mode": "HMA rapide/SSL → HW",
+        "final_exit_points": 50.0,
         # Injected by engine
         "tick_size": 0.25,
     }
@@ -108,6 +112,7 @@ class HMASSLOsciV3(HMASSLOsciV2):
         "block_loss_exit_before_partial": [True, False],
         "signal_candle_sl_on": [True, False],
         "one_trade_per_entry_window": [True, False],
+        "final_exit_points": [25.0, 50.0, 75.0, 100.0],
     }
 
     def get_simulator_settings(self, params=None):
@@ -116,7 +121,12 @@ class HMASSLOsciV3(HMASSLOsciV2):
         settings["tp1_execution_mode"] = "touch"
         settings["tp1_partial_pct"] = float(p.get("hw_partial_pct", 25.0)) / 100.0
         settings["tp2_partial_pct"] = 0.0
-        settings["canal_exit_mode"] = "v3_fast_hma_ssl"
+        final_mode = p.get("final_exit_mode", "HMA rapide/SSL → HW")
+        if final_mode == "Points fixes en profit":
+            settings["canal_exit_mode"] = "v3_fixed_points"
+        else:
+            settings["canal_exit_mode"] = "v3_fast_hma_ssl"
+        settings["final_exit_points"] = float(p.get("final_exit_points", 50.0))
         settings["block_loss_canal_exit_before_tp1"] = bool(
             p.get("block_loss_exit_before_partial", True)
         )
