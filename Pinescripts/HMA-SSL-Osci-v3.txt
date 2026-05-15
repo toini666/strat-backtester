@@ -57,9 +57,9 @@ i_signalCandleSlOn = input.bool(true, "Vérifier bougie signal vs SL", group=grp
 i_oneTradePerEntryWindow = input.bool(true, "Un trade max par fenêtre d'entrée", group=grp_risk, tooltip="Si activé, une fenêtre HMA lente/SSL ne peut déclencher qu'un seul trade du même sens. Après un SL dans cette fenêtre, aucune reprise n'est autorisée avant un nouveau cross.")
 i_hwPartialPct = input.float(25.0, "TP partiel Hyperwave (%)",     group=grp_risk, minval=0.0, maxval=100.0, step=0.5, tooltip="Taille cible côté indicateur. Le JSON PARTIAL reste standard; l'exécution utilise la configuration PARTIAL du bot.")
 i_hwPartialMinRr = input.float(0.0, "RR min TP partiel Hyperwave", group=grp_risk, minval=0.0, step=0.25, tooltip="TP partiel Hyperwave ignoré si le RR courant est inférieur à ce seuil. 0 = désactivé.")
-i_blockLossExitBeforePartial = input.bool(true, "Bloquer clôture finale en perte avant TP partiel", group=grp_risk, tooltip="Si activé, le signal de clôture finale HMA rapide/SSL est ignoré tant que le TP partiel n'a pas été pris et que le trade est en perte. Le SL et le BE restent inchangés. Sans effet en mode 'Points fixes en profit'.")
-i_finalExitMode    = input.string("HMA rapide/SSL → HW", "Mode sortie finale", group=grp_risk, options=["HMA rapide/SSL → HW", "Points fixes en profit"], tooltip="Choix de la condition de sortie finale du trade. 'HMA rapide/SSL → HW' : mode historique (cross HMA rapide vs baseline SSL, exécution à la prochaine HW). 'Points fixes en profit' : ferme au touche dès que le profit atteint N points.")
-i_finalExitPoints  = input.float(50.0, "   Sortie finale (points)", group=grp_risk, minval=0.0, step=1.0, tooltip="Nombre de points de profit déclenchant la sortie finale en mode 'Points fixes en profit'. Exécution intrabar (high pour long, low pour short). 0 = désactive le mode.")
+i_blockLossExitBeforePartial = input.bool(true, "Bloquer clôture finale en perte avant TP partiel", group=grp_risk, tooltip="Si activé, le signal de clôture finale HMA rapide/SSL est ignoré tant que le TP partiel n'a pas été pris et que le trade est en perte. Le SL et le BE restent inchangés. Sans effet en mode '% du prix d'entrée en profit'.")
+i_finalExitMode    = input.string("HMA rapide/SSL → HW", "Mode sortie finale", group=grp_risk, options=["HMA rapide/SSL → HW", "% du prix d'entrée en profit"], tooltip="Choix de la condition de sortie finale du trade. 'HMA rapide/SSL → HW' : mode historique (cross HMA rapide vs baseline SSL, exécution à la prochaine HW). '% du prix d'entrée en profit' : ferme au touche dès que le profit atteint N% du prix d'entrée (cible arrondie au mintick).")
+i_finalExitPct     = input.float(0.1,  "   Sortie finale (% prix entrée)", group=grp_risk, minval=0.0, step=0.01, tooltip="Pourcentage du prix d'entrée déclenchant la sortie finale en mode '% du prix d'entrée en profit'. Ex. 0.01 = 0,01% (facteur ×0,0001). La cible = prix d'entrée ± (entrée × pct / 100), arrondie au mintick. Exécution intrabar (high pour long, low pour short). 0 = désactive le mode.")
 
 simple int HW_SL_LOOKAROUND = 2
 
@@ -165,6 +165,7 @@ var bool  pendingFinalExitShort = false
 
 var line lineEntry = na
 var line lineStop  = na
+var line lineTp    = na
 
 // ============================================
 // FONCTIONS UTILITAIRES
@@ -487,6 +488,9 @@ if positionActive and i_autoCloseOn and autoCloseBar and canAct
     if not na(lineStop)
         line.delete(lineStop)
         lineStop := na
+    if not na(lineTp)
+        line.delete(lineTp)
+        lineTp := na
 
 // --- 1. ENTRÉE LONGUE ---
 if not positionActive and finalLongEntry and canAct and not inBlackout
@@ -500,6 +504,9 @@ if not positionActive and finalLongEntry and canAct and not inBlackout
     tpPartialHit     := false
     lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue,   style=line.style_dotted, width=1)
     lineStop  := line.new(bar_index, stopPrice,  bar_index + 1, stopPrice,  color=color.red,    style=line.style_dotted, width=1)
+    if i_finalExitMode == "% du prix d'entrée en profit" and i_finalExitPct > 0
+        float tpLongInit = roundToTick(entryPrice * (1.0 + i_finalExitPct / 100.0))
+        lineTp := line.new(bar_index, tpLongInit, bar_index + 1, tpLongInit, color=color.green, style=line.style_dotted, width=1)
     alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"BUY","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
 
 // --- 2. ENTRÉE COURTE ---
@@ -514,6 +521,9 @@ else if not positionActive and finalShortEntry and canAct and not inBlackout
     tpPartialHit     := false
     lineEntry := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue,   style=line.style_dotted, width=1)
     lineStop  := line.new(bar_index, stopPrice,  bar_index + 1, stopPrice,  color=color.red,    style=line.style_dotted, width=1)
+    if i_finalExitMode == "% du prix d'entrée en profit" and i_finalExitPct > 0
+        float tpShortInit = roundToTick(entryPrice * (1.0 - i_finalExitPct / 100.0))
+        lineTp := line.new(bar_index, tpShortInit, bar_index + 1, tpShortInit, color=color.green, style=line.style_dotted, width=1)
     alert('{"ticker":"' + syminfo.ticker + '","type":"SIGNAL","side":"SELL","entry":' + str.tostring(entryPrice) + ',"stop":' + str.tostring(stopPrice) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}', alert.freq_once_per_bar_close)
 
 // --- 3. SORTIES ---
@@ -541,7 +551,7 @@ if positionActive and canAct and bar_index > lastActionBar
         // TP Final V3 - 2 modes selon i_finalExitMode:
         //   1. "HMA rapide/SSL → HW" : signal = cross HMA rapide / baseline SSL,
         //      exécution = à la clôture de la prochaine hyperwave confirmée (peu importe son sens).
-        //   2. "Points fixes en profit" : sortie au touche dès que high >= entry + N pts.
+        //   2. "% du prix d'entrée en profit" : sortie au touche dès que high >= entry × (1 + pct/100), arrondi au mintick.
         if i_finalExitMode == "HMA rapide/SSL → HW"
             if fastHmaExitLong
                 pendingFinalExitLong := true
@@ -555,8 +565,8 @@ if positionActive and canAct and bar_index > lastActionBar
             // Sortie alternative après blocage : close sous le canal HMA
             if lossExitBlocked and close < canalLower and not hitBreakeven and not hitStopLoss and not hitCanalExit
                 hitCanalExit := true
-        else if i_finalExitMode == "Points fixes en profit" and i_finalExitPoints > 0
-            float targetLong = entryPrice + i_finalExitPoints
+        else if i_finalExitMode == "% du prix d'entrée en profit" and i_finalExitPct > 0
+            float targetLong = roundToTick(entryPrice * (1.0 + i_finalExitPct / 100.0))
             if high >= targetLong and not hitBreakeven and not hitStopLoss
                 hitCanalExit    := true
                 fixedTpExitPrice := targetLong
@@ -585,7 +595,7 @@ if positionActive and canAct and bar_index > lastActionBar
         // TP Final V3 - 2 modes selon i_finalExitMode:
         //   1. "HMA rapide/SSL → HW" : signal = cross HMA rapide / baseline SSL,
         //      exécution = à la clôture de la prochaine hyperwave confirmée (peu importe son sens).
-        //   2. "Points fixes en profit" : sortie au touche dès que low <= entry - N pts.
+        //   2. "% du prix d'entrée en profit" : sortie au touche dès que low <= entry × (1 - pct/100), arrondi au mintick.
         if i_finalExitMode == "HMA rapide/SSL → HW"
             if fastHmaExitShort
                 pendingFinalExitShort := true
@@ -599,8 +609,8 @@ if positionActive and canAct and bar_index > lastActionBar
             // Sortie alternative après blocage : close au-dessus du canal HMA
             if lossExitBlocked and close > canalUpper and not hitBreakeven and not hitStopLoss and not hitCanalExit
                 hitCanalExit := true
-        else if i_finalExitMode == "Points fixes en profit" and i_finalExitPoints > 0
-            float targetShort = entryPrice - i_finalExitPoints
+        else if i_finalExitMode == "% du prix d'entrée en profit" and i_finalExitPct > 0
+            float targetShort = roundToTick(entryPrice * (1.0 - i_finalExitPct / 100.0))
             if low <= targetShort and not hitBreakeven and not hitStopLoss
                 hitCanalExit    := true
                 fixedTpExitPrice := targetShort
@@ -634,7 +644,10 @@ if positionActive and canAct and bar_index > lastActionBar
         float  exitPrice      = hitStopLoss ? stopPrice : (hitBreakeven ? entryPrice : (not na(fixedTpExitPrice) ? fixedTpExitPrice : close))
         string closeAlertJson = '{"ticker":"' + syminfo.ticker + '","type":"CLOSE","side":"' + closeSide + '","entry":' + str.tostring(roundToTick(exitPrice)) + ',"strat":"' + i_stratName + '-' + syminfo.ticker + '-' + getTimeframe() + '","timeframe":"' + getTimeframe() + '"}'
         if hitCanalExit
-            alert(closeAlertJson, not na(fixedTpExitPrice) ? alert.freq_once_per_bar : alert.freq_once_per_bar_close)
+            if not na(fixedTpExitPrice)
+                alert(closeAlertJson, alert.freq_once_per_bar)
+            else
+                alert(closeAlertJson, alert.freq_once_per_bar_close)
         else
             alert(closeAlertJson, alert.freq_once_per_bar)
 
@@ -652,12 +665,17 @@ if positionActive and canAct and bar_index > lastActionBar
         if not na(lineStop)
             line.delete(lineStop)
             lineStop := na
+        if not na(lineTp)
+            line.delete(lineTp)
+            lineTp := na
     else
         if not na(lineEntry)
             line.set_x2(lineEntry, bar_index + 1)
         if not na(lineStop)
             line.set_xy1(lineStop, bar_index, stopPrice)
             line.set_xy2(lineStop, bar_index + 1, stopPrice)
+        if not na(lineTp)
+            line.set_x2(lineTp, bar_index + 1)
 
 // ============================================
 // VISUALISATION
@@ -869,8 +887,8 @@ if barstate.islast
     table.cell(tbl, 2, 18, positionActive and currentSide == -1 ? hwTpStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == -1 ? hwTpColor : f_bgNa())
 
     // ── TP Final ──────────────────────────────────────────
-    string tpFinalLabel = i_finalExitMode == "Points fixes en profit"
-         ? "TP Final (+" + str.tostring(i_finalExitPoints, "#") + " pts)"
+    string tpFinalLabel = i_finalExitMode == "% du prix d'entrée en profit"
+         ? "TP Final (+" + str.tostring(i_finalExitPct, "#.###") + "%)"
          : "TP Final (HMA rapide/SSL → HW)"
 
     string tpFinalStatusL = "—"
@@ -888,11 +906,11 @@ if barstate.islast
         else if currentSide == -1
             tpFinalStatusS := s
             tpFinalColorS  := c
-    else if positionActive and i_finalExitMode == "Points fixes en profit"
-        float dist = currentSide == 1 ? close - entryPrice : entryPrice - close
-        bool   reached = i_finalExitPoints > 0 and dist >= i_finalExitPoints
-        string s = str.tostring(dist, "#.#") + "/" + str.tostring(i_finalExitPoints, "#") + " pts"
-        color  c = i_finalExitPoints <= 0 ? f_bgNa() : (reached ? color.new(color.lime, 40) : color.new(color.orange, 35))
+    else if positionActive and i_finalExitMode == "% du prix d'entrée en profit"
+        float distPct = entryPrice > 0 ? (currentSide == 1 ? (close - entryPrice) : (entryPrice - close)) / entryPrice * 100.0 : 0.0
+        bool   reached = i_finalExitPct > 0 and distPct >= i_finalExitPct
+        string s = str.tostring(distPct, "#.###") + "/" + str.tostring(i_finalExitPct, "#.###") + "%"
+        color  c = i_finalExitPct <= 0 ? f_bgNa() : (reached ? color.new(color.lime, 40) : color.new(color.orange, 35))
         if currentSide == 1
             tpFinalStatusL := s
             tpFinalColorL  := c

@@ -746,7 +746,7 @@ def _fixed_exit_signals(length: int, index, long_entries_at: int, sl: float):
     return signals
 
 
-def _fixed_mode_cfg(final_exit_points: float = 50.0) -> SimulatorConfig:
+def _fixed_mode_cfg(final_exit_pct: float = 50.0) -> SimulatorConfig:
     return SimulatorConfig(
         initial_equity=50000,
         risk_per_trade=0.01,
@@ -761,7 +761,7 @@ def _fixed_mode_cfg(final_exit_points: float = 50.0) -> SimulatorConfig:
         tp1_partial_pct=0.0,
         tp2_partial_pct=0.0,
         canal_exit_mode="v3_fixed_points",
-        final_exit_points=final_exit_points,
+        final_exit_pct=final_exit_pct,
     )
 
 
@@ -784,7 +784,7 @@ def test_v3_fixed_points_long_exits_at_target_on_wick_touch():
     # Entry at bar 1 (close=100). Bar 2 wick: high=152 touches 150, low=95 — but
     # SL is at 80, far below, so the SL doesn't fire on this bar.
     signals = _fixed_exit_signals(length, index, long_entries_at=1, sl=80.0)
-    cfg = _fixed_mode_cfg(final_exit_points=50.0)
+    cfg = _fixed_mode_cfg(final_exit_pct=50.0)
     result = simulate(df, df, signals, cfg, signals["ema_main"], signals["ema_secondary"])
     trades = result["trades"]
     assert len(trades) == 1
@@ -818,7 +818,7 @@ def test_v3_fixed_points_short_exits_at_target_on_wick_touch():
     sigs["setup_bar_long"] = pd.Series([-1] * length, index=index)
     sigs["setup_bar_short"] = pd.Series([1] * length, index=index)
 
-    cfg = _fixed_mode_cfg(final_exit_points=50.0)
+    cfg = _fixed_mode_cfg(final_exit_pct=50.0)
     result = simulate(df, df, sigs, cfg, sigs["ema_main"], sigs["ema_secondary"])
     trades = result["trades"]
     assert len(trades) == 1
@@ -829,7 +829,7 @@ def test_v3_fixed_points_short_exits_at_target_on_wick_touch():
 
 
 def test_v3_fixed_points_zero_disables_target_exit():
-    """final_exit_points=0 ⇒ no fixed-TP fires; only SL/auto-close can close."""
+    """final_exit_pct=0 ⇒ no fixed-TP fires; only SL/auto-close can close."""
     length = 5
     index = pd.date_range("2024-01-01", periods=length, freq="5min", tz="Europe/Brussels")
     df = pd.DataFrame(
@@ -843,7 +843,7 @@ def test_v3_fixed_points_zero_disables_target_exit():
         index=index,
     )
     signals = _fixed_exit_signals(length, index, long_entries_at=1, sl=80.0)
-    cfg = _fixed_mode_cfg(final_exit_points=0.0)
+    cfg = _fixed_mode_cfg(final_exit_pct=0.0)
     result = simulate(df, df, signals, cfg, signals["ema_main"], signals["ema_secondary"])
     trades = result["trades"]
     # No SL hit (low never <= 80); no auto-close; no target → trade stays open
@@ -871,7 +871,7 @@ def test_v3_fixed_points_sl_wins_when_both_hit_in_same_bar():
     # higher-TF bar's span.  Passing data_1m=df (5m) means the sub-bar
     # window is empty and _process_touch_exit runs once on the 5m bar.
     signals = _fixed_exit_signals(length, index, long_entries_at=1, sl=95.0)
-    cfg = _fixed_mode_cfg(final_exit_points=50.0)
+    cfg = _fixed_mode_cfg(final_exit_pct=50.0)
     # Use empty 1m data to force single-bar resolution (SL>TP priority via
     # the order of checks in _process_touch_exit).
     empty_1m = df.iloc[0:0]
@@ -898,7 +898,7 @@ def test_v3_fixed_points_no_exit_on_entry_bar():
         index=index,
     )
     signals = _fixed_exit_signals(length, index, long_entries_at=1, sl=80.0)
-    cfg = _fixed_mode_cfg(final_exit_points=50.0)
+    cfg = _fixed_mode_cfg(final_exit_pct=50.0)
     result = simulate(df, df, signals, cfg, signals["ema_main"], signals["ema_secondary"])
     trades = result["trades"]
     # The wick on bar 1 must NOT close the trade on bar 1 (entry bar).
@@ -909,18 +909,18 @@ def test_v3_fixed_points_no_exit_on_entry_bar():
 
 
 def test_v3_fixed_points_strategy_routes_settings_correctly():
-    """The strategy's get_simulator_settings must route Points-fixes mode to
-    canal_exit_mode='v3_fixed_points' and pass final_exit_points through."""
+    """The strategy's get_simulator_settings must route %-en-profit mode to
+    canal_exit_mode='v3_fixed_points' and pass final_exit_pct through."""
     s = HMASSLOsciV3()
     p = s.default_params.copy()
-    p["final_exit_mode"] = "Points fixes en profit"
-    p["final_exit_points"] = 42.0
+    p["final_exit_mode"] = "% du prix d'entrée en profit"
+    p["final_exit_pct"] = 0.5
     settings = s.get_simulator_settings(p)
     assert settings["canal_exit_mode"] == "v3_fixed_points"
-    assert settings["final_exit_points"] == 42.0
+    assert settings["final_exit_pct"] == 0.5
 
     p["final_exit_mode"] = "HMA rapide/SSL → HW"
     settings = s.get_simulator_settings(p)
     assert settings["canal_exit_mode"] == "v3_fast_hma_ssl"
-    # final_exit_points still propagates but the simulator ignores it in this mode.
-    assert settings["final_exit_points"] == 42.0
+    # final_exit_pct still propagates but the simulator ignores it in this mode.
+    assert settings["final_exit_pct"] == 0.5

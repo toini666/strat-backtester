@@ -280,7 +280,7 @@ export function Sidebar({
             return (
                 <select className="input-base" value={String(value)} onChange={(e) => handleParamChange(key, e.target.value)}>
                     <option value="HMA rapide/SSL → HW">HMA rapide/SSL → HW</option>
-                    <option value="Points fixes en profit">Points fixes en profit</option>
+                    <option value="% du prix d'entrée en profit">% du prix d'entrée en profit</option>
                 </select>
             );
         }

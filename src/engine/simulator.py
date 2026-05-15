@@ -64,7 +64,7 @@ class SimulatorConfig:
     block_loss_canal_exit_before_tp1: bool = False  # if True, ignore losing HMA exits until TP1/partial
     close_partial_min_rr: float = 0.0     # minimum current RR for close-based partial exits; 0 disables
     one_trade_per_setup_window: bool = False  # v3: only one trade per HMA-slow/SSL setup window per side
-    final_exit_points: float = 0.0       # v3 "Points fixes en profit": intra-bar TP at entry ± N points; 0 disables
+    final_exit_pct: float = 0.0          # v3 "% du prix d'entrée en profit": intra-bar TP at entry × (1 ± pct/100), rounded to tick; 0 disables
 
     daily_win_limit_enabled: bool = False
     daily_win_limit: float = 500.0
@@ -876,9 +876,12 @@ def simulate(
                 _close_position(effective_sl, exit_bar_time, exit_exec_time, sl_reason)
                 return True, tp1_touched_this_bar, tp2_touched_this_bar
 
-            # 1b. v3 "Points fixes en profit": fixed TP at entry + N points (intra-bar touch).
-            if is_v3_fixed_exit_mode and config.final_exit_points > 0:
-                target_long = pos.entry_price + config.final_exit_points
+            # 1b. v3 "% du prix d'entrée en profit": fixed TP at entry × (1 + pct/100), rounded to tick (intra-bar touch).
+            if is_v3_fixed_exit_mode and config.final_exit_pct > 0:
+                target_long = _round_tick(
+                    pos.entry_price * (1.0 + config.final_exit_pct / 100.0),
+                    config.tick_size,
+                )
                 if h >= target_long:
                     _close_position(target_long, exit_bar_time, exit_exec_time, "TP")
                     return True, tp1_touched_this_bar, tp2_touched_this_bar
@@ -939,9 +942,12 @@ def simulate(
                 _close_position(effective_sl, exit_bar_time, exit_exec_time, sl_reason)
                 return True, tp1_touched_this_bar, tp2_touched_this_bar
 
-            # 1b. v3 "Points fixes en profit": fixed TP at entry − N points (intra-bar touch).
-            if is_v3_fixed_exit_mode and config.final_exit_points > 0:
-                target_short = pos.entry_price - config.final_exit_points
+            # 1b. v3 "% du prix d'entrée en profit": fixed TP at entry × (1 − pct/100), rounded to tick (intra-bar touch).
+            if is_v3_fixed_exit_mode and config.final_exit_pct > 0:
+                target_short = _round_tick(
+                    pos.entry_price * (1.0 - config.final_exit_pct / 100.0),
+                    config.tick_size,
+                )
                 if l <= target_short:
                     _close_position(target_short, exit_bar_time, exit_exec_time, "TP")
                     return True, tp1_touched_this_bar, tp2_touched_this_bar
@@ -1165,7 +1171,7 @@ def simulate(
                             pos.tp2_hit = True
                 if pos is not None:
                     if is_v3_fixed_exit_mode:
-                        # v3 "Points fixes en profit": the final exit fires
+                        # v3 "% du prix d'entrée en profit": the final exit fires
                         # intra-bar inside ``_process_touch_exit``.  Close-based
                         # logic is limited to the HW partial below.
                         pass

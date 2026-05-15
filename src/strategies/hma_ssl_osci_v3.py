@@ -41,7 +41,7 @@ class HMASSLOsciV3(HMASSLOsciV2):
 
     default_params = {
         # HMA Ribbon
-        "ema_len": 7,
+        "ema_len": 13,
         "hma1_len": 13,
         "hma2_len": 21,
         "amp_mult": 2.0,
@@ -59,14 +59,14 @@ class HMASSLOsciV3(HMASSLOsciV2):
         "mf_smooth": 6,
         # Oscillator filters (PineScript v3 ①-⑧; filter ⑨ removed)
         "hw_dir_on": True,
-        "hw_extreme_on": False,
+        "hw_extreme_on": True,
         "hw_extreme": 20.0,
-        "sig_extreme_on": False,
-        "sig_extreme": 20.0,
+        "sig_extreme_on": True,
+        "sig_extreme": 35.0,
         "hw_range_on": False,
         "hw_range": 10.0,
         "cloud_on": False,
-        "delta_on": False,
+        "delta_on": True,
         "cloud_zero_on": False,
         "delta_ext_on": False,
         # Risk management
@@ -74,15 +74,15 @@ class HMASSLOsciV3(HMASSLOsciV2):
         "max_sl_points": 300.0,
         "cooldown_bars": 1,
         "max_candle_pct": 0.9,
-        "signal_candle_sl_on": True,
+        "signal_candle_sl_on": False,
         "one_trade_per_entry_window": True,
-        "hw_partial_pct": 25.0,
+        "hw_partial_pct": 0.0,
         "hw_partial_min_rr": 0.0,
-        "block_loss_exit_before_partial": True,
+        "block_loss_exit_before_partial": False,
         # Final exit mode (v3): "HMA rapide/SSL → HW" (legacy) or
-        # "Points fixes en profit" (intra-bar TP at entry ± final_exit_points).
+        # "% du prix d'entrée en profit" (intra-bar TP at entry × (1 ± final_exit_pct/100), rounded to tick).
         "final_exit_mode": "HMA rapide/SSL → HW",
-        "final_exit_points": 50.0,
+        "final_exit_pct": 0.1,
         # Injected by engine
         "tick_size": 0.25,
     }
@@ -112,7 +112,7 @@ class HMASSLOsciV3(HMASSLOsciV2):
         "block_loss_exit_before_partial": [True, False],
         "signal_candle_sl_on": [True, False],
         "one_trade_per_entry_window": [True, False],
-        "final_exit_points": [25.0, 50.0, 75.0, 100.0],
+        "final_exit_pct": [0.05, 0.1, 0.15, 0.2],
     }
 
     def get_simulator_settings(self, params=None):
@@ -122,11 +122,11 @@ class HMASSLOsciV3(HMASSLOsciV2):
         settings["tp1_partial_pct"] = float(p.get("hw_partial_pct", 25.0)) / 100.0
         settings["tp2_partial_pct"] = 0.0
         final_mode = p.get("final_exit_mode", "HMA rapide/SSL → HW")
-        if final_mode == "Points fixes en profit":
+        if final_mode == "% du prix d'entrée en profit":
             settings["canal_exit_mode"] = "v3_fixed_points"
         else:
             settings["canal_exit_mode"] = "v3_fast_hma_ssl"
-        settings["final_exit_points"] = float(p.get("final_exit_points", 50.0))
+        settings["final_exit_pct"] = float(p.get("final_exit_pct", 0.1))
         settings["block_loss_canal_exit_before_tp1"] = bool(
             p.get("block_loss_exit_before_partial", True)
         )
