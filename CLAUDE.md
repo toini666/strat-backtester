@@ -289,7 +289,7 @@ After running both legs, `_apply_combined_daily_limits()` resets per-asset exclu
 | `DELETE /optimization-history/{id}` | Remove one run. |
 | `POST /optimization-history/bulk-delete` | Remove many. |
 | `POST /optimization-history/{id}/favorite` | Toggle favorite flag. |
-| `GET/POST/DELETE/PUT /presets` | CRUD on saved backtest configurations (`~/.nebular-apollo/backtest_presets.json`). |
+| `GET/POST/DELETE/PUT /presets` | CRUD on saved backtest configurations (`data/presets.json`). |
 | `GET  /market-data` | Local datasets metadata. |
 | `POST /market-data/download` | Async download from TopstepX. |
 | `GET  /market-data/download/{id}/status` | Poll download progress. |
@@ -329,6 +329,58 @@ When a futures contract expires:
 
 Full-size ES/NQ/RTY/YM/GC/CL/SI/HG/6A/6E/6B specs are also present for FEES_MAP/CONTRACT_SPECS lookups, even though no historical data is loaded for them.
 
+## Goal-Driven Backtest Campaigns
+
+Optimization campaigns triggered via `/goal` (see `prompt-goal-backtests.md`) follow a strict structure to keep the repo navigable when many campaigns accumulate.
+
+### Directory layout
+
+```
+scripts/
+├─ contract_switch_*.py                          # operational tools (kept at top level)
+├─ update_market_data.py
+└─ goals/
+   ├─ _shared/                                   # reusable across campaigns
+   │  ├─ harness.py            run_backtest, summarize, fmt_summary, bench
+   │  ├─ engine_settings.py    ui_default_engine_settings, make_engine_settings
+   │  ├─ preset.py             build_preset, write_preset, replay_preset, verify_preset
+   │  └─ analysis.py           bucket_by_hour, bucket_by_dow, print tables
+   └─ <YYYY-MM-DD>_<Strategy>_<Symbol>/          # ONE folder per campaign
+      ├─ README.md
+      ├─ sweeps/
+      │  ├─ _campaign.py       campaign-local constants
+      │  ├─ 01_baseline_tfs.py … 08_final_validation.py
+      ├─ logs/                 one .log per sweep
+      ├─ winner_preset.json
+      ├─ verify_preset.py      must print ✅ MATCH
+      └─ REPORT.md
+```
+
+Reference example: `scripts/goals/2026-05-15_HMASSLOsciV3_MNQ/`.
+
+### Critical rules for `/goal` agents
+
+1. **Campaign files NEVER at top level of `scripts/`** — only operational tools (`contract_switch_*`, `update_market_data`) live there.
+2. **Always go through `_shared/harness.py::run_backtest`** for any backtest call. It auto-applies the UI's per-strategy defaults via `ui_default_engine_settings()` — never construct `BacktestEngineSettings()` manually, you'll get the wrong defaults and produce results that don't reproduce in the UI.
+3. **`_shared/engine_settings.py` is a Python mirror of the frontend defaults** (`DEFAULT_BACKTEST_ENGINE_SETTINGS` in `frontend/src/api.ts` + `STRATEGY_ENGINE_OVERRIDES` in `frontend/src/App.tsx`). When the frontend defaults change, update this mirror in lockstep.
+4. **`auto_close_hour` is fixed at 22 (CME close, reference Brussels time)** for every winning preset. It can be touched diagnostically but the final config MUST have `auto_close_hour = 22`.
+5. **Daily limits default order**: try `intra_bar` mode first, fall back to `after_close` only if intra-bar breaks the edge.
+6. **Preset is the deliverable contract**: every campaign produces a `winner_preset.json` in the UI format (riskPerTrade as percent, all blackouts explicit, all `default_params` included). `write_preset` inserts it into `data/presets.json` automatically so it shows up in the UI favorites.
+7. **`verify_preset.py` is mandatory** — replays the preset and compares to expected metrics. If it doesn't print `✅ MATCH`, the campaign is not done.
+8. **Sweep filenames are neutral** — `03_strategy_params.py`, not `03_osc_core_params.py`. Strategy-specific jargon (`osc`, `hma`, etc.) belongs in the content, not the filename.
+
+### Frontend vs backend default discrepancy (important gotcha)
+
+The Python `BacktestEngineSettings` class in `backend/api.py` has DIFFERENT defaults from what the UI sends:
+
+| | Backend `BacktestEngineSettings` | Frontend (UI defaults) |
+|-|-|-|
+| `auto_close_hour` | 21 | 22 |
+| Active blackouts (raw) | 11-13, 15:30-21, 21-23 | 12-14, 16:30-22, 22-23:59 |
+| Per-strategy overrides | none | `HMASSLOsciV2/V3` → only 22-23:59 |
+
+**The UI defaults are the source of truth for goal campaigns.** A backtest run with backend defaults will not reproduce in the UI. `_shared/harness.py` enforces this automatically by calling `ui_default_engine_settings(strategy_name)`.
+
 ## Important Conventions
 
 1. **All times in Brussels timezone** — data is stored/indexed in UTC, business logic operates in `Europe/Brussels`.
@@ -339,6 +391,8 @@ Full-size ES/NQ/RTY/YM/GC/CL/SI/HG/6A/6E/6B specs are also present for FEES_MAP/
 6. **`pandas-ta-classic`, not `pandas-ta`** — the installed package is `pandas-ta-classic` (path `libs/pandas-ta/`, import name `pandas_ta_classic`). The PyPI `pandas-ta` package has divergent formulas. The `Indicators` helper is a no-op stub kept for backwards compatibility.
 7. **Single backtest engine** — all strategies use the event-driven simulator. The legacy VectorBT path is gone for `/backtest`; only `/optimize` still tries to import `vectorbt` (defensively, via `try/except`).
 8. **`tick_size` is injected** — `_run_simulator_backtest` writes the active symbol's `tick_size` into `params` before calling `generate_signals`, so strategies that round to ticks can read `params["tick_size"]` directly.
+9. **UI defaults are the source of truth for engine settings** — the Python `BacktestEngineSettings` class has *different* defaults from the frontend. The UI overrides them when sending requests, and goal campaigns must match the UI to be reproducible. Use `scripts/goals/_shared/engine_settings.ui_default_engine_settings(strategy_name)` rather than `BacktestEngineSettings()` directly.
+10. **Auto-close is 22:00 reference Brussels for any final config** — that's the CME daily close in winter-equivalent reference time. Diagnostic sweeps may touch it, but no winning preset / saved favorite should have any other value.
 
 ## Key Files
 
@@ -364,3 +418,10 @@ Full-size ES/NQ/RTY/YM/GC/CL/SI/HG/6A/6E/6B specs are also present for FEES_MAP/
 | `frontend/src/components/FavoritesPage.tsx` | Saved presets / favorited optimization runs. |
 | `pytest.ini` | pytest config (`testpaths=tests`). |
 | `requirements.txt` | Python deps; installs `-e ./libs/pandas-ta` (= the `pandas-ta-classic` package). |
+| `prompt-goal-backtests.md` | Template prompt for `/goal` backtest campaigns. Fill the variables block, paste, fire. |
+| `scripts/goals/_shared/harness.py` | Reusable backtest harness (cached bars, UI-default engine settings, bench helper). |
+| `scripts/goals/_shared/engine_settings.py` | Python mirror of frontend UI defaults + per-strategy overrides. |
+| `scripts/goals/_shared/preset.py` | Build / write / replay / verify presets in the UI format. |
+| `scripts/goals/_shared/analysis.py` | Hour-of-day and day-of-week trade bucketing for blackout discovery. |
+| `scripts/goals/<slug>/` | One folder per campaign — sweeps, logs, preset, verify, report. |
+| `data/presets.json` | UI favorites storage. `write_preset` inserts campaign winners here. |
