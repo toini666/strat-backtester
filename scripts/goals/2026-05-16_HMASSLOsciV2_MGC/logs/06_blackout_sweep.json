@@ -1,0 +1,295 @@
+[
+  {
+    "net_pnl": 35164.6,
+    "trades": 910,
+    "win_rate": 52.0,
+    "max_dd_$": 8418.52,
+    "max_dd_%": 15.6,
+    "profit_factor": 1.2,
+    "avg_win": 442.89,
+    "avg_loss": -398.91,
+    "sharpe": 0.91,
+    "label": "baseline",
+    "elapsed_s": 23.7,
+    "ratio_p_dd": 4.18,
+    "hours": []
+  },
+  {
+    "net_pnl": 37277.2,
+    "trades": 866,
+    "win_rate": 52.3,
+    "max_dd_$": 9341.88,
+    "max_dd_%": 17.13,
+    "profit_factor": 1.23,
+    "avg_win": 441.99,
+    "avg_loss": -394.54,
+    "sharpe": 1.0,
+    "label": "BO[11]",
+    "elapsed_s": 23.0,
+    "ratio_p_dd": 3.99,
+    "hours": [
+      11
+    ]
+  },
+  {
+    "net_pnl": 37298.24,
+    "trades": 878,
+    "win_rate": 52.2,
+    "max_dd_$": 12416.2,
+    "max_dd_%": 13.45,
+    "profit_factor": 1.22,
+    "avg_win": 444.29,
+    "avg_loss": -395.68,
+    "sharpe": 0.99,
+    "label": "BO[14]",
+    "elapsed_s": 24.4,
+    "ratio_p_dd": 3.0,
+    "hours": [
+      14
+    ]
+  },
+  {
+    "net_pnl": 38847.48,
+    "trades": 874,
+    "win_rate": 52.7,
+    "max_dd_$": 12914.4,
+    "max_dd_%": 13.87,
+    "profit_factor": 1.24,
+    "avg_win": 441.44,
+    "avg_loss": -398.68,
+    "sharpe": 1.04,
+    "label": "BO[10]",
+    "elapsed_s": 22.8,
+    "ratio_p_dd": 3.01,
+    "hours": [
+      10
+    ]
+  },
+  {
+    "net_pnl": 36438.92,
+    "trades": 875,
+    "win_rate": 52.2,
+    "max_dd_$": 13194.64,
+    "max_dd_%": 14.45,
+    "profit_factor": 1.22,
+    "avg_win": 444.0,
+    "avg_loss": -398.25,
+    "sharpe": 0.97,
+    "label": "BO[6]",
+    "elapsed_s": 23.7,
+    "ratio_p_dd": 2.76,
+    "hours": [
+      6
+    ]
+  },
+  {
+    "net_pnl": 36114.76,
+    "trades": 877,
+    "win_rate": 52.2,
+    "max_dd_$": 8601.4,
+    "max_dd_%": 16.04,
+    "profit_factor": 1.22,
+    "avg_win": 444.78,
+    "avg_loss": -399.98,
+    "sharpe": 0.96,
+    "label": "BO[16]",
+    "elapsed_s": 23.0,
+    "ratio_p_dd": 4.2,
+    "hours": [
+      16
+    ]
+  },
+  {
+    "net_pnl": 39410.84,
+    "trades": 834,
+    "win_rate": 52.5,
+    "max_dd_$": 8007.52,
+    "max_dd_%": 14.55,
+    "profit_factor": 1.25,
+    "avg_win": 443.43,
+    "avg_loss": -390.94,
+    "sharpe": 1.1,
+    "label": "BO[11,14]",
+    "elapsed_s": 22.4,
+    "ratio_p_dd": 4.92,
+    "hours": [
+      11,
+      14
+    ]
+  },
+  {
+    "net_pnl": 41872.76,
+    "trades": 827,
+    "win_rate": 53.2,
+    "max_dd_$": 8224.0,
+    "max_dd_%": 14.95,
+    "profit_factor": 1.27,
+    "avg_win": 441.31,
+    "avg_loss": -393.54,
+    "sharpe": 1.17,
+    "label": "BO[11,10]",
+    "elapsed_s": 22.3,
+    "ratio_p_dd": 5.09,
+    "hours": [
+      11,
+      10
+    ]
+  },
+  {
+    "net_pnl": 44006.4,
+    "trades": 795,
+    "win_rate": 53.5,
+    "max_dd_$": 6587.56,
+    "max_dd_%": 11.86,
+    "profit_factor": 1.31,
+    "avg_win": 442.76,
+    "avg_loss": -389.64,
+    "sharpe": 1.27,
+    "label": "BO[11,14,10]",
+    "elapsed_s": 23.0,
+    "ratio_p_dd": 6.68,
+    "hours": [
+      11,
+      14,
+      10
+    ]
+  },
+  {
+    "net_pnl": 45280.72,
+    "trades": 760,
+    "win_rate": 53.8,
+    "max_dd_$": 6717.12,
+    "max_dd_%": 12.3,
+    "profit_factor": 1.33,
+    "avg_win": 443.99,
+    "avg_loss": -388.36,
+    "sharpe": 1.36,
+    "label": "BO[11,14,10,6]",
+    "elapsed_s": 22.8,
+    "ratio_p_dd": 6.74,
+    "hours": [
+      11,
+      14,
+      10,
+      6
+    ]
+  },
+  {
+    "net_pnl": 44956.56,
+    "trades": 762,
+    "win_rate": 53.8,
+    "max_dd_$": 11902.0,
+    "max_dd_%": 12.14,
+    "profit_factor": 1.33,
+    "avg_win": 444.86,
+    "avg_loss": -390.45,
+    "sharpe": 1.34,
+    "label": "BO[11,14,10,16]",
+    "elapsed_s": 22.7,
+    "ratio_p_dd": 3.78,
+    "hours": [
+      11,
+      14,
+      10,
+      16
+    ]
+  },
+  {
+    "net_pnl": 46230.88,
+    "trades": 727,
+    "win_rate": 54.2,
+    "max_dd_$": 12000.44,
+    "max_dd_%": 12.14,
+    "profit_factor": 1.36,
+    "avg_win": 446.23,
+    "avg_loss": -389.14,
+    "sharpe": 1.43,
+    "label": "BO[11,14,10,6,16]",
+    "elapsed_s": 22.7,
+    "ratio_p_dd": 3.85,
+    "hours": [
+      11,
+      14,
+      10,
+      6,
+      16
+    ]
+  },
+  {
+    "net_pnl": 40685.16,
+    "trades": 799,
+    "win_rate": 52.8,
+    "max_dd_$": 7500.4,
+    "max_dd_%": 14.03,
+    "profit_factor": 1.28,
+    "avg_win": 444.65,
+    "avg_loss": -389.81,
+    "sharpe": 1.17,
+    "label": "BO[11,14,6]",
+    "elapsed_s": 23.4,
+    "ratio_p_dd": 5.42,
+    "hours": [
+      11,
+      14,
+      6
+    ]
+  },
+  {
+    "net_pnl": 43147.08,
+    "trades": 792,
+    "win_rate": 53.5,
+    "max_dd_$": 12299.48,
+    "max_dd_%": 12.78,
+    "profit_factor": 1.3,
+    "avg_win": 442.44,
+    "avg_loss": -392.52,
+    "sharpe": 1.25,
+    "label": "BO[11,10,6]",
+    "elapsed_s": 23.1,
+    "ratio_p_dd": 3.51,
+    "hours": [
+      11,
+      10,
+      6
+    ]
+  },
+  {
+    "net_pnl": 46230.88,
+    "trades": 727,
+    "win_rate": 54.2,
+    "max_dd_$": 12000.44,
+    "max_dd_%": 12.14,
+    "profit_factor": 1.36,
+    "avg_win": 446.23,
+    "avg_loss": -389.14,
+    "sharpe": 1.43,
+    "label": "BO[11,14,10,6,16]",
+    "elapsed_s": 23.3,
+    "ratio_p_dd": 3.85,
+    "hours": [
+      11,
+      14,
+      10,
+      6,
+      16
+    ]
+  },
+  {
+    "net_pnl": 38551.52,
+    "trades": 831,
+    "win_rate": 52.6,
+    "max_dd_$": 7740.84,
+    "max_dd_%": 14.65,
+    "profit_factor": 1.25,
+    "avg_win": 443.12,
+    "avg_loss": -393.63,
+    "sharpe": 1.07,
+    "label": "BO[11,6]",
+    "elapsed_s": 23.6,
+    "ratio_p_dd": 4.98,
+    "hours": [
+      11,
+      6
+    ]
+  }
+]

@@ -1,0 +1,258 @@
+[
+  {
+    "net_pnl": 36991.72,
+    "trades": 2499,
+    "win_rate": 42.5,
+    "max_dd_$": 17597.0,
+    "max_dd_%": 31.4,
+    "profit_factor": 1.07,
+    "avg_win": 512.13,
+    "avg_loss": -353.35,
+    "sharpe": 0.38,
+    "label": "hw_range_on=True",
+    "elapsed_s": 30.1,
+    "overrides": {
+      "hw_range_on": true
+    },
+    "ratio_p_dd": 2.1
+  },
+  {
+    "net_pnl": 30327.88,
+    "trades": 2874,
+    "win_rate": 42.2,
+    "max_dd_$": 15499.08,
+    "max_dd_%": 24.19,
+    "profit_factor": 1.05,
+    "avg_win": 512.61,
+    "avg_loss": -355.57,
+    "sharpe": 0.27,
+    "label": "hma_pol_bars=5",
+    "elapsed_s": 36.4,
+    "overrides": {
+      "hma_pol_bars": 5
+    },
+    "ratio_p_dd": 1.96
+  },
+  {
+    "net_pnl": 33221.48,
+    "trades": 2103,
+    "win_rate": 41.4,
+    "max_dd_$": 24340.16,
+    "max_dd_%": 42.24,
+    "profit_factor": 1.07,
+    "avg_win": 573.05,
+    "avg_loss": -377.4,
+    "sharpe": 0.38,
+    "label": "cloud_on=True",
+    "elapsed_s": 29.5,
+    "overrides": {
+      "cloud_on": true
+    },
+    "ratio_p_dd": 1.36
+  },
+  {
+    "net_pnl": 28946.88,
+    "trades": 2010,
+    "win_rate": 41.0,
+    "max_dd_$": 25072.92,
+    "max_dd_%": 43.89,
+    "profit_factor": 1.06,
+    "avg_win": 585.04,
+    "avg_loss": -382.06,
+    "sharpe": 0.35,
+    "label": "cloud_on + hma_pol_bars=0",
+    "elapsed_s": 29.4,
+    "overrides": {
+      "cloud_on": true,
+      "hma_pol_bars": 0
+    },
+    "ratio_p_dd": 1.15
+  },
+  {
+    "net_pnl": 17834.56,
+    "trades": 2799,
+    "win_rate": 41.9,
+    "max_dd_$": 20956.08,
+    "max_dd_%": 37.66,
+    "profit_factor": 1.03,
+    "avg_win": 515.38,
+    "avg_loss": -360.29,
+    "sharpe": 0.17,
+    "label": "hma_pol_bars=0",
+    "elapsed_s": 35.0,
+    "overrides": {
+      "hma_pol_bars": 0
+    },
+    "ratio_p_dd": 0.85
+  },
+  {
+    "net_pnl": 12826.76,
+    "trades": 2926,
+    "win_rate": 41.9,
+    "max_dd_$": 19142.32,
+    "max_dd_%": 36.1,
+    "profit_factor": 1.02,
+    "avg_win": 503.77,
+    "avg_loss": -355.25,
+    "sharpe": 0.12,
+    "label": "hw_extreme_on=False",
+    "elapsed_s": 39.1,
+    "overrides": {
+      "hw_extreme_on": false
+    },
+    "ratio_p_dd": 0.67
+  },
+  {
+    "net_pnl": 7540.2,
+    "trades": 754,
+    "win_rate": 44.4,
+    "max_dd_$": 12717.92,
+    "max_dd_%": 23.84,
+    "profit_factor": 1.05,
+    "avg_win": 450.17,
+    "avg_loss": -341.93,
+    "sharpe": 0.29,
+    "label": "cloud_on + cloud_zero_on",
+    "elapsed_s": 21.6,
+    "overrides": {
+      "cloud_on": true,
+      "cloud_zero_on": true
+    },
+    "ratio_p_dd": 0.59
+  },
+  {
+    "net_pnl": 16905.36,
+    "trades": 3332,
+    "win_rate": 38.9,
+    "max_dd_$": 29814.8,
+    "max_dd_%": 46.75,
+    "profit_factor": 1.02,
+    "avg_win": 638.41,
+    "avg_loss": -398.58,
+    "sharpe": 0.11,
+    "label": "delta_on=False",
+    "elapsed_s": 36.6,
+    "overrides": {
+      "delta_on": false
+    },
+    "ratio_p_dd": 0.57
+  },
+  {
+    "net_pnl": 10315.88,
+    "trades": 2870,
+    "win_rate": 41.7,
+    "max_dd_$": 19012.44,
+    "max_dd_%": 34.37,
+    "profit_factor": 1.02,
+    "avg_win": 508.07,
+    "avg_loss": -357.87,
+    "sharpe": 0.1,
+    "label": "baseline (defaults)",
+    "elapsed_s": 32.7,
+    "overrides": {},
+    "ratio_p_dd": 0.54
+  },
+  {
+    "net_pnl": 10976.88,
+    "trades": 2906,
+    "win_rate": 41.9,
+    "max_dd_$": 25286.16,
+    "max_dd_%": 32.81,
+    "profit_factor": 1.02,
+    "avg_win": 505.44,
+    "avg_loss": -358.21,
+    "sharpe": 0.1,
+    "label": "one_trade_per_entry_window=False",
+    "elapsed_s": 38.6,
+    "overrides": {
+      "one_trade_per_entry_window": false
+    },
+    "ratio_p_dd": 0.43
+  },
+  {
+    "net_pnl": 5809.8,
+    "trades": 3048,
+    "win_rate": 41.9,
+    "max_dd_$": 22467.84,
+    "max_dd_%": 41.96,
+    "profit_factor": 1.01,
+    "avg_win": 483.95,
+    "avg_loss": -346.15,
+    "sharpe": 0.05,
+    "label": "sig_extreme_on=False",
+    "elapsed_s": 39.6,
+    "overrides": {
+      "sig_extreme_on": false
+    },
+    "ratio_p_dd": 0.26
+  },
+  {
+    "net_pnl": 1803.48,
+    "trades": 391,
+    "win_rate": 45.0,
+    "max_dd_$": 11127.36,
+    "max_dd_%": 22.25,
+    "profit_factor": 1.02,
+    "avg_win": 453.55,
+    "avg_loss": -362.89,
+    "sharpe": 0.13,
+    "label": "cloud_on + delta_ext_on",
+    "elapsed_s": 20.2,
+    "overrides": {
+      "cloud_on": true,
+      "delta_ext_on": true
+    },
+    "ratio_p_dd": 0.16
+  },
+  {
+    "net_pnl": -4297.44,
+    "trades": 2938,
+    "win_rate": 41.0,
+    "max_dd_$": 28676.92,
+    "max_dd_%": 39.86,
+    "profit_factor": 0.99,
+    "avg_win": 516.42,
+    "avg_loss": -361.05,
+    "sharpe": -0.04,
+    "label": "hw_dir_on=False",
+    "elapsed_s": 32.9,
+    "overrides": {
+      "hw_dir_on": false
+    },
+    "ratio_p_dd": -0.15
+  },
+  {
+    "net_pnl": -11542.72,
+    "trades": 1178,
+    "win_rate": 44.1,
+    "max_dd_$": 16955.12,
+    "max_dd_%": 33.44,
+    "profit_factor": 0.95,
+    "avg_win": 405.71,
+    "avg_loss": -338.16,
+    "sharpe": -0.31,
+    "label": "delta_ext_on=True",
+    "elapsed_s": 24.2,
+    "overrides": {
+      "delta_ext_on": true
+    },
+    "ratio_p_dd": -0.68
+  },
+  {
+    "net_pnl": -18169.12,
+    "trades": 1748,
+    "win_rate": 43.4,
+    "max_dd_$": 24778.0,
+    "max_dd_%": 47.36,
+    "profit_factor": 0.94,
+    "avg_win": 398.61,
+    "avg_loss": -323.55,
+    "sharpe": -0.33,
+    "label": "cloud_zero_on=True",
+    "elapsed_s": 27.9,
+    "overrides": {
+      "cloud_zero_on": true
+    },
+    "ratio_p_dd": -0.73
+  }
+]

@@ -1,0 +1,159 @@
+[
+  {
+    "net_pnl": 44006.4,
+    "trades": 795,
+    "win_rate": 53.5,
+    "max_dd_$": 6587.56,
+    "max_dd_%": 11.86,
+    "profit_factor": 1.31,
+    "avg_win": 442.76,
+    "avg_loss": -389.64,
+    "sharpe": 1.27,
+    "label": "WINNER: BO[11,14,10] @ risk=0.01",
+    "elapsed_s": 24.4,
+    "ratio_p_dd": 6.68,
+    "tf": "7m",
+    "overrides": {},
+    "hours": [
+      11,
+      14,
+      10
+    ],
+    "risk": 0.01,
+    "intent": "best balance \u2014 3-hour BO for robustness, satisfies PnL target with best DD",
+    "pass_pnl": true,
+    "pass_dd": false
+  },
+  {
+    "net_pnl": 45280.72,
+    "trades": 760,
+    "win_rate": 53.8,
+    "max_dd_$": 6717.12,
+    "max_dd_%": 12.3,
+    "profit_factor": 1.33,
+    "avg_win": 443.99,
+    "avg_loss": -388.36,
+    "sharpe": 1.36,
+    "label": "ALT1: BO[11,14,10,6] @ risk=0.01",
+    "elapsed_s": 23.0,
+    "ratio_p_dd": 6.74,
+    "tf": "7m",
+    "overrides": {},
+    "hours": [
+      11,
+      14,
+      10,
+      6
+    ],
+    "risk": 0.01,
+    "intent": "4-hour BO \u2014 slightly more PnL, slightly more overfit risk",
+    "pass_pnl": true,
+    "pass_dd": false
+  },
+  {
+    "net_pnl": 40963.64,
+    "trades": 808,
+    "win_rate": 53.2,
+    "max_dd_$": 6056.76,
+    "max_dd_%": 11.26,
+    "profit_factor": 1.28,
+    "avg_win": 436.33,
+    "avg_loss": -387.98,
+    "sharpe": 1.2,
+    "label": "ALT2: BO[11,14,10] + tick_buffer=1 @ risk=0.01",
+    "elapsed_s": 25.4,
+    "ratio_p_dd": 6.76,
+    "tf": "7m",
+    "overrides": {
+      "tick_buffer": 1
+    },
+    "hours": [
+      11,
+      14,
+      10
+    ],
+    "risk": 0.01,
+    "intent": "lower DD, lower PnL \u2014 defensive variant",
+    "pass_pnl": true,
+    "pass_dd": false
+  },
+  {
+    "net_pnl": 33445.92,
+    "trades": 773,
+    "win_rate": 53.3,
+    "max_dd_$": 5076.08,
+    "max_dd_%": 9.71,
+    "profit_factor": 1.31,
+    "avg_win": 345.16,
+    "avg_loss": -301.27,
+    "sharpe": 1.29,
+    "label": "ALT3: BO[11,14,10,6] + tick_buffer=1 @ risk=0.008",
+    "elapsed_s": 22.2,
+    "ratio_p_dd": 6.59,
+    "tf": "7m",
+    "overrides": {
+      "tick_buffer": 1
+    },
+    "hours": [
+      11,
+      14,
+      10,
+      6
+    ],
+    "risk": 0.008,
+    "intent": "tighter risk \u2014 PnL just above $30k, DD \u2248 $5k",
+    "pass_pnl": true,
+    "pass_dd": false
+  },
+  {
+    "net_pnl": 8625.68,
+    "trades": 760,
+    "win_rate": 41.4,
+    "max_dd_$": 2527.92,
+    "max_dd_%": 4.2,
+    "profit_factor": 1.28,
+    "avg_win": 123.56,
+    "avg_loss": -68.08,
+    "sharpe": 1.12,
+    "label": "ALT4: BO[11,14,10,6] @ risk=0.002 (DD-passing)",
+    "elapsed_s": 22.5,
+    "ratio_p_dd": 3.41,
+    "tf": "7m",
+    "overrides": {},
+    "hours": [
+      11,
+      14,
+      10,
+      6
+    ],
+    "risk": 0.002,
+    "intent": "only config close to passing DD<$2.5k \u2014 PnL very low ($8.6k)",
+    "pass_pnl": false,
+    "pass_dd": false
+  },
+  {
+    "net_pnl": 50316.76,
+    "trades": 795,
+    "win_rate": 53.8,
+    "max_dd_$": 8400.12,
+    "max_dd_%": 14.88,
+    "profit_factor": 1.29,
+    "avg_win": 527.69,
+    "avg_loss": -478.29,
+    "sharpe": 1.23,
+    "label": "ALT5: BO[11,14,10] @ risk=0.012",
+    "elapsed_s": 22.6,
+    "ratio_p_dd": 5.99,
+    "tf": "7m",
+    "overrides": {},
+    "hours": [
+      11,
+      14,
+      10
+    ],
+    "risk": 0.012,
+    "intent": "higher PnL \u2014 moderate DD increase",
+    "pass_pnl": true,
+    "pass_dd": false
+  }
+]

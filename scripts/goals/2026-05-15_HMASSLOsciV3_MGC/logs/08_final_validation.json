@@ -1,0 +1,204 @@
+[
+  {
+    "net_pnl": 20304.08,
+    "trades": 1319,
+    "win_rate": 46.3,
+    "max_dd_$": 2027.16,
+    "max_dd_%": 3.76,
+    "profit_factor": 1.28,
+    "avg_win": 149.84,
+    "avg_loss": -100.63,
+    "sharpe": 1.18,
+    "label": "alt no-cloud r=0.003 (DD passes)",
+    "elapsed_s": 30.5,
+    "risk": 0.003,
+    "blackouts": [
+      [
+        11,
+        0,
+        12,
+        0
+      ],
+      [
+        8,
+        0,
+        9,
+        0
+      ],
+      [
+        3,
+        0,
+        4,
+        0
+      ]
+    ],
+    "overrides": {
+      "hw_range_on": true,
+      "hma2_len": 34
+    },
+    "ratio_p_dd": 10.02,
+    "meets_pnl": false,
+    "meets_dd": true
+  },
+  {
+    "net_pnl": 26086.52,
+    "trades": 1057,
+    "win_rate": 45.8,
+    "max_dd_$": 2689.36,
+    "max_dd_%": 4.85,
+    "profit_factor": 1.29,
+    "avg_win": 236.91,
+    "avg_loss": -154.59,
+    "sharpe": 1.19,
+    "label": "WINNER cloud_on r=0.005",
+    "elapsed_s": 30.4,
+    "risk": 0.005,
+    "blackouts": [
+      [
+        11,
+        0,
+        12,
+        0
+      ],
+      [
+        8,
+        0,
+        9,
+        0
+      ],
+      [
+        3,
+        0,
+        4,
+        0
+      ]
+    ],
+    "overrides": {
+      "hw_range_on": true,
+      "hma2_len": 34,
+      "cloud_on": true
+    },
+    "ratio_p_dd": 9.7,
+    "meets_pnl": false,
+    "meets_dd": false
+  },
+  {
+    "net_pnl": 31492.84,
+    "trades": 1319,
+    "win_rate": 46.4,
+    "max_dd_$": 3331.48,
+    "max_dd_%": 5.86,
+    "profit_factor": 1.3,
+    "avg_win": 225.77,
+    "avg_loss": -150.89,
+    "sharpe": 1.19,
+    "label": "alt no-cloud max_sl=100 r=0.005",
+    "elapsed_s": 31.4,
+    "risk": 0.005,
+    "blackouts": [
+      [
+        11,
+        0,
+        12,
+        0
+      ],
+      [
+        8,
+        0,
+        9,
+        0
+      ],
+      [
+        3,
+        0,
+        4,
+        0
+      ]
+    ],
+    "overrides": {
+      "hw_range_on": true,
+      "hma2_len": 34,
+      "max_sl_points": 100.0
+    },
+    "ratio_p_dd": 9.45,
+    "meets_pnl": true,
+    "meets_dd": false
+  },
+  {
+    "net_pnl": 30647.84,
+    "trades": 1319,
+    "win_rate": 46.3,
+    "max_dd_$": 3331.48,
+    "max_dd_%": 5.86,
+    "profit_factor": 1.29,
+    "avg_win": 225.93,
+    "avg_loss": -151.68,
+    "sharpe": 1.16,
+    "label": "alt no-cloud r=0.005",
+    "elapsed_s": 30.1,
+    "risk": 0.005,
+    "blackouts": [
+      [
+        11,
+        0,
+        12,
+        0
+      ],
+      [
+        8,
+        0,
+        9,
+        0
+      ],
+      [
+        3,
+        0,
+        4,
+        0
+      ]
+    ],
+    "overrides": {
+      "hw_range_on": true,
+      "hma2_len": 34
+    },
+    "ratio_p_dd": 9.2,
+    "meets_pnl": true,
+    "meets_dd": false
+  },
+  {
+    "net_pnl": 26973.72,
+    "trades": 1097,
+    "win_rate": 45.9,
+    "max_dd_$": 3122.04,
+    "max_dd_%": 5.51,
+    "profit_factor": 1.29,
+    "avg_win": 236.87,
+    "avg_loss": -155.83,
+    "sharpe": 1.2,
+    "label": "alt cloud_on 2BO 11h+03h r=0.005",
+    "elapsed_s": 29.9,
+    "risk": 0.005,
+    "blackouts": [
+      [
+        11,
+        0,
+        12,
+        0
+      ],
+      [
+        3,
+        0,
+        4,
+        0
+      ]
+    ],
+    "overrides": {
+      "hw_range_on": true,
+      "hma2_len": 34,
+      "cloud_on": true
+    },
+    "ratio_p_dd": 8.64,
+    "meets_pnl": false,
+    "meets_dd": false
+  }
+]
