@@ -63,9 +63,8 @@ Autre répartition acceptable :
   - Test #0 obligatoire : Lab avec tous les flags à default reproduit V3 exact.
 
 - **Presets gagnants de référence** *(min. 1, max. 3)* :
-  - `scripts/goals/2026-05-16_HMASSLOsciV3_MNQ_v4/winner_preset.json`
-  - `scripts/goals/2026-05-16_HMASSLOsciV3_MNQ_MGC/winner_preset.json`
-  - `scripts/goals/2026-05-16_HMASSLOsciV3_MGC_v2/winner_preset.json`
+  - `scripts/goals/2026-05-17_HMASSLOsciV3_MNQ_v5/winner_preset.json`
+  - `scripts/goals/2026-05-16_HMASSLOsciV3_MGC_v3/winner_preset.json`
   - Ces presets sont les **baselines vs lesquelles chaque hypothèse est mesurée**. Le PnL et le DD de référence sont leurs valeurs publiées dans leurs `REPORT.md`.
 
 - **Période** : reprend celle des presets de référence

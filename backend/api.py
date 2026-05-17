@@ -63,6 +63,7 @@ STRATEGY_WARMUP_BARS = {
     "HMASSLOsci": 250,          # EMA(7)→28 + HMA(84)→135 + EMA(60) SSL rangema→240 + margin
     "HMASSLOsciV2": 250,        # HMA/SSL/oscillator stack; SSL EMA(60) remains the dominant convergence window
     "HMASSLOsciV3": 250,        # Same indicator stack as v2 (HMA + SSL EMA(60) + 4Kings + MFI); v3-specific entry/exit/SL logic
+    "HMASSLOsciV3Labv1": 250,   # Inherits V3 stack; same warmup needs
     "EMABreakHMASSLOsc": 250,  # EMA(13)→52 + EMA(60) SSL rangema→240 + margin
     "RobReversal": 150,         # EMA(13)→52 + MFI(35)+cloud(35)→112 + margin
 
