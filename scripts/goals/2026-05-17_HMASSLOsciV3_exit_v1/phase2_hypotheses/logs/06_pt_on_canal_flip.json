@@ -1,0 +1,68 @@
+{
+  "name": "06_pt_on_canal_flip",
+  "description": "PT: partial X% at contra canal HMA flip (in-profit only).",
+  "lever": "PT",
+  "angle": "L",
+  "rows": [
+    {
+      "preset": "MNQ_v5/25%",
+      "off_pnl": 68764.72,
+      "off_dd": 1578.98,
+      "off_trades": 1241,
+      "on_pnl": 65932.48,
+      "on_dd": 2600.74,
+      "on_trades": 1249,
+      "dpnl": -2832.2400000000052,
+      "ddd": 1021.7599999999998,
+      "dpdd": -18.198658551520854,
+      "dwr": 0.9000000000000057,
+      "variant": "25%",
+      "asset": "MNQ_v5"
+    },
+    {
+      "preset": "MNQ_v5/50%",
+      "off_pnl": 68764.72,
+      "off_dd": 1578.98,
+      "off_trades": 1241,
+      "on_pnl": 64922.48,
+      "on_dd": 2051.3,
+      "on_trades": 1249,
+      "dpnl": -3842.239999999998,
+      "ddd": 472.32000000000016,
+      "dpdd": -11.900657230685095,
+      "dwr": 1.3000000000000043,
+      "variant": "50%",
+      "asset": "MNQ_v5"
+    },
+    {
+      "preset": "MGC_v3/25%",
+      "off_pnl": 44691.68,
+      "off_dd": 1943.84,
+      "off_trades": 865,
+      "on_pnl": 39180.08,
+      "on_dd": 2741.0,
+      "on_trades": 876,
+      "dpnl": -5511.5999999999985,
+      "ddd": 797.1600000000001,
+      "dpdd": -8.697357173000487,
+      "dwr": -0.20000000000000284,
+      "variant": "25%",
+      "asset": "MGC_v3"
+    },
+    {
+      "preset": "MGC_v3/50%",
+      "off_pnl": 44691.68,
+      "off_dd": 1943.84,
+      "off_trades": 865,
+      "on_pnl": 38891.08,
+      "on_dd": 2741.0,
+      "on_trades": 876,
+      "dpnl": -5800.5999999999985,
+      "ddd": 797.1600000000001,
+      "dpdd": -8.80279314527338,
+      "dwr": -0.10000000000000142,
+      "variant": "50%",
+      "asset": "MGC_v3"
+    }
+  ]
+}

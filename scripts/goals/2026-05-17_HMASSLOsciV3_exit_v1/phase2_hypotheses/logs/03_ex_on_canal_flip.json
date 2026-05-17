@@ -1,0 +1,38 @@
+{
+  "name": "03_ex_on_canal_flip",
+  "description": "EX H3: close on contra-direction HMA canal flip.",
+  "lever": "EX",
+  "angle": "L",
+  "rows": [
+    {
+      "preset": "MNQ_v5/ON",
+      "off_pnl": 68764.72,
+      "off_dd": 1578.98,
+      "off_trades": 1241,
+      "on_pnl": 47215.46,
+      "on_dd": 3782.3,
+      "on_trades": 1278,
+      "dpnl": -21549.260000000002,
+      "ddd": 2203.32,
+      "dpdd": -31.066822502818333,
+      "dwr": -1.1999999999999957,
+      "variant": "ON",
+      "asset": "MNQ_v5"
+    },
+    {
+      "preset": "MGC_v3/ON",
+      "off_pnl": 44691.68,
+      "off_dd": 1943.84,
+      "off_trades": 865,
+      "on_pnl": 26390.48,
+      "on_dd": 2624.48,
+      "on_trades": 906,
+      "dpnl": -18301.2,
+      "ddd": 680.6400000000001,
+      "dpdd": -12.93593148590536,
+      "dwr": -2.6000000000000014,
+      "variant": "ON",
+      "asset": "MGC_v3"
+    }
+  ]
+}

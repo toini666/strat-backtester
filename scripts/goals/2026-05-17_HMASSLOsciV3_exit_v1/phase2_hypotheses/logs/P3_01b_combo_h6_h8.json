@@ -1,0 +1,68 @@
+{
+  "name": "P3_01b_combo_h6_h8",
+  "description": "Phase3: combo \u2014 H6 partial at fast cross + H8 partial at MFE seuil.",
+  "lever": "PT",
+  "angle": "W+L",
+  "rows": [
+    {
+      "preset": "MNQ_v5/h6=25_h8=50@1.5",
+      "off_pnl": 68764.72,
+      "off_dd": 1578.98,
+      "off_trades": 1241,
+      "on_pnl": 64904.56,
+      "on_dd": 2657.74,
+      "on_trades": 1254,
+      "dpnl": -3860.1600000000035,
+      "ddd": 1078.7599999999998,
+      "dpdd": -19.129130137363756,
+      "dwr": 1.6000000000000014,
+      "variant": "h6=25_h8=50@1.5",
+      "asset": "MNQ_v5"
+    },
+    {
+      "preset": "MNQ_v5/h6=15_h8=50@1.5",
+      "off_pnl": 68764.72,
+      "off_dd": 1578.98,
+      "off_trades": 1241,
+      "on_pnl": 64904.56,
+      "on_dd": 2657.74,
+      "on_trades": 1254,
+      "dpnl": -3860.1600000000035,
+      "ddd": 1078.7599999999998,
+      "dpdd": -19.129130137363756,
+      "dwr": 1.6000000000000014,
+      "variant": "h6=15_h8=50@1.5",
+      "asset": "MNQ_v5"
+    },
+    {
+      "preset": "MGC_v3/h6=25_h8=50@1.5",
+      "off_pnl": 44691.68,
+      "off_dd": 1943.84,
+      "off_trades": 865,
+      "on_pnl": 35731.36,
+      "on_dd": 2006.44,
+      "on_trades": 871,
+      "dpnl": -8960.32,
+      "ddd": 62.600000000000136,
+      "dpdd": -5.183102470297513,
+      "dwr": -0.5,
+      "variant": "h6=25_h8=50@1.5",
+      "asset": "MGC_v3"
+    },
+    {
+      "preset": "MGC_v3/h6=15_h8=50@1.5",
+      "off_pnl": 44691.68,
+      "off_dd": 1943.84,
+      "off_trades": 865,
+      "on_pnl": 35731.36,
+      "on_dd": 2006.44,
+      "on_trades": 871,
+      "dpnl": -8960.32,
+      "ddd": 62.600000000000136,
+      "dpdd": -5.183102470297513,
+      "dwr": -0.5,
+      "variant": "h6=15_h8=50@1.5",
+      "asset": "MGC_v3"
+    }
+  ]
+}

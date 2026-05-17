@@ -1,0 +1,38 @@
+{
+  "name": "02_ex_hw_only_if_profit",
+  "description": "EX H2: keep V3 fast-cross arming, but at HW only close if in profit.",
+  "lever": "EX",
+  "angle": "L",
+  "rows": [
+    {
+      "preset": "MNQ_v5/ON",
+      "off_pnl": 68764.72,
+      "off_dd": 1578.98,
+      "off_trades": 1241,
+      "on_pnl": 32928.66,
+      "on_dd": 2535.32,
+      "on_trades": 977,
+      "dpnl": -35836.06,
+      "ddd": 956.3400000000001,
+      "dpdd": -30.56211933775503,
+      "dwr": -1.7999999999999972,
+      "variant": "ON",
+      "asset": "MNQ_v5"
+    },
+    {
+      "preset": "MGC_v3/ON",
+      "off_pnl": 44691.68,
+      "off_dd": 1943.84,
+      "off_trades": 865,
+      "on_pnl": 18851.32,
+      "on_dd": 4607.88,
+      "on_trades": 804,
+      "dpnl": -25840.36,
+      "ddd": 2664.04,
+      "dpdd": -18.900334821583996,
+      "dwr": -8.600000000000001,
+      "variant": "ON",
+      "asset": "MGC_v3"
+    }
+  ]
+}

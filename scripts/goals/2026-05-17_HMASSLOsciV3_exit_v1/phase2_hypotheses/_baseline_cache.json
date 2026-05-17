@@ -1,0 +1,30 @@
+{
+  "MNQ_v5": {
+    "v3": {
+      "net_pnl": 68764.72,
+      "trades": 1241,
+      "win_rate": 48.3,
+      "max_dd_$": 1578.98,
+      "max_dd_%": 3.1,
+      "profit_factor": 1.7,
+      "avg_win": 277.81,
+      "avg_loss": -152.09,
+      "sharpe": 1.63
+    },
+    "preset_path": "scripts/goals/2026-05-17_HMASSLOsciV3_MNQ_v5/winner_preset.json"
+  },
+  "MGC_v3": {
+    "v3": {
+      "net_pnl": 44691.68,
+      "trades": 865,
+      "win_rate": 55.1,
+      "max_dd_$": 1943.84,
+      "max_dd_%": 3.86,
+      "profit_factor": 1.66,
+      "avg_win": 236.46,
+      "avg_loss": -175.51,
+      "sharpe": 2.17
+    },
+    "preset_path": "scripts/goals/2026-05-17_HMASSLOsciV3_MGC_v3/winner_preset.json"
+  }
+}

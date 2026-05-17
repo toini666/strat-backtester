@@ -1,0 +1,38 @@
+{
+  "name": "01_ex_fast_cross_only",
+  "description": "EX H1: close immediately at fast HMA/SSL cross, no HW wait.",
+  "lever": "EX",
+  "angle": "L",
+  "rows": [
+    {
+      "preset": "MNQ_v5/ON",
+      "off_pnl": 68764.72,
+      "off_dd": 1578.98,
+      "off_trades": 1241,
+      "on_pnl": 56731.3,
+      "on_dd": 3785.66,
+      "on_trades": 1308,
+      "dpnl": -12033.419999999998,
+      "ddd": 2206.68,
+      "dpdd": -28.56424799175086,
+      "dwr": -1.3999999999999986,
+      "variant": "ON",
+      "asset": "MNQ_v5"
+    },
+    {
+      "preset": "MGC_v3/ON",
+      "off_pnl": 44691.68,
+      "off_dd": 1943.84,
+      "off_trades": 865,
+      "on_pnl": 36887.6,
+      "on_dd": 2051.44,
+      "on_trades": 869,
+      "dpnl": -7804.080000000002,
+      "ddd": 107.60000000000014,
+      "dpdd": -5.010119186334219,
+      "dwr": 0.3999999999999986,
+      "variant": "ON",
+      "asset": "MGC_v3"
+    }
+  ]
+}
