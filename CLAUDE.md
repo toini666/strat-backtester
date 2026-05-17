@@ -327,6 +327,8 @@ When a futures contract expires:
 | MNQ    | 0.25      | $0.50      | $2.00       | $0.74  |
 | MYM    | 1.00      | $0.50      | $0.50       | $0.74  |
 
+`Fee RT` shown here is the exchange + clearing round-turn fee from `FEES_MAP`. The simulator applies an additional **`COMMISSION_PER_CONTRACT_RT = $0.50`** (Topstep broker commission) on top — added inside `_contract_backtest_specs()` and the optimizer's Topstep contract path. Effective round-turn cost = `FEES_MAP[symbol] + 0.50`.
+
 Full-size ES/NQ/RTY/YM/GC/CL/SI/HG/6A/6E/6B specs are also present for FEES_MAP/CONTRACT_SPECS lookups, even though no historical data is loaded for them.
 
 ## Goal-Driven Backtest Campaigns

@@ -311,8 +311,7 @@ def get_available_data():
     return result
 
 # --- Constants ---
-# Fee Map (Round Turn) based on user input
-# Fee Map (Round Turn) based on user input
+# Fee Map (Round Turn) — exchange + clearing fees per contract, round-turn.
 FEES_MAP = {
     "ES": 2.80, "MES": 0.74,
     "NQ": 2.80, "MNQ": 0.74,
@@ -329,6 +328,9 @@ FEES_MAP = {
     "6E": 3.24, "M6E": 0.52, # EUR
     "6B": 3.24, "M6B": 0.52, # GBP
 }
+
+# Topstep broker commission, applied per contract on top of exchange fees (round-turn).
+COMMISSION_PER_CONTRACT_RT = 0.50
 
 # Contract Specs from Architecture.md
 # Tick Size, Tick Value
@@ -442,6 +444,8 @@ def _contract_backtest_specs(symbol: str) -> Dict[str, float]:
 
     if symbol in FEES_MAP:
         fee_per_trade = FEES_MAP[symbol]
+
+    fee_per_trade += COMMISSION_PER_CONTRACT_RT
 
     return {
         "tick_size": tick_size,
@@ -1737,6 +1741,8 @@ def run_optimization(req: OptimizationRequest):
                     if k in contract_name:
                         fee_per_trade = FEES_MAP[k]
                         break
+
+                fee_per_trade += COMMISSION_PER_CONTRACT_RT
             
             # CHECK LEGACY MANUAL FETCH (Override logic)
             if not req.topstep_live_mode:
