@@ -1,0 +1,294 @@
+{
+  "id": "e1aed9cd-6571-431a-9271-4465575de6fe",
+  "name": "[Auto] HMASSLOsciV3 \u2014 MNQ+MGC multi-asset v2 \u2014 Best valid (PnL $100.1k / DD $2.01k, DD-target $2k missed by $9)",
+  "createdAt": "2026-05-17T14:42:02.739675Z",
+  "mode": "multi_asset",
+  "startDatetime": "2025-01-06T00:00",
+  "endDatetime": "2026-05-15T00:00",
+  "initialEquity": 50000.0,
+  "configs": [
+    {
+      "symbol": "MNQ",
+      "interval": "7m",
+      "strategyName": "HMASSLOsciV3",
+      "params": {
+        "ema_len": 11,
+        "hma1_len": 13,
+        "hma2_len": 21,
+        "amp_mult": 2.0,
+        "hma_pol_bars": 0,
+        "entry_window_bars": 3,
+        "ssl_len": 80,
+        "ssl_mult": 0.2,
+        "hyper_wave_length": 7,
+        "signal_type": "SMA",
+        "signal_length": 4,
+        "mf_length": 37,
+        "mf_smooth": 7,
+        "hw_dir_on": false,
+        "hw_extreme_on": true,
+        "hw_extreme": 20.0,
+        "sig_extreme_on": true,
+        "sig_extreme": 40,
+        "hw_range_on": false,
+        "hw_range": 10,
+        "cloud_on": true,
+        "delta_on": true,
+        "cloud_zero_on": false,
+        "delta_ext_on": false,
+        "tick_buffer": 0,
+        "max_sl_points": 300.0,
+        "cooldown_bars": 3,
+        "max_candle_pct": 0.9,
+        "signal_candle_sl_on": false,
+        "one_trade_per_entry_window": true,
+        "hw_partial_pct": 0.0,
+        "hw_partial_min_rr": 0.0,
+        "block_loss_exit_before_partial": false,
+        "final_exit_mode": "HMA rapide/SSL \u2192 HW",
+        "final_exit_pct": 0.1,
+        "tick_size": 0.25
+      },
+      "riskPerTrade": 0.4128,
+      "maxContracts": 50,
+      "engineSettings": {
+        "auto_close_enabled": true,
+        "auto_close_hour": 22,
+        "auto_close_minute": 0,
+        "blackout_windows": [
+          {
+            "active": false,
+            "start_hour": 0,
+            "start_minute": 0,
+            "end_hour": 0,
+            "end_minute": 5
+          },
+          {
+            "active": false,
+            "start_hour": 9,
+            "start_minute": 0,
+            "end_hour": 9,
+            "end_minute": 5
+          },
+          {
+            "active": false,
+            "start_hour": 12,
+            "start_minute": 0,
+            "end_hour": 14,
+            "end_minute": 0
+          },
+          {
+            "active": false,
+            "start_hour": 15,
+            "start_minute": 30,
+            "end_hour": 15,
+            "end_minute": 35
+          },
+          {
+            "active": false,
+            "start_hour": 16,
+            "start_minute": 30,
+            "end_hour": 22,
+            "end_minute": 0
+          },
+          {
+            "active": true,
+            "start_hour": 22,
+            "start_minute": 0,
+            "end_hour": 23,
+            "end_minute": 59
+          },
+          {
+            "active": true,
+            "start_hour": 11,
+            "start_minute": 0,
+            "end_hour": 12,
+            "end_minute": 0
+          },
+          {
+            "active": true,
+            "start_hour": 14,
+            "start_minute": 0,
+            "end_hour": 15,
+            "end_minute": 0
+          },
+          {
+            "active": true,
+            "start_hour": 8,
+            "start_minute": 0,
+            "end_hour": 9,
+            "end_minute": 0
+          },
+          {
+            "active": true,
+            "start_hour": 12,
+            "start_minute": 0,
+            "end_hour": 13,
+            "end_minute": 0
+          },
+          {
+            "active": true,
+            "start_hour": 5,
+            "start_minute": 0,
+            "end_hour": 6,
+            "end_minute": 0
+          },
+          {
+            "active": true,
+            "start_hour": 6,
+            "start_minute": 0,
+            "end_hour": 7,
+            "end_minute": 0
+          }
+        ],
+        "debug": false,
+        "daily_win_limit_enabled": false,
+        "daily_win_limit": 500,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit": 700,
+        "daily_limit_mode": "after_close"
+      }
+    },
+    {
+      "symbol": "MGC",
+      "interval": "7m",
+      "strategyName": "HMASSLOsciV3",
+      "params": {
+        "ema_len": 13,
+        "hma1_len": 9,
+        "hma2_len": 34,
+        "amp_mult": 2.0,
+        "hma_pol_bars": 3,
+        "entry_window_bars": 5,
+        "ssl_len": 60,
+        "ssl_mult": 0.2,
+        "hyper_wave_length": 5,
+        "signal_type": "SMA",
+        "signal_length": 3,
+        "mf_length": 29,
+        "mf_smooth": 5,
+        "hw_dir_on": true,
+        "hw_extreme_on": true,
+        "hw_extreme": 20.0,
+        "sig_extreme_on": true,
+        "sig_extreme": 35,
+        "hw_range_on": true,
+        "hw_range": 10,
+        "cloud_on": true,
+        "delta_on": true,
+        "cloud_zero_on": false,
+        "delta_ext_on": false,
+        "tick_buffer": 1,
+        "max_sl_points": 100.0,
+        "cooldown_bars": 2,
+        "max_candle_pct": 0.9,
+        "signal_candle_sl_on": false,
+        "one_trade_per_entry_window": true,
+        "hw_partial_pct": 0.0,
+        "hw_partial_min_rr": 0.0,
+        "block_loss_exit_before_partial": true,
+        "final_exit_mode": "HMA rapide/SSL \u2192 HW",
+        "final_exit_pct": 0.1,
+        "tick_size": 0.1
+      },
+      "riskPerTrade": 0.52,
+      "maxContracts": 50,
+      "engineSettings": {
+        "auto_close_enabled": true,
+        "auto_close_hour": 22,
+        "auto_close_minute": 0,
+        "blackout_windows": [
+          {
+            "active": false,
+            "start_hour": 0,
+            "start_minute": 0,
+            "end_hour": 0,
+            "end_minute": 5
+          },
+          {
+            "active": false,
+            "start_hour": 9,
+            "start_minute": 0,
+            "end_hour": 9,
+            "end_minute": 5
+          },
+          {
+            "active": false,
+            "start_hour": 12,
+            "start_minute": 0,
+            "end_hour": 14,
+            "end_minute": 0
+          },
+          {
+            "active": false,
+            "start_hour": 15,
+            "start_minute": 30,
+            "end_hour": 15,
+            "end_minute": 35
+          },
+          {
+            "active": false,
+            "start_hour": 16,
+            "start_minute": 30,
+            "end_hour": 22,
+            "end_minute": 0
+          },
+          {
+            "active": true,
+            "start_hour": 22,
+            "start_minute": 0,
+            "end_hour": 23,
+            "end_minute": 59
+          },
+          {
+            "active": true,
+            "start_hour": 3,
+            "start_minute": 0,
+            "end_hour": 4,
+            "end_minute": 0
+          },
+          {
+            "active": true,
+            "start_hour": 6,
+            "start_minute": 0,
+            "end_hour": 7,
+            "end_minute": 0
+          },
+          {
+            "active": true,
+            "start_hour": 7,
+            "start_minute": 0,
+            "end_hour": 8,
+            "end_minute": 0
+          },
+          {
+            "active": true,
+            "start_hour": 9,
+            "start_minute": 0,
+            "end_hour": 10,
+            "end_minute": 0
+          },
+          {
+            "active": true,
+            "start_hour": 11,
+            "start_minute": 0,
+            "end_hour": 12,
+            "end_minute": 0
+          }
+        ],
+        "debug": false,
+        "daily_win_limit_enabled": false,
+        "daily_win_limit": 500,
+        "daily_loss_limit_enabled": false,
+        "daily_loss_limit": 700,
+        "daily_limit_mode": "after_close"
+      }
+    }
+  ],
+  "metrics": {
+    "total_return": 200.1512,
+    "win_rate": 51.22,
+    "total_trades": 1970,
+    "max_drawdown": 2.754
+  }
+}
