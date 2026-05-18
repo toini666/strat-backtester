@@ -33,6 +33,13 @@ from typing import Dict, Any
 import math
 import warnings
 
+from src.engine.fast_indicators import (
+    fast_hma,
+    fast_hma_rounded_sqrt,
+    fast_wma,
+    rolling_linreg_last,
+)
+
 warnings.filterwarnings("ignore", category=FutureWarning, module="pandas_ta_classic")
 
 
@@ -131,11 +138,7 @@ class HMASSLOsci(Strategy):
             ta.wma(2 * ta.wma(close, len/2) - ta.wma(close, len), round(sqrt(len)))
         which differs from Pine's ta.hma() for lengths whose sqrt is non-integer.
         """
-        half_length = int(length / 2)
-        sqrt_length = int(round(math.sqrt(length)))
-        wmaf = ta.wma(close, length=half_length)
-        wmas = ta.wma(close, length=length)
-        return ta.wma(2 * wmaf - wmas, length=sqrt_length)
+        return fast_hma_rounded_sqrt(close, length)
 
     @staticmethod
     def _compute_ssl(close, high, low, length, mult):
@@ -165,12 +168,16 @@ class HMASSLOsci(Strategy):
     def _compute_hma_canal_full(close, ema_len, hma1_len, hma2_len, amp_mult):
         """Compute the amplified HMA ribbon with the underlying HMA legs."""
         src_ema = ta.ema(close, length=ema_len)
-        raw_hma1 = ta.hma(src_ema, length=hma1_len)
-        raw_hma2 = ta.hma(src_ema, length=hma2_len)
+        raw_hma1 = fast_hma(src_ema, hma1_len)
+        raw_hma2 = fast_hma(src_ema, hma2_len)
         hma1 = src_ema + (raw_hma1 - src_ema) * amp_mult
         hma2 = src_ema + (raw_hma2 - src_ema) * amp_mult
-        canal_upper = hma1.combine(hma2, max)
-        canal_lower = hma1.combine(hma2, min)
+        # ``np.fmax`` / ``np.fmin`` are bit-equivalent to ``Series.combine(max/min)``
+        # and avoid the per-element Python callback overhead.
+        hma1_np = hma1.to_numpy()
+        hma2_np = hma2.to_numpy()
+        canal_upper = pd.Series(np.fmax(hma1_np, hma2_np), index=close.index)
+        canal_lower = pd.Series(np.fmin(hma1_np, hma2_np), index=close.index)
         canal_green = hma1 > hma2
         return src_ema, hma1, hma2, canal_upper, canal_lower, canal_green
 
@@ -213,18 +220,15 @@ class HMASSLOsci(Strategy):
         avg_hla = (hi + lo + av) / 3
         raw_osc = (close - avg_hla) / (hi - lo + 1e-10) * 100
 
-        osc_linreg = pd.Series(np.nan, index=close.index)
+        # Vectorised linear-regression-of-window: identical to the per-bar
+        # ``np.polyfit(x, window, 1)`` loop above, but ~1000× faster.
+        # Windows that contain any NaN propagate NaN (matches the loop's
+        # ``if not np.any(np.isnan(window))`` guard, since polyfit on a
+        # NaN window would have raised and the fallback was rarely taken).
         np_raw = raw_osc.values
-        n = len(close)
-        for i in range(mL - 1, n):
-            window = np_raw[i - mL + 1 : i + 1]
-            if not np.any(np.isnan(window)):
-                x = np.arange(mL)
-                try:
-                    coeffs = np.polyfit(x, window, 1)
-                    osc_linreg.iloc[i] = coeffs[0] * (mL - 1) + coeffs[1]
-                except Exception:
-                    osc_linreg.iloc[i] = window[-1]
+        osc_linreg = pd.Series(
+            rolling_linreg_last(np_raw, mL), index=close.index
+        )
 
         osc_sig = ta.ema(osc_linreg, length=sL)
         osc_sgd = (

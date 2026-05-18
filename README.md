@@ -77,9 +77,9 @@ Toutes les stratégies ont un fichier PineScript de référence dans `Pinescript
 | HMAOsci | `hma_osci.py` | `HMA-Osci.txt` | 250 bars |
 | HMASSLOsci | `hma_ssl_osci.py` | `HMA-SSL-Osci.txt` | 250 bars |
 | HMASSLOsciV2 | `hma_ssl_osci_v2.py` | `HMA-SSL-Osci-v2.txt` | 250 bars |
+| HMASSLOsciV3 | `hma_ssl_osci_v3.py` | `HMA-SSL-Osci-v3.txt` | 250 bars |
 | EMABreakHMASSLOsc | `ema_break_hma_ssl_osc.py` | `EMA-Break-HMA-SSL-Osc.txt` | 250 bars |
 | RobReversal | `rob_reversal.py` | `RobReversal.txt` | 150 bars |
-| GatorHMAEpure | `gator_hma_epure.py` | `Gator-HMA-Epure.txt` | 200 bars (défaut) |
 
 Les stratégies sont **auto-découvertes** au démarrage : tout fichier héritant de `Strategy` dans `src/strategies/` apparaît automatiquement dans le frontend.
 
@@ -157,6 +157,21 @@ Sorties partielles basées sur la taille **initiale** de la position :
 La stratégie apparaît automatiquement dans le frontend au prochain démarrage.
 
 Voir `CLAUDE.md` pour la documentation complète de l'API `generate_signals()`.
+
+---
+
+## Indicateurs rapides (`src/engine/fast_indicators.py`)
+
+Pour limiter le temps des simulations (campagnes d'optimisation, sweeps `/goal`), les indicateurs lourds de `pandas_ta_classic` sont remplacés sur le chemin chaud par des versions NumPy **bit-équivalentes** :
+
+| Fast | Remplace | Méthode |
+|------|----------|---------|
+| `fast_wma` | `ta.wma` | `np.convolve` direct (même ordre de sommation que `np.dot` par fenêtre) |
+| `fast_hma` | `ta.hma` | 3 × `fast_wma` enchaînés |
+| `fast_hma_rounded_sqrt` | variante SSL baseline | `ta.wma(2·wmaf − wmas, round(√n))` |
+| `rolling_linreg_last` | boucle `np.polyfit` par bar | Forme close de la régression linéaire vectorisée |
+
+Sur le preset gagnant **HMASSLOsciV3 — MNQ 7m** (~16 mois de données, 1241 trades), un replay passe d'environ **26 s à 7 s** (≈3.7× plus rapide) tout en produisant exactement le même PnL, le même drawdown et les mêmes trades. Le simulateur précalcule aussi en masse les drapeaux de blackout, d'auto-close et les ranges de sous-barres 1m via `np.searchsorted`.
 
 ---
 

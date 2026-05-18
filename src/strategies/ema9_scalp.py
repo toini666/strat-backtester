@@ -28,6 +28,8 @@ import pandas_ta_classic as ta
 from collections import deque
 from typing import Dict, Any
 
+from src.engine.fast_indicators import rolling_linreg_last
+
 
 class EMA9Scalp(Strategy):
     """EMA9 Momentum Retest — scalp entries on EMA retest breakout."""
@@ -116,17 +118,9 @@ class EMA9Scalp(Strategy):
         avg_hla = (hi + lo + av) / 3
         raw_osc = (close - avg_hla) / (hi - lo + 1e-10) * 100
 
-        osc_linreg = pd.Series(np.nan, index=close.index)
-        np_raw = raw_osc.values
-        for i in range(mL - 1, len(close)):
-            window = np_raw[i - mL + 1: i + 1]
-            if not np.any(np.isnan(window)):
-                x = np.arange(mL)
-                try:
-                    coeffs = np.polyfit(x, window, 1)
-                    osc_linreg.iloc[i] = coeffs[0] * (mL - 1) + coeffs[1]
-                except Exception:
-                    osc_linreg.iloc[i] = window[-1]
+        osc_linreg = pd.Series(
+            rolling_linreg_last(raw_osc.values, mL), index=close.index
+        )
 
         osc_sig = osc_linreg.ewm(span=sL, adjust=False).mean()
         osc_sgd = (

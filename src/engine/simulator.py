@@ -161,6 +161,30 @@ def _to_ref_minutes(ts: pd.Timestamp) -> int:
     return (bxl.hour * 60 + bxl.minute - offset_min) % 1440
 
 
+def _to_ref_minutes_vec(ts: pd.DatetimeIndex) -> np.ndarray:
+    """Vectorised ``_to_ref_minutes`` over a DatetimeIndex.
+
+    Returns an ``int32`` array of reference-frame minutes-of-day. Bit-identical
+    to mapping ``_to_ref_minutes`` over each timestamp, but the timezone
+    arithmetic happens once for the full array via integer ns differences.
+    """
+    if ts.tz is None:
+        ts = ts.tz_localize("UTC")
+    bxl = ts.tz_convert(BRUSSELS_TZ)
+    et = ts.tz_convert("US/Eastern")
+    # ``.asi8 - .asi8`` gives the UTC offset in nanoseconds per element.
+    one_hour_ns = np.int64(3_600_000_000_000)
+    bxl_off_h = (bxl.tz_localize(None).asi8 - ts.tz_convert("UTC").tz_localize(None).asi8) // one_hour_ns
+    et_off_h = (et.tz_localize(None).asi8 - ts.tz_convert("UTC").tz_localize(None).asi8) // one_hour_ns
+    offset_h = np.where((bxl_off_h - et_off_h) == 5, -1, 0).astype(np.int32)
+    minutes = (
+        bxl.hour.values.astype(np.int32) * 60
+        + bxl.minute.values.astype(np.int32)
+        - offset_h * 60
+    ) % 1440
+    return minutes.astype(np.int32)
+
+
 def _is_in_time_slot(cur: int, sh: int, sm: int, eh: int, em: int) -> bool:
     start = sh * 60 + sm
     end = eh * 60 + em
@@ -400,51 +424,140 @@ def simulate(
     # Pre-compute ref_minutes, timestamp strings, and Brussels dates
     # for all bars to avoid per-bar timezone conversions in the hot loop.
     # -----------------------------------------------------------------------
-    _pre_ref_minutes = np.empty(n, dtype=np.int32)
-    _pre_bar_time_str = [None] * n
-    _pre_close_time_str = [None] * n
-    _pre_brussels_dates = [None] * n
+    # Vectorised close-time calc: bar i closes at idx[i+1], except the last bar
+    # which closes inferred_bar_delta after its own open.
+    idx_np = idx.values
+    close_ts_np = np.empty(n, dtype=idx_np.dtype)
+    if n > 0:
+        close_ts_np[:-1] = idx_np[1:]
+        close_ts_np[-1] = idx_np[-1] + np.timedelta64(
+            int(inferred_bar_delta.total_seconds() * 1_000_000_000), "ns"
+        )
+    # ``idx.values`` returns ns-since-epoch in UTC for tz-aware indices, so
+    # re-localize as UTC then convert back to the source tz to preserve the
+    # original semantics.
+    if idx.tz is not None:
+        close_ts_index = pd.DatetimeIndex(close_ts_np).tz_localize("UTC").tz_convert(idx.tz)
+    else:
+        close_ts_index = pd.DatetimeIndex(close_ts_np)
+    _pre_ref_minutes = _to_ref_minutes_vec(close_ts_index)
+    _pre_open_ref_minutes = _to_ref_minutes_vec(idx)
+    _pre_brussels_dates_arr = (
+        close_ts_index.tz_convert(BRUSSELS_TZ).date
+        if close_ts_index.tz is not None
+        else close_ts_index.date
+    )
+    # Strings are lazy: only formatted when a trade actually legs out.
+    # Lookup helpers replace ``_pre_bar_time_str[i]`` / ``_pre_close_time_str[i]``.
+    _bar_time_str_cache: Dict[int, str] = {}
+    _close_time_str_cache: Dict[int, str] = {}
+    _brussels_date_str_cache: Dict[int, str] = {}
 
-    for _i in range(n):
-        _bt = idx[_i]
-        _ct = idx[_i + 1] if _i + 1 < n else idx[_i] + inferred_bar_delta
-        _pre_ref_minutes[_i] = _to_ref_minutes(_ct)
-        _pre_bar_time_str[_i] = str(_bt)
-        _pre_close_time_str[_i] = str(_ct)
-        _pre_brussels_dates[_i] = str(_to_brussels(_ct).date())
+    def _bar_str(i: int) -> str:
+        s = _bar_time_str_cache.get(i)
+        if s is None:
+            s = str(idx[i])
+            _bar_time_str_cache[i] = s
+        return s
 
-    # Pre-compute auto-close bar flags
+    def _close_str(i: int) -> str:
+        s = _close_time_str_cache.get(i)
+        if s is None:
+            s = str(close_ts_index[i])
+            _close_time_str_cache[i] = s
+        return s
+
+    def _date_str(i: int) -> str:
+        s = _brussels_date_str_cache.get(i)
+        if s is None:
+            s = str(_pre_brussels_dates_arr[i])
+            _brussels_date_str_cache[i] = s
+        return s
+
+    # Pre-compute auto-close bar flags using the vectorised ref-minutes.
     _pre_is_auto_close = np.zeros(n, dtype=np.bool_)
     if config.auto_close_enabled:
         ac_target = config.auto_close_hour * 60 + config.auto_close_minute
-        for _i in range(n):
-            _open_ref = _to_ref_minutes(idx[_i])
-            _close_ref = _pre_ref_minutes[_i]
-            if _close_ref >= _open_ref:
-                _pre_is_auto_close[_i] = ac_target >= _open_ref and ac_target <= _close_ref
-            else:
-                _pre_is_auto_close[_i] = ac_target >= _open_ref or ac_target <= _close_ref
+        open_ref = _pre_open_ref_minutes.astype(np.int32)
+        close_ref = _pre_ref_minutes.astype(np.int32)
+        normal = close_ref >= open_ref
+        normal_hit = (ac_target >= open_ref) & (ac_target <= close_ref)
+        wrap_hit = (ac_target >= open_ref) | (ac_target <= close_ref)
+        _pre_is_auto_close = np.where(normal, normal_hit, wrap_hit)
 
-    # Pre-compute blackout flags for entry logic
+    # Pre-compute blackout flags for entry logic (vectorised).
     _pre_is_blackout = np.zeros(n, dtype=np.bool_)
     if config.blackout_windows:
-        for _i in range(n):
-            ref = _pre_ref_minutes[_i]
-            for w in config.blackout_windows:
-                if w.active and _is_in_time_slot(ref, w.start_hour, w.start_minute, w.end_hour, w.end_minute):
-                    _pre_is_blackout[_i] = True
-                    break
+        ref = _pre_ref_minutes
+        for w in config.blackout_windows:
+            if not w.active:
+                continue
+            start = w.start_hour * 60 + w.start_minute
+            end = w.end_hour * 60 + w.end_minute
+            if start <= end:
+                _pre_is_blackout |= (ref >= start) & (ref < end)
+            else:
+                _pre_is_blackout |= (ref >= start) | (ref < end)
 
     # Pre-index 1m data for fast sub-bar lookup via searchsorted
     _data_1m_index_values = None
+    _data_1m_open = None
     _data_1m_high = None
     _data_1m_low = None
     _data_1m_close = None
+    _pre_1m_close_time_str: Optional[List[str]] = None
+    _pre_1m_is_auto_close: Optional[np.ndarray] = None
+    _pre_sub_start: Optional[np.ndarray] = None
+    _pre_sub_end: Optional[np.ndarray] = None
     if data_1m is not None and not data_1m.empty:
         _data_1m_index_values = data_1m.index.values  # numpy datetime64 array
+        _data_1m_open = data_1m["Open"].values
         _data_1m_high = data_1m["High"].values
         _data_1m_low = data_1m["Low"].values
         _data_1m_close = data_1m["Close"].values
+
+        # Pre-compute 1m sub-bar close timestamps so the inner loop never
+        # touches pandas. The last sub-bar closes ``inferred_sub_bar_delta``
+        # after its open; intermediate bars close at the next index.
+        m1 = len(_data_1m_index_values)
+        _pre_1m_close_ts = np.empty(m1, dtype="datetime64[ns]")
+        _pre_1m_close_ts[:-1] = _data_1m_index_values[1:]
+        _pre_1m_close_ts[-1] = _data_1m_index_values[-1] + np.timedelta64(
+            int(inferred_sub_bar_delta.total_seconds() * 1_000_000_000), "ns"
+        )
+
+        # Strings only used when a trade legs out → format them on demand
+        # inside the loop. Keep ``_pre_1m_close_ts`` for searchsorted.
+        _pre_1m_close_time_str = None
+
+        # Build tz-aware DatetimeIndex of sub-bar close times once (used for
+        # string formatting + auto-close mask).
+        if data_1m.index.tz is not None:
+            _pre_1m_close_ts_indexed = (
+                pd.DatetimeIndex(_pre_1m_close_ts)
+                .tz_localize("UTC")
+                .tz_convert(data_1m.index.tz)
+            )
+        else:
+            _pre_1m_close_ts_indexed = pd.DatetimeIndex(_pre_1m_close_ts)
+
+        if config.auto_close_enabled:
+            sub_close_ref = _to_ref_minutes_vec(_pre_1m_close_ts_indexed)
+            ac_target = config.auto_close_hour * 60 + config.auto_close_minute
+            _pre_1m_is_auto_close = sub_close_ref == ac_target
+        else:
+            _pre_1m_is_auto_close = np.zeros(m1, dtype=np.bool_)
+
+        # Pre-compute per-bar sub-bar [start, end) index range. ``side='left'``
+        # matches the previous searchsorted behavior in ``_get_sub_bars``.
+        idx_np = idx.values  # higher-TF datetime64 array
+        bar_close_np = np.empty(n, dtype=idx_np.dtype)
+        bar_close_np[:-1] = idx_np[1:]
+        bar_close_np[-1] = idx_np[-1] + np.timedelta64(
+            int(inferred_bar_delta.total_seconds() * 1_000_000_000), "ns"
+        )
+        _pre_sub_start = np.searchsorted(_data_1m_index_values, idx_np, side="left")
+        _pre_sub_end = np.searchsorted(_data_1m_index_values, bar_close_np, side="left")
 
     # Position state
     pos: Optional[_Position] = None
@@ -744,35 +857,6 @@ def simulate(
             return idx[bar_idx + 1]
         return idx[bar_idx] + inferred_bar_delta
 
-    def _get_sub_bars(bar_time: pd.Timestamp, bar_close_time: pd.Timestamp) -> Optional[pd.DataFrame]:
-        """Get 1-minute bars within a higher-TF bar's time span."""
-        if _data_1m_index_values is None:
-            return None
-
-        start = bar_time
-        end = bar_close_time
-
-        # Align timezones
-        if data_1m.index.tz is not None:
-            if start.tzinfo is None:
-                start = start.tz_localize(data_1m.index.tz)
-            else:
-                start = start.tz_convert(data_1m.index.tz)
-            if end.tzinfo is None:
-                end = end.tz_localize(data_1m.index.tz)
-            else:
-                end = end.tz_convert(data_1m.index.tz)
-
-        # Use searchsorted for O(log n) lookup instead of boolean indexing
-        start_np = np.datetime64(start)
-        end_np = np.datetime64(end)
-        i_start = np.searchsorted(_data_1m_index_values, start_np, side='left')
-        i_end = np.searchsorted(_data_1m_index_values, end_np, side='left')
-
-        if i_start >= i_end:
-            return None
-        return data_1m.iloc[i_start:i_end]
-
     def _update_supertrend_trailing(bar_idx: int):
         """Update position SL based on Supertrend trailing logic.
 
@@ -1045,38 +1129,34 @@ def simulate(
 
     def _process_sub_bars(
         bar_idx: int,
-        bar_time: pd.Timestamp,
-        bar_close_time: pd.Timestamp,
-        sub_bars: pd.DataFrame,
+        sub_start: int,
+        sub_end: int,
     ) -> tuple[bool, bool, bool]:
         """
         Process intrabar stop/TP/BE events and exact auto-close on 1-minute bars.
 
         EMA-based exits stay on the higher timeframe close.
+        ``sub_start`` / ``sub_end`` are inclusive/exclusive 1m-bar indices
+        precomputed via ``np.searchsorted``.
         Returns (closed, tp1_touched_this_bar, tp2_touched_this_bar).
         """
         nonlocal pos
-        exit_bar_time = str(bar_time)
+        exit_bar_time = _bar_str(bar_idx)
         tp1_touched_this_bar = False
         tp2_touched_this_bar = False
 
-        for sub_i in range(len(sub_bars)):
+        for sub_i in range(sub_start, sub_end):
             if pos is None:
                 return True, tp1_touched_this_bar, tp2_touched_this_bar
 
-            sub_o = sub_bars["Open"].iloc[sub_i]
-            sub_h = sub_bars["High"].iloc[sub_i]
-            sub_l = sub_bars["Low"].iloc[sub_i]
-            sub_c = sub_bars["Close"].iloc[sub_i]
-            sub_open_time = sub_bars.index[sub_i]
-            sub_close_time = (
-                sub_bars.index[sub_i + 1]
-                if sub_i + 1 < len(sub_bars)
-                else sub_open_time + inferred_sub_bar_delta
-            )
-            if sub_close_time > bar_close_time:
-                sub_close_time = bar_close_time
-            sub_exec_time = str(sub_close_time)
+            sub_o = _data_1m_open[sub_i]
+            sub_h = _data_1m_high[sub_i]
+            sub_l = _data_1m_low[sub_i]
+            sub_c = _data_1m_close[sub_i]
+            # ``sub_exec_time`` must be a string the trade list can store;
+            # the tz-aware DatetimeIndex element's ``str()`` matches the
+            # previous ``str(sub_close_time)`` output.
+            sub_exec_time = str(_pre_1m_close_ts_indexed[sub_i])
 
             closed_this_bar, tp1_touched_this_bar, tp2_touched_this_bar = _process_touch_exit(
                 bar_idx,
@@ -1098,11 +1178,8 @@ def simulate(
             if (
                 pos is not None
                 and config.auto_close_enabled
-                and _matches_clock_time(
-                    sub_close_time,
-                    config.auto_close_hour,
-                    config.auto_close_minute,
-                )
+                and _pre_1m_is_auto_close is not None
+                and _pre_1m_is_auto_close[sub_i]
             ):
                 in_profit = (sub_c > pos.entry_price) if pos.side == 1 else (sub_c < pos.entry_price)
                 reason = "Auto-Close (profit)" if in_profit else "Auto-Close (loss)"
@@ -1328,8 +1405,8 @@ def simulate(
     for i in range(n):
         bar_time = idx[i]
         bar_close_time = _get_bar_close_time(i)
-        bar_time_str = _pre_bar_time_str[i]
-        close_time_str = _pre_close_time_str[i]
+        bar_time_str = _bar_str(i)
+        close_time_str = _close_str(i)
         h = np_high[i]
         l = np_low[i]
         c = np_close[i]
@@ -1341,9 +1418,10 @@ def simulate(
             _update_supertrend_trailing(i)
 
             tp2_touched_this_bar = False
-            sub = _get_sub_bars(bar_time, bar_close_time)
-            if sub is not None:
-                closed_this_bar, tp1_touched_this_bar, tp2_touched_this_bar = _process_sub_bars(i, bar_time, bar_close_time, sub)
+            sub_start = int(_pre_sub_start[i]) if _pre_sub_start is not None else 0
+            sub_end = int(_pre_sub_end[i]) if _pre_sub_end is not None else 0
+            if sub_start < sub_end:
+                closed_this_bar, tp1_touched_this_bar, tp2_touched_this_bar = _process_sub_bars(i, sub_start, sub_end)
             else:
                 closed_this_bar, tp1_touched_this_bar, tp2_touched_this_bar = _process_touch_exit(
                     i,
@@ -1393,7 +1471,7 @@ def simulate(
                 continue
 
             # Check if daily limit has been reached for this entry date
-            entry_date = _pre_brussels_dates[i]
+            entry_date = _date_str(i)
             entry_excluded = _check_daily_limit(entry_date)
 
             if np_long_entry[i]:

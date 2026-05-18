@@ -17,6 +17,8 @@ import pandas_ta_classic as ta
 from typing import Dict, Any, Tuple
 import warnings
 
+from src.engine.fast_indicators import rolling_linreg_last
+
 warnings.filterwarnings('ignore', category=FutureWarning, module='pandas_ta_classic')
 
 
@@ -104,18 +106,11 @@ class EMABreakOsc(Strategy):
         avg_hla = (hi + lo + av) / 3
         raw_osc = (close - avg_hla) / (hi - lo + 1e-10) * 100
 
-        # Linear regression endpoint over window mL
-        osc_linreg = pd.Series(np.nan, index=close.index)
-        np_raw = raw_osc.values
-        for i in range(mL - 1, len(close)):
-            window = np_raw[i - mL + 1 : i + 1]
-            if not np.any(np.isnan(window)):
-                x = np.arange(mL)
-                try:
-                    coeffs = np.polyfit(x, window, 1)
-                    osc_linreg.iloc[i] = coeffs[0] * (mL - 1) + coeffs[1]
-                except Exception:
-                    osc_linreg.iloc[i] = window[-1]
+        # Linear regression endpoint over window mL (Pine's ta.linreg);
+        # vectorised closed-form replaces the per-bar polyfit loop.
+        osc_linreg = pd.Series(
+            rolling_linreg_last(raw_osc.values, mL), index=close.index
+        )
 
         osc_sig = ta.ema(osc_linreg, length=sL)
         osc_sgd = (

@@ -100,14 +100,13 @@ All strategies inherit from `Strategy` (`src/strategies/base.py`), use the simul
 | HMASSLOsciV3       | `hma_ssl_osci_v3.py`          | `HMA-SSL-Osci-v3.txt`         | 250         |
 | EMABreakHMASSLOsc  | `ema_break_hma_ssl_osc.py`    | `EMA-Break-HMA-SSL-Osc.txt`   | 250         |
 | RobReversal        | `rob_reversal.py`             | `RobReversal.txt`             | 150         |
-| GatorHMAEpure      | `gator_hma_epure.py`          | `Gator-HMA-Epure.txt`         | DEFAULT (200) |
 
-Warmup defaults to `DEFAULT_WARMUP_BARS = 200` if a strategy is not listed in `STRATEGY_WARMUP_BARS` (in `backend/api.py`). `GatorHMAEpure` currently uses the default — add an explicit entry if you tune its periods.
+Warmup defaults to `DEFAULT_WARMUP_BARS = 200` if a strategy is not listed in `STRATEGY_WARMUP_BARS` (in `backend/api.py`).
 
 Strategy class attributes (`src/strategies/base.py`):
 - `use_simulator: bool` — must be `True` for the simulator path.
 - `manual_exit: bool` — legacy VectorBT flag; harmless on the simulator path.
-- `blackout_sensitive: bool` — when `True`, the strategy reads `is_blackout` from the annotated dataframe and adapts its state machine (used by `GatorHMAEpure`).
+- `blackout_sensitive: bool` — when `True`, the strategy reads `is_blackout` from the annotated dataframe and adapts its state machine.
 - `simulator_settings: dict` — class-level defaults; `get_simulator_settings(params)` can override per-call.
 
 ## Data Flow
@@ -242,8 +241,10 @@ class MyStrategy(Strategy):
 
 - **EMA**: `pd.Series.ewm(span=n, adjust=False).mean()` — matches Pine's recursive `ta.ema()`.
 - **SMA**: `pd.Series.rolling(n).mean()`.
-- **HMA / LinReg / others**: use `pandas_ta_classic` (imported as `ta`). The package lives in `libs/pandas-ta/` (folder name kept, but the installed dist is `pandas-ta-classic`). Do **not** install `pandas-ta` from PyPI — formulas diverge.
+- **HMA / WMA**: prefer the NumPy fast paths in `src/engine/fast_indicators.py` (`fast_wma`, `fast_hma`, `fast_hma_rounded_sqrt`). They produce results bit-identical to `pandas_ta_classic` (`np.convolve` matches `np.dot` per window exactly) but are ~10× faster on long series. `pandas_ta_classic` (imported as `ta`) is still available — the package lives in `libs/pandas-ta/` and is the source of truth for `ta.ema`, `ta.sma`, `ta.true_range`, etc. Do **not** install `pandas-ta` from PyPI — formulas diverge.
+- **LinReg**: use `rolling_linreg_last(values, length)` from `src/engine/fast_indicators.py` instead of a per-bar `np.polyfit` loop. Closed-form, vectorised, ~1000× faster. Pine equivalent: `ta.linreg(values, length, 0)`.
 - **MFI (custom)**: Pine uses `hl2` as source, centered at 0 — see existing strategies for the implementation.
+- **Element-wise max/min over two Series**: `Series.combine(other, max)` is slow (Python per-element callback). Prefer `pd.Series(np.fmax(a.to_numpy(), b.to_numpy()), index=a.index)`. In our strategies the asymmetric NaN edge case (one side NaN, the other finite) only happens during warmup before the strategy reads those bars.
 - **Convergence**: EMA(n) reaches ~99% accuracy after ~4n bars after its first valid value. Size warmup for the longest chain (e.g. HMA(84) recomposed from EMAs requires ≥250 bars at 7m).
 - **Session boundaries**: gaps between sessions reset resampling anchors — handled by `recompose.py`. Do not depend on continuous bars across the daily break.
 
@@ -395,6 +396,7 @@ The Python `BacktestEngineSettings` class in `backend/api.py` has DIFFERENT defa
 8. **`tick_size` is injected** — `_run_simulator_backtest` writes the active symbol's `tick_size` into `params` before calling `generate_signals`, so strategies that round to ticks can read `params["tick_size"]` directly.
 9. **UI defaults are the source of truth for engine settings** — the Python `BacktestEngineSettings` class has *different* defaults from the frontend. The UI overrides them when sending requests, and goal campaigns must match the UI to be reproducible. Use `scripts/goals/_shared/engine_settings.ui_default_engine_settings(strategy_name)` rather than `BacktestEngineSettings()` directly.
 10. **Auto-close is 22:00 reference Brussels for any final config** — that's the CME daily close in winter-equivalent reference time. Diagnostic sweeps may touch it, but no winning preset / saved favorite should have any other value.
+11. **Fast indicators are the hot-path default** — `src/engine/fast_indicators.py` provides NumPy replacements (`fast_wma`, `fast_hma`, `fast_hma_rounded_sqrt`, `rolling_linreg_last`) that are bit-equivalent to `pandas_ta_classic` but much faster. All active strategies route their WMA/HMA/LinReg through them; a single replay of the HMASSLOsciV3 V5 winner preset over the full MNQ history dropped from ~26s to ~7s (≈3.7×). The simulator also precomputes 1m sub-bar ranges via batch `searchsorted`, vectorises blackout/auto-close masks, and uses `_to_ref_minutes_vec` to avoid per-bar `tz_convert` calls.
 
 ## Key Files
 
@@ -404,6 +406,7 @@ The Python `BacktestEngineSettings` class in `backend/api.py` has DIFFERENT defa
 | `backend/api.py` | Backtest orchestration, strategy registry, optimization, presets, signal cache. |
 | `backend/market_data_routes.py` | Market data CRUD + async download. |
 | `src/engine/simulator.py` | Event-driven simulator with intra-bar 1m resolution and all exit modes. |
+| `src/engine/fast_indicators.py` | NumPy replacements for the slow `pandas_ta_classic` calls used in the hot path (`fast_wma`, `fast_hma`, `fast_hma_rounded_sqrt`, `rolling_linreg_last`). |
 | `src/data/market_store.py` | Local CSV storage, index, `SYMBOL_CONTRACTS`, contract-segment tracking. |
 | `src/data/recompose.py` | Per-session 1m → higher-TF recomposition. |
 | `src/data/topstep.py` / `topstepx.py` | Topstep / TopstepX API clients. |
