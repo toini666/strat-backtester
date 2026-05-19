@@ -60,11 +60,22 @@ class SimulatorConfig:
     no_sl_after_tp1: bool = False  # if True, intra-bar SL/BE disabled after TP1 (exit only via close-based logic)
     tp1_full_exit: bool = False          # if True, TP1 closes entire position (no partial); no breakeven move
     inverse_canal_exit: bool = False     # if True, LONG exits when close>upper, SHORT exits when close<lower
-    canal_exit_mode: str = "both_hma"    # "both_hma" (default), "break_hma", "inversion_hma", "v3_fast_hma_ssl", or "v3_fixed_points"
+    canal_exit_mode: str = "both_hma"    # "both_hma" (default), "break_hma", "inversion_hma", "v3_fast_hma_ssl", "v3_fixed_points", or "v4_hw_rr"
     block_loss_canal_exit_before_tp1: bool = False  # if True, ignore losing HMA exits until TP1/partial
     close_partial_min_rr: float = 0.0     # minimum current RR for close-based partial exits; 0 disables
     one_trade_per_setup_window: bool = False  # v3: only one trade per HMA-slow/SSL setup window per side
     final_exit_pct: float = 0.0          # v3 "% du prix d'entrée en profit": intra-bar TP at entry × (1 ± pct/100), rounded to tick; 0 disables
+    # v4 final-exit (canal_exit_mode == "v4_hw_rr") parameters
+    final_exit_min_rr: float = 0.0        # v4: RR threshold gating the HW-cross final exit (0 = no gate)
+    move_to_be_on_fast_hma_cross: bool = False  # v4: on fast HMA / SSL cross while in profit, set tp1_hit + move SL to entry
+    move_to_be_on_rejected_exit: bool = False   # v4: when a final exit is deferred (RR < threshold) and trade is in profit, move SL to entry
+    # v4 "signal sortie déjà actif à l'entrée" — handles the case where hma1 is already on the wrong
+    # side of BBMC_ssl at entry. Options:
+    #   "off"               → ignore the case (V3-compat; needed for V3-equivalent backtests)
+    #   "hw_rr"             → arm pending_final_exit at entry, exit at next HW cross (with optional RR gate)
+    #   "canal_inverse"     → exit when close breaches the opposite HMA canal side
+    #   "next_slow_cross"   → exit at next opposite slow-HMA / SSL cross
+    early_exit_fired_mode: str = "off"
 
     daily_win_limit_enabled: bool = False
     daily_win_limit: float = 500.0
@@ -108,8 +119,9 @@ class _Position:
     canal_exit_armed: bool = False    # for HMA break exits that require first reaching the profit side
     initial_stop_price: float = 0.0  # stop price at entry, never modified (used for partial RR calc)
     loss_exit_blocked: bool = False   # v3: fast HMA/SSL exit fired while in loss, fallback canal-break exit armed
-    pending_final_exit: bool = False  # v3: fast HMA/SSL cross fired; waiting for next hyperwave cross to actually exit
+    pending_final_exit: bool = False  # v3/v4: fast HMA/SSL cross fired; waiting for next hyperwave cross to actually exit
     entry_setup_bar: int = -1         # v3: the setup-window bar this trade was opened in
+    early_exit_fired: bool = False    # v4: at entry, hma1 was already on the wrong side of BBMC_ssl (signal lost)
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +373,35 @@ def simulate(
     )
     is_v3_exit_mode = config.canal_exit_mode == "v3_fast_hma_ssl"
     is_v3_fixed_exit_mode = config.canal_exit_mode == "v3_fixed_points"
+    is_v4_exit_mode = config.canal_exit_mode == "v4_hw_rr"
+
+    # v4: structural-state series read by the simulator
+    #   hma1_above_ssl[i]   = True when hma1 > BBMC_ssl at bar i (used to detect
+    #                         early_exit_fired at entry for longs / shorts).
+    #   slow_cross_long/short[i] = slow HMA / SSL cross events (used by the
+    #                         "next_slow_cross" early-exit fallback).
+    _hma1_above_ssl_s = signals.get("hma1_above_ssl")
+    np_hma1_above_ssl = (
+        _hma1_above_ssl_s.values if _hma1_above_ssl_s is not None else None
+    )
+    _slow_cross_long_s = signals.get("slow_cross_long")
+    _slow_cross_short_s = signals.get("slow_cross_short")
+    np_slow_cross_long = (
+        _slow_cross_long_s.values if _slow_cross_long_s is not None else None
+    )
+    np_slow_cross_short = (
+        _slow_cross_short_s.values if _slow_cross_short_s is not None else None
+    )
+
+    if is_v4_exit_mode and config.early_exit_fired_mode not in (
+        "off",
+        "hw_rr",
+        "canal_inverse",
+        "next_slow_cross",
+    ):
+        raise ValueError(
+            f"Unsupported early_exit_fired_mode: {config.early_exit_fired_mode}"
+        )
 
     # v3: per-side setup-window bar tracking (sentinel -1 = no setup yet)
     _setup_bar_long_s = signals.get("setup_bar_long")
@@ -1252,6 +1293,101 @@ def simulate(
                         # intra-bar inside ``_process_touch_exit``.  Close-based
                         # logic is limited to the HW partial below.
                         pass
+                    elif is_v4_exit_mode:
+                        # v4 final exit: a fast HMA / SSL baseline cross arms
+                        # the exit; it fires at the next confirmed hyperwave
+                        # cross *only if* current RR ≥ final_exit_min_rr.
+                        # Otherwise the exit is deferred (pending stays armed)
+                        # and the SL may be moved to BE if configured.
+                        #
+                        # If the trade was opened while hma1 was already on the
+                        # wrong side of BBMC_ssl (``early_exit_fired``), the
+                        # fastHmaExit signal is lost. Three configurable
+                        # alternatives + a V3-compat "off" mode handle this.
+                        early_mode = config.early_exit_fired_mode
+
+                        if pos.early_exit_fired and early_mode == "canal_inverse":
+                            if pos.side == 1 and close_price < cl:
+                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                return True
+                            elif pos.side == -1 and close_price > cu:
+                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                return True
+                        elif pos.early_exit_fired and early_mode == "next_slow_cross":
+                            slow_opp = False
+                            if pos.side == 1 and np_slow_cross_short is not None and bar_idx < len(np_slow_cross_short):
+                                slow_opp = bool(np_slow_cross_short[bar_idx])
+                            elif pos.side == -1 and np_slow_cross_long is not None and bar_idx < len(np_slow_cross_long):
+                                slow_opp = bool(np_slow_cross_long[bar_idx])
+                            if slow_opp:
+                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                return True
+
+                        if pos is None:
+                            return True
+
+                        # Standard fast-HMA / SSL final exit (includes "hw_rr"
+                        # early mode which pre-armed pending_final_exit at
+                        # entry).
+                        fast_exit_fired = False
+                        if pos.side == 1 and np_fast_exit_long is not None and bar_idx < len(np_fast_exit_long):
+                            fast_exit_fired = bool(np_fast_exit_long[bar_idx])
+                        elif pos.side == -1 and np_fast_exit_short is not None and bar_idx < len(np_fast_exit_short):
+                            fast_exit_fired = bool(np_fast_exit_short[bar_idx])
+                        if fast_exit_fired:
+                            pos.pending_final_exit = True
+                        hw_cross_any = False
+                        if np_hw_cross_over is not None and bar_idx < len(np_hw_cross_over):
+                            hw_cross_any = hw_cross_any or bool(np_hw_cross_over[bar_idx])
+                        if np_hw_cross_under is not None and bar_idx < len(np_hw_cross_under):
+                            hw_cross_any = hw_cross_any or bool(np_hw_cross_under[bar_idx])
+                        exit_cond_fired = pos.pending_final_exit and hw_cross_any
+
+                        if exit_cond_fired:
+                            if pos.side == 1:
+                                final_risk = pos.entry_price - pos.initial_stop_price
+                                final_reward = close_price - pos.entry_price
+                            else:
+                                final_risk = pos.initial_stop_price - pos.entry_price
+                                final_reward = pos.entry_price - close_price
+                            final_rr_ok = config.final_exit_min_rr == 0.0 or (
+                                final_risk > 0
+                                and final_reward / final_risk >= config.final_exit_min_rr
+                            )
+                            if final_rr_ok:
+                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                return True
+                            else:
+                                # Exit deferred to next HW; pending stays armed.
+                                # Optional SL→BE if in profit and SL still below
+                                # (long) / above (short) entry.
+                                if (
+                                    config.move_to_be_on_rejected_exit
+                                    and not pos.tp1_hit
+                                    and (
+                                        (pos.side == 1 and close_price > pos.entry_price and pos.stop_price < pos.entry_price)
+                                        or (pos.side == -1 and close_price < pos.entry_price and pos.stop_price > pos.entry_price)
+                                    )
+                                ):
+                                    pos.stop_price = pos.entry_price
+
+                        # Optional SL→BE on fast-HMA cross (skip when the
+                        # cross already triggered/deferred the final exit, and
+                        # only when not in the early_exit_fired state).
+                        if (
+                            pos is not None
+                            and config.move_to_be_on_fast_hma_cross
+                            and fast_exit_fired
+                            and not pos.early_exit_fired
+                            and not pos.tp1_hit
+                            and not exit_cond_fired
+                            and (
+                                (pos.side == 1 and close_price > pos.entry_price and pos.stop_price < pos.entry_price)
+                                or (pos.side == -1 and close_price < pos.entry_price and pos.stop_price > pos.entry_price)
+                            )
+                        ):
+                            pos.tp1_hit = True
+                            pos.stop_price = pos.entry_price
                     elif is_v3_exit_mode:
                         # v3 TP Final: a fast HMA / SSL baseline cross *arms*
                         # the exit; the actual close only fires on the next
@@ -1535,6 +1671,13 @@ def simulate(
                     ),
                     entry_setup_bar=entry_setup,
                 )
+                # v4: detect "signal sortie déjà actif à l'entrée" (hma1 > BBMC_ssl
+                # for a long). In "hw_rr" mode, pre-arm the pending exit so it
+                # fires at the next HW cross.
+                if is_v4_exit_mode and np_hma1_above_ssl is not None and i < len(np_hma1_above_ssl):
+                    pos.early_exit_fired = bool(np_hma1_above_ssl[i])
+                    if pos.early_exit_fired and config.early_exit_fired_mode == "hw_rr":
+                        pos.pending_final_exit = True
                 last_long_traded_setup_bar = entry_setup
 
             elif np_short_entry[i]:
@@ -1597,6 +1740,12 @@ def simulate(
                     ),
                     entry_setup_bar=entry_setup,
                 )
+                # v4: for a short, the structurally-active exit signal is
+                # hma1 < BBMC_ssl (i.e. NOT hma1_above_ssl).
+                if is_v4_exit_mode and np_hma1_above_ssl is not None and i < len(np_hma1_above_ssl):
+                    pos.early_exit_fired = not bool(np_hma1_above_ssl[i])
+                    if pos.early_exit_fired and config.early_exit_fired_mode == "hw_rr":
+                        pos.pending_final_exit = True
                 last_short_traded_setup_bar = entry_setup
 
     # --- Close any remaining position at end of data ---

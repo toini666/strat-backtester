@@ -284,6 +284,16 @@ export function Sidebar({
                 </select>
             );
         }
+        if (key === 'early_exit_fired_mode') {
+            return (
+                <select className="input-base" value={String(value)} onChange={(e) => handleParamChange(key, e.target.value)}>
+                    <option value="off">Désactivé (comme V3)</option>
+                    <option value="hw_rr">HW + RR</option>
+                    <option value="canal_inverse">Clôture canal HMA inverse</option>
+                    <option value="next_slow_cross">Prochain cross HMA lente</option>
+                </select>
+            );
+        }
         if (typeof value === 'string') {
             return (
                 <input

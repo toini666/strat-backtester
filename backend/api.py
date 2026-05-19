@@ -63,6 +63,7 @@ STRATEGY_WARMUP_BARS = {
     "HMASSLOsci": 250,          # EMA(7)→28 + HMA(84)→135 + EMA(60) SSL rangema→240 + margin
     "HMASSLOsciV2": 250,        # HMA/SSL/oscillator stack; SSL EMA(60) remains the dominant convergence window
     "HMASSLOsciV3": 250,        # Same indicator stack as v2 (HMA + SSL EMA(60) + 4Kings + MFI); v3-specific entry/exit/SL logic
+    "HMASSLOsciV4": 250,        # Same indicator stack as v3; v4 RR-gated final exit + early_exit_fired alternatives
     "EMABreakHMASSLOsc": 250,  # EMA(13)→52 + EMA(60) SSL rangema→240 + margin
     "RobReversal": 150,         # EMA(13)→52 + MFI(35)+cloud(35)→112 + margin
 
@@ -642,6 +643,10 @@ def _run_simulator_backtest(
         close_partial_min_rr=float(simulator_settings.get("close_partial_min_rr", 0.0)),
         one_trade_per_setup_window=bool(simulator_settings.get("one_trade_per_setup_window", False)),
         final_exit_pct=float(simulator_settings.get("final_exit_pct", 0.0)),
+        final_exit_min_rr=float(simulator_settings.get("final_exit_min_rr", 0.0)),
+        move_to_be_on_fast_hma_cross=bool(simulator_settings.get("move_to_be_on_fast_hma_cross", False)),
+        move_to_be_on_rejected_exit=bool(simulator_settings.get("move_to_be_on_rejected_exit", False)),
+        early_exit_fired_mode=str(simulator_settings.get("early_exit_fired_mode", "off")),
         daily_win_limit_enabled=engine_settings.daily_win_limit_enabled,
         daily_win_limit=engine_settings.daily_win_limit,
         daily_loss_limit_enabled=engine_settings.daily_loss_limit_enabled,
@@ -861,6 +866,10 @@ def resimulate(req: ResimulateRequest):
         close_partial_min_rr=float(simulator_settings.get("close_partial_min_rr", 0.0)),
         one_trade_per_setup_window=bool(simulator_settings.get("one_trade_per_setup_window", False)),
         final_exit_pct=float(simulator_settings.get("final_exit_pct", 0.0)),
+        final_exit_min_rr=float(simulator_settings.get("final_exit_min_rr", 0.0)),
+        move_to_be_on_fast_hma_cross=bool(simulator_settings.get("move_to_be_on_fast_hma_cross", False)),
+        move_to_be_on_rejected_exit=bool(simulator_settings.get("move_to_be_on_rejected_exit", False)),
+        early_exit_fired_mode=str(simulator_settings.get("early_exit_fired_mode", "off")),
         daily_win_limit_enabled=engine_settings.daily_win_limit_enabled,
         daily_win_limit=engine_settings.daily_win_limit,
         daily_loss_limit_enabled=engine_settings.daily_loss_limit_enabled,

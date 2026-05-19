@@ -51,6 +51,16 @@ _STRATEGY_OVERRIDES: dict[str, dict] = {
             {"active": True,  "start_hour": 22, "start_minute": 0,  "end_hour": 23, "end_minute": 59},
         ],
     },
+    "HMASSLOsciV4": {
+        "blackout_windows": [
+            {"active": False, "start_hour": 0,  "start_minute": 0,  "end_hour": 0,  "end_minute": 5},
+            {"active": False, "start_hour": 9,  "start_minute": 0,  "end_hour": 9,  "end_minute": 5},
+            {"active": False, "start_hour": 12, "start_minute": 0,  "end_hour": 14, "end_minute": 0},
+            {"active": False, "start_hour": 15, "start_minute": 30, "end_hour": 15, "end_minute": 35},
+            {"active": False, "start_hour": 16, "start_minute": 30, "end_hour": 22, "end_minute": 0},
+            {"active": True,  "start_hour": 22, "start_minute": 0,  "end_hour": 23, "end_minute": 59},
+        ],
+    },
 }
 
 
