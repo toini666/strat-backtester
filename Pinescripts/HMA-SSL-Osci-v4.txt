@@ -13,6 +13,7 @@ i_hma2Len    = input.int(21,   "Longueur HMA Secondaire",      group=grp_hma, mi
 i_ampMult    = input.float(2.0, "Multiplicateur d'Amplitude",  group=grp_hma, step=0.1, minval=0)
 i_hmaPolBars = input.int(3,    "Max bougies après flip HMA",   group=grp_hma, minval=0, tooltip="Autorise le sens inverse du canal si le changement de polarité HMA est récent.")
 i_entryWindowBars = input.int(5, "Fenêtre entrée après cross HMA lente/SSL", group=grp_hma, minval=0, tooltip="Nombre de bougies pendant lesquelles les filtres d'entrée peuvent valider un trade après le cross HMA lente vs baseline SSL.")
+i_blockEntryIfBothWindows = input.bool(false, "Bloquer entrée si fenêtres long & short simultanées", group=grp_hma, tooltip="Si activé, aucune position n'est prise quand les deux fenêtres d'entrée (long et short) sont ouvertes en même temps. Se produit quand le canal HMA tricote autour de la baseline SSL.")
 
 // --- SSL ---
 grp_ssl   = "SSL (GATOR)"
@@ -55,8 +56,11 @@ i_maxCandlePct = input.float(0.9,  "Taille max bougie Entry (%)",  group=grp_ris
 i_rejectEntryAtSlExtreme = input.bool(true, "Rejeter bougie d'entrée = extrême range SL", group=grp_risk, tooltip="Si activé, rejette les entrées où la bougie d'entrée fait elle-même le low (long) ou le high (short) du range HW utilisé pour le SL. Filtre de structure : on évite d'entrer quand la bougie d'entrée est encore en train d'imprimer le plus bas (long) / plus haut (short) du range. Comparaison faite contre la base du range (avant Buffer SL), donc le filtre reste actif même avec Buffer SL > 0.")
 i_oneTradePerEntryWindow = input.bool(true, "Un trade max par fenêtre d'entrée", group=grp_risk, tooltip="Si activé, une fenêtre HMA lente/SSL ne peut déclencher qu'un seul trade du même sens. Après un SL dans cette fenêtre, aucune reprise n'est autorisée avant un nouveau cross.")
 i_moveToBeOnFastHmaCross = input.bool(false, "SL à BE au cross HMA rapide", group=grp_risk, tooltip="Si activé, déplace le SL à BE lors du cross HMA rapide vs baseline SSL, seulement si le trade est en positif.")
+i_tpModeFastHmaHw    = input.bool(true,  "TP : cross HMA rapide + HW",        group=grp_risk, tooltip="Active le TP standard : le cross HMA rapide vs baseline SSL arme la sortie, exécutée au prochain HW (avec RR si configuré).")
+i_tpModeSlowHmaCross = input.bool(false, "TP : cross HMA lente (sens opposé)", group=grp_risk, tooltip="Sortie immédiate à la clôture quand la HMA lente cross la baseline SSL dans le sens opposé du trade (signal de fenêtre d'entrée inverse). Indépendant du TP HMA rapide + HW.")
 i_finalExitMinRr   = input.float(0.0, "RR min sortie finale", group=grp_risk, minval=0.0, step=0.25, tooltip="0 = désactivé (sortie au premier HW après cross HMA rapide). > 0 = la sortie n'est autorisée qu'au HW où RR ≥ seuil ; sinon elle est REPORTÉE au HW suivant. Astuce : 0.01 ≈ 'juste pas en perte'.")
-i_moveToBeOnRejectedExit = input.bool(false, "SL à BE si sortie reportée", group=grp_risk, tooltip="Si activé, lorsqu'une sortie finale est reportée pour cause de RR insuffisant ET que le trade est en profit, le SL est déplacé à BE (le SL n'est jamais déplacé si le trade est en perte). Sans effet si SL déjà à BE.")
+i_reportTpIfMfiOk  = input.bool(false, "Reporter TP HW si trade négatif & MFI ⑤ OK", group=grp_risk, tooltip="Au moment du HW de sortie (TP HMA rapide + HW), si le trade est en perte ET que le nuage MFI (filtre ⑤) est encore dans le sens du trade, la sortie est reportée au HW suivant. Ne s'applique qu'au TP HMA rapide + HW.")
+i_moveToBeOnRejectedExit = input.bool(false, "SL à BE si sortie reportée", group=grp_risk, tooltip="Si activé, lorsqu'une sortie finale est reportée (RR insuffisant ou MFI OK) ET que le trade est en profit, le SL est déplacé à BE (le SL n'est jamais déplacé si le trade est en perte). Sans effet si SL déjà à BE.")
 i_earlyExitFiredMode = input.string("HW + RR", "Mode si signal sortie déjà actif à l'entrée", group=grp_risk, options=["HW + RR", "Clôture canal HMA inverse", "Prochain cross HMA lente"], tooltip="Cas : à l'entrée, la HMA rapide est déjà du mauvais côté de la baseline SSL (long : hma1 > BBMC_ssl ; short : hma1 < BBMC_ssl). Le signal de sortie standard a déjà firé avant l'entrée et est perdu. Choix de l'alternative : • 'HW + RR' : arme pendingFinalExit dès l'entrée, sortie au prochain HW (avec RR check si configuré). • 'Clôture canal HMA inverse' : sort dès que close < canalLower (long) / > canalUpper (short). • 'Prochain cross HMA lente' : sort au prochain cross HMA lente vs baseline SSL opposé (laisse la porte à un setup inverse).")
 
 simple int HW_SL_LOOKAROUND = 2
@@ -405,8 +409,10 @@ bool hmaShortOk    = canalGreen or hmaBearRecent
 float candlePct    = close != 0 ? math.abs(close - open) / close * 100 : na
 bool  candleSizeOk = i_maxCandlePct == 0.0 or (not na(candlePct) and candlePct <= i_maxCandlePct)
 
-bool longSignal  = entryWindowLongOk  and hmaLongOk  and oscAllLongOk  and candleSizeOk
-bool shortSignal = entryWindowShortOk and hmaShortOk and oscAllShortOk and candleSizeOk
+bool bothWindowsBlock = i_blockEntryIfBothWindows and entryWindowLongOk and entryWindowShortOk
+
+bool longSignal  = entryWindowLongOk  and not bothWindowsBlock and hmaLongOk  and oscAllLongOk  and candleSizeOk
+bool shortSignal = entryWindowShortOk and not bothWindowsBlock and hmaShortOk and oscAllShortOk and candleSizeOk
 
 // ============================================
 // CALCUL SL & TP
@@ -556,21 +562,26 @@ if positionActive and canAct and bar_index > lastActionBar
                 hitCanalExit := true
 
         // Sortie standard HW + RR (incluant "HW + RR" mode early : pendingFinalExitLong déjà armé à l'entrée)
-        if fastHmaExitLong
+        if i_tpModeFastHmaHw and fastHmaExitLong
             pendingFinalExitLong := true
         bool exitCondLong = pendingFinalExitLong and (hwCrossOver or hwCrossUnder)
         float finalRiskLong   = entryPrice - initialStopPrice
         float finalRewardLong = close - entryPrice
         bool  finalRrLongOk   = i_finalExitMinRr == 0.0 or (finalRiskLong > 0 and finalRewardLong / finalRiskLong >= i_finalExitMinRr)
-        if exitCondLong and finalRrLongOk and not hitBreakeven and not hitStopLoss and not hitCanalExit
+        bool  mfiReportLong   = i_reportTpIfMfiOk and close < entryPrice and cloudLongOk
+        if exitCondLong and finalRrLongOk and not mfiReportLong and not hitBreakeven and not hitStopLoss and not hitCanalExit
             hitCanalExit := true
-        else if exitCondLong and not finalRrLongOk and not hitBreakeven and not hitStopLoss and not hitCanalExit
+        else if exitCondLong and (not finalRrLongOk or mfiReportLong) and not hitBreakeven and not hitStopLoss and not hitCanalExit
             // Sortie reportée au prochain HW ; pendingFinalExitLong reste true.
             if i_moveToBeOnRejectedExit and not tpPartialHit and close > entryPrice and stopPrice < entryPrice
                 stopPrice := entryPrice
                 if not na(lineStop)
                     line.delete(lineStop)
                 lineStop := line.new(bar_index, stopPrice, bar_index + 1, stopPrice, color=color.orange, style=line.style_dotted, width=1)
+
+        // TP : cross HMA lente (sens opposé) - sortie immédiate à la clôture
+        if i_tpModeSlowHmaCross and slowHmaCrossShort and not hitBreakeven and not hitStopLoss and not hitCanalExit
+            hitCanalExit := true
 
         // SL→BE sur cross HMA rapide (optionnel, si trade en positif, hors earlyExitFired)
         if i_moveToBeOnFastHmaCross and fastHmaExitLong and close > entryPrice and not earlyExitFiredLong and not tpPartialHit and stopPrice < entryPrice and not hitCanalExit and not hitBreakeven and not hitStopLoss
@@ -599,21 +610,26 @@ if positionActive and canAct and bar_index > lastActionBar
                 hitCanalExit := true
 
         // Sortie standard HW + RR (incluant "HW + RR" mode early : pendingFinalExitShort déjà armé à l'entrée)
-        if fastHmaExitShort
+        if i_tpModeFastHmaHw and fastHmaExitShort
             pendingFinalExitShort := true
         bool exitCondShort = pendingFinalExitShort and (hwCrossOver or hwCrossUnder)
         float finalRiskShort   = initialStopPrice - entryPrice
         float finalRewardShort = entryPrice - close
         bool  finalRrShortOk   = i_finalExitMinRr == 0.0 or (finalRiskShort > 0 and finalRewardShort / finalRiskShort >= i_finalExitMinRr)
-        if exitCondShort and finalRrShortOk and not hitBreakeven and not hitStopLoss and not hitCanalExit
+        bool  mfiReportShort   = i_reportTpIfMfiOk and close > entryPrice and cloudShortOk
+        if exitCondShort and finalRrShortOk and not mfiReportShort and not hitBreakeven and not hitStopLoss and not hitCanalExit
             hitCanalExit := true
-        else if exitCondShort and not finalRrShortOk and not hitBreakeven and not hitStopLoss and not hitCanalExit
+        else if exitCondShort and (not finalRrShortOk or mfiReportShort) and not hitBreakeven and not hitStopLoss and not hitCanalExit
             // Sortie reportée au prochain HW ; pendingFinalExitShort reste true.
             if i_moveToBeOnRejectedExit and not tpPartialHit and close < entryPrice and stopPrice > entryPrice
                 stopPrice := entryPrice
                 if not na(lineStop)
                     line.delete(lineStop)
                 lineStop := line.new(bar_index, stopPrice, bar_index + 1, stopPrice, color=color.orange, style=line.style_dotted, width=1)
+
+        // TP : cross HMA lente (sens opposé) - sortie immédiate à la clôture
+        if i_tpModeSlowHmaCross and slowHmaCrossLong and not hitBreakeven and not hitStopLoss and not hitCanalExit
+            hitCanalExit := true
 
         // SL→BE sur cross HMA rapide (optionnel, si trade en positif, hors earlyExitFired)
         if i_moveToBeOnFastHmaCross and fastHmaExitShort and close < entryPrice and not earlyExitFiredShort and not tpPartialHit and stopPrice > entryPrice and not hitCanalExit and not hitBreakeven and not hitStopLoss
@@ -865,9 +881,14 @@ if barstate.islast
     table.cell(tbl, 2, 17, positionActive and currentSide == -1 ? beStatus : "—", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=positionActive and currentSide == -1 ? beColor : f_bgNa())
 
     // ── TP Final ──────────────────────────────────────────
-    string tpFinalLabel = i_finalExitMinRr > 0.0
-         ? "TP Final (HMA→HW, RR≥" + str.tostring(i_finalExitMinRr, "#.##") + ")"
-         : "TP Final (HMA rapide/SSL → HW)"
+    string tpModesStr = ""
+    if i_tpModeFastHmaHw
+        tpModesStr := "HMA→HW" + (i_finalExitMinRr > 0.0 ? " RR≥" + str.tostring(i_finalExitMinRr, "#.##") : "") + (i_reportTpIfMfiOk ? " +MFI" : "")
+    if i_tpModeSlowHmaCross
+        tpModesStr := tpModesStr == "" ? "HMA lente" : tpModesStr + " | HMA lente"
+    if tpModesStr == ""
+        tpModesStr := "—"
+    string tpFinalLabel = "TP Final (" + tpModesStr + ")"
 
     string tpFinalStatusL = "—"
     string tpFinalStatusS = "—"

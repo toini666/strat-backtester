@@ -158,6 +158,21 @@ def run_backtest(
             simulator_settings.get("one_trade_per_setup_window", False)
         ),
         final_exit_pct=float(simulator_settings.get("final_exit_pct", 0.0)),
+        final_exit_min_rr=float(simulator_settings.get("final_exit_min_rr", 0.0)),
+        move_to_be_on_fast_hma_cross=bool(
+            simulator_settings.get("move_to_be_on_fast_hma_cross", False)
+        ),
+        move_to_be_on_rejected_exit=bool(
+            simulator_settings.get("move_to_be_on_rejected_exit", False)
+        ),
+        early_exit_fired_mode=str(
+            simulator_settings.get("early_exit_fired_mode", "off")
+        ),
+        tp_mode_fast_hma_hw=bool(simulator_settings.get("tp_mode_fast_hma_hw", True)),
+        tp_mode_slow_hma_cross=bool(
+            simulator_settings.get("tp_mode_slow_hma_cross", False)
+        ),
+        report_tp_if_mfi_ok=bool(simulator_settings.get("report_tp_if_mfi_ok", False)),
         daily_win_limit_enabled=engine_settings.daily_win_limit_enabled,
         daily_win_limit=engine_settings.daily_win_limit,
         daily_loss_limit_enabled=engine_settings.daily_loss_limit_enabled,

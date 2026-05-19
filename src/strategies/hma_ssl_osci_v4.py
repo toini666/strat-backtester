@@ -111,6 +111,14 @@ class HMASSLOsciV4(HMASSLOsciV3):
         # "off" = V3-compat (Python-only mode). "hw_rr", "canal_inverse",
         # "next_slow_cross" map to V4 PineScript options.
         "early_exit_fired_mode": "off",
+        # v4 PineScript additions (Pine defaults preserved here as neutral
+        # backwards-compat defaults: bothWindows block off, fast-HMA TP on,
+        # slow-HMA TP off, MFI report off → identical results to pre-update
+        # engine).
+        "block_entry_if_both_windows": False,
+        "tp_mode_fast_hma_hw": True,
+        "tp_mode_slow_hma_cross": False,
+        "report_tp_if_mfi_ok": False,
         # Injected by engine
         "tick_size": 0.25,
     }
@@ -141,6 +149,10 @@ class HMASSLOsciV4(HMASSLOsciV3):
         "final_exit_min_rr": [0.0, 0.5, 1.0],
         "move_to_be_on_rejected_exit": [True, False],
         "early_exit_fired_mode": list(EARLY_EXIT_FIRED_MODES),
+        "block_entry_if_both_windows": [True, False],
+        "tp_mode_fast_hma_hw": [True, False],
+        "tp_mode_slow_hma_cross": [True, False],
+        "report_tp_if_mfi_ok": [True, False],
     }
 
     def get_simulator_settings(self, params=None):
@@ -167,6 +179,11 @@ class HMASSLOsciV4(HMASSLOsciV3):
                 f"early_exit_fired_mode must be one of {EARLY_EXIT_FIRED_MODES}; got {mode!r}"
             )
         settings["early_exit_fired_mode"] = mode
+        settings["tp_mode_fast_hma_hw"] = bool(p.get("tp_mode_fast_hma_hw", True))
+        settings["tp_mode_slow_hma_cross"] = bool(
+            p.get("tp_mode_slow_hma_cross", False)
+        )
+        settings["report_tp_if_mfi_ok"] = bool(p.get("report_tp_if_mfi_ok", False))
         return settings
 
     def generate_signals(
@@ -206,6 +223,9 @@ class HMASSLOsciV4(HMASSLOsciV3):
         # v4: filter compares the entry candle's low/high to bullHwSlBase /
         # bearHwSlBase (raw HW range), not the buffered SL price.
         reject_entry_at_sl_extreme = bool(p.get("reject_entry_at_sl_extreme", True))
+        block_entry_if_both_windows = bool(
+            p.get("block_entry_if_both_windows", False)
+        )
         tick_size = p["tick_size"]
 
         close = data["Close"]
@@ -621,8 +641,17 @@ class HMASSLOsciV4(HMASSLOsciV3):
             )
 
             # ---- Entry decision ----
+            # v4 PineScript: bothWindowsBlock blocks BOTH directions when long
+            # and short entry windows are open simultaneously (HMA canal
+            # tricoting around SSL baseline).
+            both_windows_block = (
+                block_entry_if_both_windows
+                and entry_window_long_ok
+                and entry_window_short_ok
+            )
             long_signal = (
                 entry_window_long_ok
+                and not both_windows_block
                 and hma_long_ok
                 and osc_all_long_ok
                 and candle_ok
@@ -630,6 +659,7 @@ class HMASSLOsciV4(HMASSLOsciV3):
             )
             short_signal = (
                 entry_window_short_ok
+                and not both_windows_block
                 and hma_short_ok
                 and osc_all_short_ok
                 and candle_ok
@@ -721,6 +751,12 @@ class HMASSLOsciV4(HMASSLOsciV3):
             "hma1_above_ssl": pd.Series(hma1_above_ssl_arr, index=data.index),
             "slow_cross_long": pd.Series(slow_cross_long_arr, index=data.index),
             "slow_cross_short": pd.Series(slow_cross_short_arr, index=data.index),
+            # filter ⑤ (MFI cloud) raw state — bit-identical to PineScript
+            # cloudLongOk / cloudShortOk; used by the simulator for the
+            # ``report_tp_if_mfi_ok`` HW-exit-defer decision. False when no
+            # active cloud, so the defer never fires by accident.
+            "cloud_long_ok": pd.Series(cloud_long_arr, index=data.index),
+            "cloud_short_ok": pd.Series(cloud_short_arr, index=data.index),
             "ema_main": src_ema,
             "ema_secondary": src_ema,
             "cooldown_bars": p["cooldown_bars"],

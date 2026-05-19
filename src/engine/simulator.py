@@ -76,6 +76,19 @@ class SimulatorConfig:
     #   "canal_inverse"     → exit when close breaches the opposite HMA canal side
     #   "next_slow_cross"   → exit at next opposite slow-HMA / SSL cross
     early_exit_fired_mode: str = "off"
+    # v4 TP modes (independent, both default-on/off mirror Pine):
+    #   tp_mode_fast_hma_hw   → standard fast-HMA/SSL cross arms pending exit,
+    #                           fires at next HW (with RR gate). Default True.
+    #   tp_mode_slow_hma_cross→ immediate close on opposite slow-HMA/SSL cross.
+    #                           Default False.
+    # Note: the early_exit_fired_mode="hw_rr" entry-time pre-arm is independent
+    # of tp_mode_fast_hma_hw (special recovery path; matches Pine).
+    tp_mode_fast_hma_hw: bool = True
+    tp_mode_slow_hma_cross: bool = False
+    # v4: at HW exit, if trade is in loss AND MFI cloud (filter ⑤) is still on
+    # the trade's side, defer the exit to the next HW. Applies only to the
+    # fast-HMA + HW path.
+    report_tp_if_mfi_ok: bool = False
 
     daily_win_limit_enabled: bool = False
     daily_win_limit: float = 500.0
@@ -391,6 +404,16 @@ def simulate(
     )
     np_slow_cross_short = (
         _slow_cross_short_s.values if _slow_cross_short_s is not None else None
+    )
+    # v4: filter ⑤ MFI cloud state per bar, used by the HW-exit "report" logic
+    # (defer exit if trade in loss and cloud still on trade's side).
+    _cloud_long_ok_s = signals.get("cloud_long_ok")
+    _cloud_short_ok_s = signals.get("cloud_short_ok")
+    np_cloud_long_ok = (
+        _cloud_long_ok_s.values if _cloud_long_ok_s is not None else None
+    )
+    np_cloud_short_ok = (
+        _cloud_short_ok_s.values if _cloud_short_ok_s is not None else None
     )
 
     if is_v4_exit_mode and config.early_exit_fired_mode not in (
@@ -1328,13 +1351,16 @@ def simulate(
 
                         # Standard fast-HMA / SSL final exit (includes "hw_rr"
                         # early mode which pre-armed pending_final_exit at
-                        # entry).
+                        # entry). Arming the pending exit on the fast-HMA cross
+                        # is gated by ``tp_mode_fast_hma_hw``; the entry-time
+                        # pre-arm under "hw_rr" remains independent (special
+                        # recovery path, mirrors Pine).
                         fast_exit_fired = False
                         if pos.side == 1 and np_fast_exit_long is not None and bar_idx < len(np_fast_exit_long):
                             fast_exit_fired = bool(np_fast_exit_long[bar_idx])
                         elif pos.side == -1 and np_fast_exit_short is not None and bar_idx < len(np_fast_exit_short):
                             fast_exit_fired = bool(np_fast_exit_short[bar_idx])
-                        if fast_exit_fired:
+                        if fast_exit_fired and config.tp_mode_fast_hma_hw:
                             pos.pending_final_exit = True
                         hw_cross_any = False
                         if np_hw_cross_over is not None and bar_idx < len(np_hw_cross_over):
@@ -1354,13 +1380,37 @@ def simulate(
                                 final_risk > 0
                                 and final_reward / final_risk >= config.final_exit_min_rr
                             )
-                            if final_rr_ok:
+                            # v4 MFI report: if trade in loss AND cloud still
+                            # on trade's side, defer the HW exit. Applies only
+                            # to the fast-HMA + HW path.
+                            mfi_report = False
+                            if config.report_tp_if_mfi_ok:
+                                if (
+                                    pos.side == 1
+                                    and np_cloud_long_ok is not None
+                                    and bar_idx < len(np_cloud_long_ok)
+                                ):
+                                    mfi_report = (
+                                        close_price < pos.entry_price
+                                        and bool(np_cloud_long_ok[bar_idx])
+                                    )
+                                elif (
+                                    pos.side == -1
+                                    and np_cloud_short_ok is not None
+                                    and bar_idx < len(np_cloud_short_ok)
+                                ):
+                                    mfi_report = (
+                                        close_price > pos.entry_price
+                                        and bool(np_cloud_short_ok[bar_idx])
+                                    )
+                            if final_rr_ok and not mfi_report:
                                 _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
                                 return True
                             else:
-                                # Exit deferred to next HW; pending stays armed.
-                                # Optional SL→BE if in profit and SL still below
-                                # (long) / above (short) entry.
+                                # Exit deferred to next HW (RR < threshold OR
+                                # MFI still aligned with trade); pending stays
+                                # armed. Optional SL→BE if in profit and SL
+                                # still below (long) / above (short) entry.
                                 if (
                                     config.move_to_be_on_rejected_exit
                                     and not pos.tp1_hit
@@ -1370,6 +1420,28 @@ def simulate(
                                     )
                                 ):
                                     pos.stop_price = pos.entry_price
+
+                        # v4 TP : cross HMA lente (sens opposé) — immediate
+                        # close on opposite slow-HMA / SSL cross. Independent
+                        # of fast-HMA + HW path; both can be active. Skip if
+                        # the HW exit above already closed the position.
+                        if pos is not None and config.tp_mode_slow_hma_cross:
+                            slow_opp = False
+                            if (
+                                pos.side == 1
+                                and np_slow_cross_short is not None
+                                and bar_idx < len(np_slow_cross_short)
+                            ):
+                                slow_opp = bool(np_slow_cross_short[bar_idx])
+                            elif (
+                                pos.side == -1
+                                and np_slow_cross_long is not None
+                                and bar_idx < len(np_slow_cross_long)
+                            ):
+                                slow_opp = bool(np_slow_cross_long[bar_idx])
+                            if slow_opp:
+                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                return True
 
                         # Optional SL→BE on fast-HMA cross (skip when the
                         # cross already triggered/deferred the final exit, and
