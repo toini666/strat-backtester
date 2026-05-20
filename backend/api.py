@@ -66,6 +66,7 @@ STRATEGY_WARMUP_BARS = {
     "HMASSLOsciV4": 250,        # Same indicator stack as v3; v4 RR-gated final exit + early_exit_fired alternatives
     "EMABreakHMASSLOsc": 250,  # EMA(13)→52 + EMA(60) SSL rangema→240 + margin
     "RobReversal": 150,         # EMA(13)→52 + MFI(35)+cloud(35)→112 + margin
+    "MomentumChecker": 300,     # EMA(30)*4 + HMA(84)→135 + STC(50+12) + MFI(35) + margin
 
 }
 DEFAULT_WARMUP_BARS = 200
