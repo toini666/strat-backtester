@@ -115,6 +115,7 @@ def build_preset(
             "win_rate": metrics_summary.get("win_rate", 0),
             "total_trades": metrics_summary.get("trades", 0),
             "max_drawdown": metrics_summary.get("max_dd_%", 0),
+            "max_drawdown_dollars": metrics_summary.get("max_dd_$", 0),
         },
     }
 

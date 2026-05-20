@@ -67,6 +67,7 @@ STRATEGY_WARMUP_BARS = {
     "EMABreakHMASSLOsc": 250,  # EMA(13)→52 + EMA(60) SSL rangema→240 + margin
     "RobReversal": 150,         # EMA(13)→52 + MFI(35)+cloud(35)→112 + margin
     "MomentumChecker": 300,     # EMA(30)*4 + HMA(84)→135 + STC(50+12) + MFI(35) + margin
+    "MomentumCheckerV2": 300,   # Same as V1 + SSL EMA(60)*4 = 240 (still bounded by 300)
 
 }
 DEFAULT_WARMUP_BARS = 200

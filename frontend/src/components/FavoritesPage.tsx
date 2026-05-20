@@ -98,7 +98,7 @@ function fmt$(amount: number): string {
 function MetricsBadges({ metrics, initialEquity }: { metrics: PresetMetrics; initialEquity: number }) {
     const retColor = metrics.total_return >= 0 ? 'text-green-400' : 'text-red-400';
     const retUsd = metrics.total_return / 100 * initialEquity;
-    const ddUsd = metrics.max_drawdown / 100 * initialEquity;
+    const ddUsd = metrics.max_drawdown_dollars ?? (metrics.max_drawdown / 100 * initialEquity);
     return (
         <div className="flex flex-wrap gap-1 min-w-[200px]">
             <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-gray-700/60 ${retColor}`}>

@@ -170,6 +170,12 @@ The warmup slice is loaded and used for indicator computation, then discarded be
 ### 5. Simulation Output
 `simulate()` returns `{metrics, trades, equity_curve, daily_limits_hit}`. Trades list intent: each trade has `legs` (one per partial exit + the final close), an `excluded` flag (true when blocked by a daily limit but still recorded for analytics), and `source` (`"1"`/`"2"` in multi-backtest mode).
 
+**Drawdown metrics — `max_drawdown` and `max_drawdown_dollars` are tracked independently**:
+- `max_drawdown` — worst peak-to-trough as a **%** of the peak equity at that moment.
+- `max_drawdown_dollars` — worst peak-to-trough in **$** (absolute), independent of when % is worst.
+
+These can come from different `(peak, trough)` pairs once equity scales above the starting capital: a $3.3k drop on a $115k peak is **2.87%** (smaller %) but the worst-ever $ loss; a $1.8k drop on a $54k peak is **3.33%** (worst %) but smaller $. Conflating the two — reporting "$ at the moment of % max" as if it were the worst-ever $ DD — historically misled goal campaigns. Both values are now correct on their own axis. The frontend Dashboard / FavoritesPage prefer `max_drawdown_dollars` when present and fall back to `% × initial_equity` only if missing (legacy preset metadata).
+
 ## DST-Aware Sessions and Time Handling
 
 CME futures follow US/Eastern. Brussels and ET are normally 6h apart, but DST transition windows (~3 weeks in March, ~1 week in Oct/Nov) drop the offset to 5h, shifting all market times by -1h in Brussels.
@@ -371,6 +377,7 @@ Reference example: `scripts/goals/2026-05-15_HMASSLOsciV3_MNQ/`.
 6. **Preset is the deliverable contract**: every campaign produces a `winner_preset.json` in the UI format (riskPerTrade as percent, all blackouts explicit, all `default_params` included). `write_preset` inserts it into `data/presets.json` automatically so it shows up in the UI favorites.
 7. **`verify_preset.py` is mandatory** — replays the preset and compares to expected metrics. If it doesn't print `✅ MATCH`, the campaign is not done.
 8. **Sweep filenames are neutral** — `03_strategy_params.py`, not `03_osc_core_params.py`. Strategy-specific jargon (`osc`, `hma`, etc.) belongs in the content, not the filename.
+9. **DD constraints are on `max_dd_$` (TRUE peak-to-trough $)**, not `%`. The harness `summarize()` returns `max_dd_$` from the simulator's now-correct `max_drawdown_dollars` field. When comparing to a V1 anchor or budget, always use `$` — `%` and `$` come from different `(peak, trough)` pairs once equity grows past initial. Stating the budget as "DD ≤ $X" means worst-ever peak-to-trough in $ — exactly what the user reads off the trade list.
 
 ### Frontend vs backend default discrepancy (important gotcha)
 

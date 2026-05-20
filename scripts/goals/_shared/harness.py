@@ -191,6 +191,15 @@ def run_backtest(
 
 
 def summarize(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Compact metrics summary from a `simulate()` result.
+
+    Note on DD: `max_dd_$` and `max_dd_%` are tracked independently inside the
+    simulator (see `src/engine/simulator.py:1838-1850`). They may correspond to
+    different `(peak, trough)` pairs once equity grows past the starting
+    capital. **Always compare DD budgets in $ via `max_dd_$`** — the % can be
+    smaller while the $ is larger (e.g. a $3.3k drop on a $115k peak = 2.87%
+    but the worst $ DD; vs a $1.8k drop on a $54k peak = 3.33% but smaller $).
+    """
     m = result["metrics"]
     trades = result["trades"]
     active = [t for t in trades if not t.get("excluded", False)]

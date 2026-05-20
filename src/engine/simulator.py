@@ -1832,18 +1832,25 @@ def simulate(
     cum_pnl = sum(t["pnl"] for t in active_trades)
     total_return = (cum_pnl / config.initial_equity) * 100
 
-    # Max drawdown from equity curve
+    # Max drawdown from equity curve.
+    # Track % and $ DD independently — they can come from different peak/trough
+    # pairs once equity scales beyond the starting capital. E.g. a $3k drop on a
+    # $115k peak (2.6%) is the worst $ DD even though a $1.8k drop on a $54k
+    # peak (3.3%) is the worst % DD. Previously this was conflated and we
+    # reported the $ at the moment of the % peak — misleading.
     eq_values = [p["value"] for p in equity_curve]
     peak = eq_values[0]
-    max_dd = 0.0
-    max_dd_dollars = 0.0
+    max_dd = 0.0          # max % drawdown
+    max_dd_dollars = 0.0  # max $ drawdown
     for v in eq_values:
         if v > peak:
             peak = v
-        dd = (peak - v) / peak if peak > 0 else 0
-        if dd > max_dd:
-            max_dd = dd
-            max_dd_dollars = peak - v
+        dollar_dd = peak - v
+        pct_dd = dollar_dd / peak if peak > 0 else 0
+        if pct_dd > max_dd:
+            max_dd = pct_dd
+        if dollar_dd > max_dd_dollars:
+            max_dd_dollars = dollar_dd
 
     # Sharpe approximation
     if len(trades_list) > 1:

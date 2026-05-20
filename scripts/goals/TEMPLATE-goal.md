@@ -37,7 +37,9 @@ Ton objectif est de trouver une configuration de **paramètres optimaux** pour l
 
 **Objectifs chiffrés** (les deux doivent être atteints) :
 - Profit net total **> 30 000 $**
-- Max drawdown **< 2 500 $**
+- Max drawdown **< 2 500 $** (en $, peak-to-trough réel — `max_dd_$` dans `summarize()`, *pas* le `%`)
+
+> **Important — métrique DD** : le simulateur retourne `max_drawdown` (en %) et `max_drawdown_dollars` (en $) indépendamment. Ces deux maxima ne proviennent **pas** nécessairement de la même fenêtre `(peak, trough)` une fois que l'équité dépasse l'équité initiale (ex : un drop de 3 k$ sur un pic à 115 k$ = 2,6 % mais $-pire ; un drop de 1,8 k$ sur un pic à 54 k$ = 3,3 % mais $-moindre). Toujours comparer la contrainte DD en **$** via `max_dd_$`.
 
 ---
 

@@ -388,7 +388,9 @@ function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoUpdate, initialEquity, riskPerTrade, maxContracts, params, engineSettings]);
 
-  // Helper: compute metrics from a trade list
+  // Helper: compute metrics from a trade list. Tracks max % DD and max $ DD
+  // independently so a winning strategy that grows equity beyond initial doesn't
+  // mis-report the $ value (the % max moment is not necessarily the $ max moment).
   const calculateMetrics = useCallback((trades: Trade[], equity: number): BacktestMetrics => {
     let currentEquity = equity;
     let peak = equity;
@@ -400,11 +402,10 @@ function App() {
       cumPnL += t.pnl;
       currentEquity += t.pnl;
       if (currentEquity > peak) peak = currentEquity;
-      const dd = (peak - currentEquity) / peak;
-      if (dd > maxDrawdown) {
-        maxDrawdown = dd;
-        maxDrawdownDollars = peak - currentEquity;
-      }
+      const dollarDd = peak - currentEquity;
+      const pctDd = peak > 0 ? dollarDd / peak : 0;
+      if (pctDd > maxDrawdown) maxDrawdown = pctDd;
+      if (dollarDd > maxDrawdownDollars) maxDrawdownDollars = dollarDd;
       if (t.pnl > 0) winCount++;
     });
     return {
