@@ -42,6 +42,7 @@ i_sigExtremeFilterOn = input.bool(false, "Filtre extrême SIG courant", group=gr
 i_sigExtreme         = input.float(20.0, "   Niveau extrême SIG (+/-)", group=grp_osc, minval=0.0)
 i_cloudFilterOn      = input.bool(true,  "Filtre Nuage MFI", group=grp_osc, tooltip="Active le scoring du nuage MFI (position du MFI par rapport à sa référence).")
 i_deltaFilterOn      = input.bool(true,  "Filtre Delta",     group=grp_osc, tooltip="Active le scoring des deltas (osc/MFI alignés). Si les deux deltas sont éteints, les deux côtés reçoivent le bonus.")
+i_deltaOffMode       = input.string("both", "   Delta OFF mode", group=grp_osc, options=["both", "counter_trend"], tooltip="Quand les deux deltas sont OFF: 'both' = les deux côtés reçoivent le bonus (V1). 'counter_trend' = seul le côté contre-tendance (MFI<0 → long, MFI>0 → short) reçoit le bonus.")
 i_cloudZeroFilterOn  = input.bool(false, "Filtre Nuage < 0 / > 0", group=grp_osc, tooltip="Long autorisé si MFI < 0. Short autorisé si MFI > 0. Logique alignée sur HMA-SSL-Osci v3.")
 i_ptsHWSens          = input.int(1, "Pts: Sens dernière HW", minval=0, group=grp_osc)
 i_ptsHWValue         = input.int(1, "Pts: HW dans le seuil", minval=0, group=grp_osc)
@@ -360,9 +361,13 @@ bool oscSigExtremeShortOk = i_oscOn and i_sigExtremeFilterOn and not na(oscSig) 
 bool deltaLongOn   = osc.sig > 0 and mf.mfi > 0
 bool deltaShortOn  = osc.sig < 0 and mf.mfi < 0
 bool deltaOff      = not deltaLongOn and not deltaShortOn
-// Aligné v3: si les deux deltas sont OFF, bonus long uniquement si mfi<0 (counter-trend), short uniquement si mfi>0
-bool oscDeltaLong  = i_oscOn and i_deltaFilterOn and (deltaLongOn  or (deltaOff and not na(mf.mfi) and mf.mfi < 0))
-bool oscDeltaShort = i_oscOn and i_deltaFilterOn and (deltaShortOn or (deltaOff and not na(mf.mfi) and mf.mfi > 0))
+// Bonus delta selon le mode (cf. i_deltaOffMode):
+//   "both"         → si les deux deltas sont OFF, les deux côtés reçoivent le bonus (comportement V1)
+//   "counter_trend"→ si OFF, seul le côté contre-tendance reçoit le bonus (MFI<0 → long, MFI>0 → short)
+bool deltaLongBonus  = i_deltaOffMode == "both" ? (deltaLongOn  or deltaOff) : (deltaLongOn  or (deltaOff and not na(mf.mfi) and mf.mfi < 0))
+bool deltaShortBonus = i_deltaOffMode == "both" ? (deltaShortOn or deltaOff) : (deltaShortOn or (deltaOff and not na(mf.mfi) and mf.mfi > 0))
+bool oscDeltaLong  = i_oscOn and i_deltaFilterOn and deltaLongBonus
+bool oscDeltaShort = i_oscOn and i_deltaFilterOn and deltaShortBonus
 
 // Nuage MFI (position MFI vs sa référence dynamique)
 float activeMfiRefLine   = mf.mfi > 0 ? mf.blT.avg() : mf.mfi < 0 ? mf.brT.avg() : na
@@ -714,7 +719,10 @@ bool exitedShort = false
 bool wasTP       = false
 bool wasBE       = false
 
-if positionActive and canAct
+// Pas de sortie sur la bougie d'entrée : l'entrée se fait à la clôture
+// (= exécutée à l'open de la bougie suivante), donc SL/TP ne s'évaluent
+// qu'à partir de la bougie suivante. Même garde que le bloc BE ci-dessus.
+if positionActive and bar_index > lastActionBar
     bool closeLong  = currentSide == 1 and (low <= stopPrice or high >= tpPrice)
     bool closeShort = currentSide == -1 and (high >= stopPrice or low <= tpPrice)
 
@@ -901,7 +909,8 @@ if barstate.islastconfirmedhistory or barstate.isrealtime
     row += 1
 
     // Deltas
-    string deltaStatus = not i_deltaFilterOn ? "OFF" : deltaLongOn ? "BULL" : deltaShortOn ? "BEAR" : "OFF (+1)"
+    string deltaOffLabel = i_deltaOffMode == "both" ? "OFF (+L+S)" : "OFF (counter)"
+    string deltaStatus = not i_deltaFilterOn ? "OFF" : deltaLongOn ? "BULL" : deltaShortOn ? "BEAR" : deltaOffLabel
     color deltaColor = not i_deltaFilterOn ? color.gray : deltaLongOn ? color.green : deltaShortOn ? color.red : color.teal
     table.cell(statusTable, 0, row, "Osc: Deltas", text_color=color.white, bgcolor=color.new(color.gray, 80), text_size=size.small)
     table.cell(statusTable, 1, row, deltaStatus,   text_color=color.white, bgcolor=color.new(deltaColor, 70), text_size=size.small)

@@ -21,10 +21,12 @@ removed deliberately. Additions relative to V1:
     price. 0.0 disables it. Implemented via the simulator's ``be_long`` /
     ``be_short`` series (BE trigger price pre-computed at the entry bar;
     simulator processes BE on subsequent bars only).
-  - Delta-OFF behaviour configurable: V2 Pine default is
-    ``delta_off_mode="counter_trend"`` (when both deltas are off, only the
-    counter-trend side gets the bonus); V1 used ``"both"`` (both sides got
-    the bonus). Set to ``"both"`` for V1-equivalent behaviour.
+  - Delta-OFF behaviour configurable: ``delta_off_mode="both"`` (default,
+    matches V2 Pine default since the toggle was added) makes both sides
+    receive the bonus when the deltas are off — this is the V1 behaviour
+    and produces the best edge in our campaigns. Set to ``"counter_trend"``
+    for the V3-aligned variant where only the counter-trend side gets the
+    bonus (long if MFI<0, short if MFI>0).
 
 To reproduce V1 with this strategy: turn Rob Reversal off on V1, then run
 V2 with these param overrides::
@@ -106,7 +108,7 @@ class MomentumCheckerV2(Strategy):
         "cloud_filter_on":        True,
         "delta_filter_on":        True,
         "cloud_zero_filter_on":   False,
-        "delta_off_mode":         "counter_trend",  # "counter_trend" | "both"
+        "delta_off_mode":         "both",  # "both" | "counter_trend" — aligné sur PineScript V2 default
         "pts_hw_sens":            1,
         "pts_hw_value":           1,
         "pts_hw_extreme":         1,

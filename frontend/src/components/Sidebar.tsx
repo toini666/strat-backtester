@@ -249,6 +249,14 @@ export function Sidebar({
                 </select>
             );
         }
+        if (key === 'delta_off_mode') {
+            return (
+                <select className="input-base" value={String(value)} onChange={(e) => handleParamChange(key, e.target.value)}>
+                    <option value="both">both</option>
+                    <option value="counter_trend">counter_trend</option>
+                </select>
+            );
+        }
         if (key === 'alligator_mode') {
             return (
                 <select className="input-base" value={String(value)} onChange={(e) => handleParamChange(key, e.target.value)}>

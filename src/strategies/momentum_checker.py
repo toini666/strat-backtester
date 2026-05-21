@@ -200,6 +200,11 @@ class MomentumChecker(Strategy):
         macd = fast_ema - slow_ema
 
         # Pass 1: compute pf[i] (the EMA-smoothed %K of MACD).
+        # Pine's ``ta.lowest`` / ``ta.highest`` SKIP NaN inside the window
+        # (Pine v6 docs). Using ``np.nanmin`` / ``np.nanmax`` here matches
+        # that: the first valid macd is enough to start producing real pff
+        # values, instead of waiting for every bar in the window to be
+        # non-NaN. Closes a ~11-bar warmup discrepancy with TradingView.
         pf_arr = np.empty(n)
         pff = 0.0
         pf = 0.0
@@ -207,10 +212,12 @@ class MomentumChecker(Strategy):
             if not np.isnan(macd[i]):
                 lo_i = max(0, i - length + 1)
                 window = macd[lo_i:i + 1]
-                if not np.any(np.isnan(window)):
-                    rng = window.max() - window.min()
+                if np.any(~np.isnan(window)):
+                    w_min = np.nanmin(window)
+                    w_max = np.nanmax(window)
+                    rng = w_max - w_min
                     if rng > 0:
-                        pff = (macd[i] - window.min()) / rng * 100.0
+                        pff = (macd[i] - w_min) / rng * 100.0
             pf = pf + 0.5 * (pff - pf)
             pf_arr[i] = pf
 

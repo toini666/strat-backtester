@@ -550,6 +550,9 @@ def simulate(
         _pre_is_auto_close = np.where(normal, normal_hit, wrap_hit)
 
     # Pre-compute blackout flags for entry logic (vectorised).
+    # Pine V2 convention (Momentum-Checkerv2.txt): when end = 23:59, the
+    # window is INCLUSIVE of the 23:59 bar (special-case `endIsDayLastMinute`).
+    # Match that behaviour so blackouts align bar-for-bar with TV.
     _pre_is_blackout = np.zeros(n, dtype=np.bool_)
     if config.blackout_windows:
         ref = _pre_ref_minutes
@@ -558,10 +561,17 @@ def simulate(
                 continue
             start = w.start_hour * 60 + w.start_minute
             end = w.end_hour * 60 + w.end_minute
+            end_is_day_last_minute = w.end_hour == 23 and w.end_minute == 59
             if start <= end:
-                _pre_is_blackout |= (ref >= start) & (ref < end)
+                if end_is_day_last_minute:
+                    _pre_is_blackout |= (ref >= start) & (ref <= end)
+                else:
+                    _pre_is_blackout |= (ref >= start) & (ref < end)
             else:
-                _pre_is_blackout |= (ref >= start) | (ref < end)
+                if end_is_day_last_minute:
+                    _pre_is_blackout |= (ref >= start) | (ref <= end)
+                else:
+                    _pre_is_blackout |= (ref >= start) | (ref < end)
 
     # Pre-index 1m data for fast sub-bar lookup via searchsorted
     _data_1m_index_values = None
