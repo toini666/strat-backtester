@@ -186,6 +186,7 @@ export function Sidebar({
         win_rate: currentMetrics.win_rate,
         total_trades: currentMetrics.total_trades,
         max_drawdown: currentMetrics.max_drawdown,
+        max_drawdown_dollars: currentMetrics.max_drawdown_dollars,
     } : undefined;
 
     const handleSavePreset = async () => {

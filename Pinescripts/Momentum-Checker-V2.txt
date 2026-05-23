@@ -21,6 +21,7 @@ i_maxCandlePct = input.float(0.3, "Taille max bougie (%)", step=0.1, minval=0.0,
 // --- Risk Management ---
 grp_risk = "GESTION DES RISQUES"
 i_slLookback  = input.int(5,   "SL: nombre de bougies (bas/haut)", minval=1, group=grp_risk, tooltip="Stop Loss basé sur le plus bas (long) ou plus haut (short) des N dernières bougies, bougie courante incluse.")
+i_slMinPct    = input.float(0.0, "SL min (% du prix)", minval=0.0, step=0.05, group=grp_risk, tooltip="Stop Loss minimum exprimé en % du prix d'entrée. Ex: 0.1% sur un prix à 20000 → SL d'au moins 20 points. Si le SL calculé via les N bougies est plus petit, il est élargi à ce minimum. 0 = désactivé.")
 i_slMaxPoints = input.int(41, "SL max (points)",                  minval=1, group=grp_risk, tooltip="Si le SL calculé dépasse ce nombre de points, il est plafonné à cette valeur. Le TP est recalculé en conséquence.")
 i_rrTP        = input.float(2.5, "Risk/Reward TP", minval=0.5, step=0.5, group=grp_risk)
 i_beAtRR      = input.float(0.0, "RR pour passage à BE", minval=0.0, step=0.25, group=grp_risk, tooltip="Quand le RR courant atteint cette valeur, le SL est déplacé au prix d'entrée (break-even). 0 = désactivé.")
@@ -38,6 +39,8 @@ i_hwFilterOn         = input.bool(true, "Filtre valeur HW", group=grp_osc, toolt
 i_hwLevel            = input.float(16.0, "Seuil HW (+/-)", group=grp_osc, minval=0.0)
 i_hwExtremeFilterOn  = input.bool(true, "Filtre extrême HW", group=grp_osc, tooltip="Long interdit si HW > +N (zone surachetée extrême). Short interdit si HW < -N (zone survendue extrême).")
 i_hwExtreme          = input.float(20.0, "   Niveau extrême HW (+/-)", group=grp_osc, minval=0.0)
+i_sigFilterOn        = input.bool(false, "Filtre valeur SIG courant", group=grp_osc, tooltip="Ignore le signal si la valeur SIG courante est comprise entre -N et +N (zone neutre du signal).")
+i_sigLevel           = input.float(10.0, "   Seuil SIG (+/-)", group=grp_osc, minval=0.0)
 i_sigExtremeFilterOn = input.bool(true, "Filtre extrême SIG courant", group=grp_osc, tooltip="Long interdit si oscSig courant > +N. Short interdit si oscSig courant < -N.")
 i_sigExtreme         = input.float(40.0, "   Niveau extrême SIG (+/-)", group=grp_osc, minval=0.0)
 i_cloudFilterOn      = input.bool(true,  "Filtre Nuage MFI", group=grp_osc, tooltip="Active le scoring du nuage MFI (position du MFI par rapport à sa référence).")
@@ -47,6 +50,7 @@ i_cloudZeroFilterOn  = input.bool(false, "Filtre Nuage < 0 / > 0", group=grp_osc
 i_ptsHWSens          = input.int(1, "Pts: Sens dernière HW", minval=0, group=grp_osc)
 i_ptsHWValue         = input.int(1, "Pts: HW dans le seuil", minval=0, group=grp_osc)
 i_ptsHWExtreme       = input.int(1, "Pts: HW Extrême", minval=0, group=grp_osc)
+i_ptsSigValue        = input.int(1, "Pts: SIG dans le seuil", minval=0, group=grp_osc)
 i_ptsSigExtreme      = input.int(1, "Pts: SIG Extrême", minval=0, group=grp_osc)
 i_ptsCloud           = input.int(1, "Pts: Nuage MFI", minval=0, group=grp_osc)
 i_ptsDelta           = input.int(1, "Pts: Deltas", minval=0, group=grp_osc)
@@ -353,6 +357,9 @@ bool oscHWValueOk = i_oscOn and i_hwFilterOn and not na(lastConfirmedHWValue) an
 bool oscHWExtremeLongOk  = i_oscOn and i_hwExtremeFilterOn and not na(lastConfirmedHWValue) and lastConfirmedHWValue <= i_hwExtreme
 bool oscHWExtremeShortOk = i_oscOn and i_hwExtremeFilterOn and not na(lastConfirmedHWValue) and lastConfirmedHWValue >= -i_hwExtreme
 
+// SIG Range (valeur SIG courante hors de la zone -N/+N)
+bool oscSigValueOk = i_oscOn and i_sigFilterOn and not na(oscSig) and math.abs(oscSig) > i_sigLevel
+
 // SIG Extrême courant (signal courant dans la zone autorisée)
 bool oscSigExtremeLongOk  = i_oscOn and i_sigExtremeFilterOn and not na(oscSig) and oscSig <= i_sigExtreme
 bool oscSigExtremeShortOk = i_oscOn and i_sigExtremeFilterOn and not na(oscSig) and oscSig >= -i_sigExtreme
@@ -577,6 +584,7 @@ int ptsLong = 0
 ptsLong += oscHWSensLong       ? i_ptsHWSens     : 0
 ptsLong += oscHWValueOk        ? i_ptsHWValue    : 0
 ptsLong += oscHWExtremeLongOk  ? i_ptsHWExtreme  : 0
+ptsLong += oscSigValueOk       ? i_ptsSigValue   : 0
 ptsLong += oscSigExtremeLongOk ? i_ptsSigExtreme : 0
 ptsLong += oscCloudLong        ? i_ptsCloud     : 0
 ptsLong += oscDeltaLong        ? i_ptsDelta     : 0
@@ -597,6 +605,7 @@ int ptsShort = 0
 ptsShort += oscHWSensShort      ? i_ptsHWSens     : 0
 ptsShort += oscHWValueOk        ? i_ptsHWValue    : 0
 ptsShort += oscHWExtremeShortOk ? i_ptsHWExtreme  : 0
+ptsShort += oscSigValueOk       ? i_ptsSigValue   : 0
 ptsShort += oscSigExtremeShortOk? i_ptsSigExtreme : 0
 ptsShort += oscCloudShort       ? i_ptsCloud     : 0
 ptsShort += oscDeltaShort       ? i_ptsDelta     : 0
@@ -613,7 +622,7 @@ ptsShort += hmaBreakShort       ? i_ptsHMABreak  : 0
 ptsShort += hmaSlowCrossShort   ? i_ptsHMASlow   : 0
 
 // Points maximum théorique
-int maxOscPts = i_oscOn ? i_ptsHWSens + (i_hwFilterOn ? i_ptsHWValue : 0) + (i_hwExtremeFilterOn ? i_ptsHWExtreme : 0) + (i_sigExtremeFilterOn ? i_ptsSigExtreme : 0) + (i_cloudFilterOn ? i_ptsCloud : 0) + (i_deltaFilterOn ? i_ptsDelta : 0) + (i_cloudZeroFilterOn ? i_ptsCloudZero : 0) : 0
+int maxOscPts = i_oscOn ? i_ptsHWSens + (i_hwFilterOn ? i_ptsHWValue : 0) + (i_hwExtremeFilterOn ? i_ptsHWExtreme : 0) + (i_sigFilterOn ? i_ptsSigValue : 0) + (i_sigExtremeFilterOn ? i_ptsSigExtreme : 0) + (i_cloudFilterOn ? i_ptsCloud : 0) + (i_deltaFilterOn ? i_ptsDelta : 0) + (i_cloudZeroFilterOn ? i_ptsCloudZero : 0) : 0
 int maxPtsLong  = maxOscPts + (i_emaOn ? i_ptsEmaBreak + i_ptsEmaAlign : 0) + (i_stOn ? i_ptsST : 0) + (i_alOn ? i_ptsAlligator + i_ptsAlliOffset + i_ptsRetestLips : 0) + (i_utOn ? i_ptsUTBot : 0) + (i_stcOn ? i_ptsSTC : 0) + (i_hmaOn ? i_ptsHMABreak + i_ptsHMASlow : 0)
 int maxPtsShort = maxPtsLong
 
@@ -626,15 +635,19 @@ bool longEntry  = ptsLong  >= i_longThreshold  and gapLongOk  and candleSizeOk a
 bool shortEntry = ptsShort >= i_shortThreshold and gapShortOk and candleSizeOk and not inBlackout
 
 // Calcul des niveaux
+// Le risk subit (dans l'ordre) : élargissement au min(% du prix) puis plafond à i_slMaxPoints.
+// Si min > max, le plafond gagne (config-error).
 float calcEntryLong  = close
 float calcStopLong   = ta.lowest(low, i_slLookback) - (i_tickBuffer * syminfo.mintick)
-float riskL          = math.min(calcEntryLong - calcStopLong, i_slMaxPoints)
+float minPctRiskL    = calcEntryLong  * (i_slMinPct / 100.0)
+float riskL          = math.min(math.max(calcEntryLong - calcStopLong, minPctRiskL), i_slMaxPoints)
 calcStopLong        := calcEntryLong - riskL
 float calcTpLong     = calcEntryLong + (riskL * i_rrTP)
 
 float calcEntryShort = close
 float calcStopShort  = ta.highest(high, i_slLookback) + (i_tickBuffer * syminfo.mintick)
-float riskS          = math.min(calcStopShort - calcEntryShort, i_slMaxPoints)
+float minPctRiskS    = calcEntryShort * (i_slMinPct / 100.0)
+float riskS          = math.min(math.max(calcStopShort - calcEntryShort, minPctRiskS), i_slMaxPoints)
 calcStopShort       := calcEntryShort + riskS
 float calcTpShort    = calcEntryShort - (riskS * i_rrTP)
 
@@ -854,7 +867,7 @@ plotshape(forceCloseTriggered and forceCloseSide == -1 ? low  : na, "Force Close
 // ============================================
 // STATUS TABLE (récapitulatif des points)
 // ============================================
-var table statusTable = table.new(position.top_right, 4, 24,
+var table statusTable = table.new(position.top_right, 4, 25,
      border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
 if barstate.islastconfirmedhistory or barstate.isrealtime
@@ -892,6 +905,15 @@ if barstate.islastconfirmedhistory or barstate.isrealtime
     table.cell(statusTable, 1, row, hwExtValStr, text_color=color.white, bgcolor=color.new(hwExtValColor, 70), text_size=size.small)
     table.cell(statusTable, 2, row, oscHWExtremeLongOk  ? str.tostring(i_ptsHWExtreme) : "0", text_color=color.white, bgcolor=color.new(oscHWExtremeLongOk  ? color.green : color.gray, 70), text_size=size.small)
     table.cell(statusTable, 3, row, oscHWExtremeShortOk ? str.tostring(i_ptsHWExtreme) : "0", text_color=color.white, bgcolor=color.new(oscHWExtremeShortOk ? color.red   : color.gray, 70), text_size=size.small)
+    row += 1
+
+    // SIG Range (valeur hors zone de range)
+    string sigValStatus = na(oscSig) ? "—" : str.tostring(oscSig, "#.#")
+    color sigValColor = oscSigValueOk ? color.green : color.red
+    table.cell(statusTable, 0, row, "Osc: SIG Range", text_color=color.white, bgcolor=color.new(color.gray, 80), text_size=size.small)
+    table.cell(statusTable, 1, row, sigValStatus,     text_color=color.white, bgcolor=color.new(sigValColor, 70), text_size=size.small)
+    table.cell(statusTable, 2, row, oscSigValueOk ? str.tostring(i_ptsSigValue) : "0", text_color=color.white, bgcolor=color.new(oscSigValueOk ? color.green : color.gray, 70), text_size=size.small)
+    table.cell(statusTable, 3, row, oscSigValueOk ? str.tostring(i_ptsSigValue) : "0", text_color=color.white, bgcolor=color.new(oscSigValueOk ? color.green : color.gray, 70), text_size=size.small)
     row += 1
 
     // SIG Extrême courant

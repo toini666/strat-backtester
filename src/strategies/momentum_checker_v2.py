@@ -27,6 +27,15 @@ removed deliberately. Additions relative to V1:
     and produces the best edge in our campaigns. Set to ``"counter_trend"``
     for the V3-aligned variant where only the counter-trend side gets the
     bonus (long if MFI<0, short if MFI>0).
+  - ``sl_min_pct``: SL minimum floor expressed as a percentage of the
+    entry price (0.1 → 0.1%). The raw lookback-based risk is widened to
+    this floor when smaller, then still capped by ``sl_max_points``. Cap
+    wins over floor when the config is inconsistent. Default 0.0
+    (disabled — V1 behaviour).
+  - ``sig_filter_on`` / ``sig_level`` / ``pts_sig_value``: bilateral SIG
+    Range filter, symmetric to the HW Range bucket but applied to the
+    *current* oscillator SIG value. When |oscSig| > sig_level both sides
+    get ``pts_sig_value`` points. Default off; identical to V1 when off.
 
 To reproduce V1 with this strategy: turn Rob Reversal off on V1, then run
 V2 with these param overrides::
@@ -88,6 +97,7 @@ class MomentumCheckerV2(Strategy):
         # --- Risk Management ---
         "sl_lookback":   5,
         "sl_max_points": 100.0,
+        "sl_min_pct":    0.0,   # 0 disables SL floor (% of entry price)
         "rr_tp":         2.5,
         "tick_buffer":   0,
         "be_at_rr":      0.0,   # 0 disables BE move
@@ -103,6 +113,8 @@ class MomentumCheckerV2(Strategy):
         "hw_level":               16.0,
         "hw_extreme_filter_on":   True,
         "hw_extreme":             20.0,
+        "sig_filter_on":          False,
+        "sig_level":              10.0,
         "sig_extreme_filter_on":  False,
         "sig_extreme":            20.0,
         "cloud_filter_on":        True,
@@ -112,6 +124,7 @@ class MomentumCheckerV2(Strategy):
         "pts_hw_sens":            1,
         "pts_hw_value":           1,
         "pts_hw_extreme":         1,
+        "pts_sig_value":          1,
         "pts_sig_extreme":        1,
         "pts_cloud":              1,
         "pts_delta":              1,
@@ -219,6 +232,7 @@ class MomentumCheckerV2(Strategy):
         max_candle_pct  = float(p["max_candle_pct"])
         sl_lookback     = int(p["sl_lookback"])
         sl_max_points   = float(p["sl_max_points"])
+        sl_min_pct      = float(p.get("sl_min_pct", 0.0))
         rr_tp           = float(p["rr_tp"])
         tick_buffer     = int(p["tick_buffer"])
         be_at_rr        = float(p["be_at_rr"])
@@ -234,6 +248,8 @@ class MomentumCheckerV2(Strategy):
         hw_level            = float(p["hw_level"])
         hw_ext_filter_on    = bool(p["hw_extreme_filter_on"])
         hw_extreme          = float(p["hw_extreme"])
+        sig_filter_on       = bool(p.get("sig_filter_on", False))
+        sig_level           = float(p.get("sig_level", 10.0))
         sig_ext_filter_on   = bool(p["sig_extreme_filter_on"])
         sig_extreme         = float(p["sig_extreme"])
         cloud_filter_on     = bool(p["cloud_filter_on"])
@@ -243,6 +259,7 @@ class MomentumCheckerV2(Strategy):
         pts_hw_sens         = int(p["pts_hw_sens"])
         pts_hw_value        = int(p["pts_hw_value"])
         pts_hw_extreme      = int(p["pts_hw_extreme"])
+        pts_sig_value       = int(p.get("pts_sig_value", 1))
         pts_sig_extreme     = int(p["pts_sig_extreme"])
         pts_cloud           = int(p["pts_cloud"])
         pts_delta           = int(p["pts_delta"])
@@ -524,6 +541,12 @@ class MomentumCheckerV2(Strategy):
                 and abs(last_confirmed_hw_val) > hw_level
             )
 
+            osc_sig_value_ok = (
+                osc_on and sig_filter_on
+                and (not np.isnan(sig_i))
+                and abs(sig_i) > sig_level
+            )
+
             osc_hw_extreme_long_ok = (
                 osc_on and hw_ext_filter_on
                 and (not np.isnan(last_confirmed_hw_val))
@@ -714,6 +737,7 @@ class MomentumCheckerV2(Strategy):
             pts_long = 0
             pts_long += pts_hw_sens     if osc_hw_sens_long       else 0
             pts_long += pts_hw_value    if hw_value_ok            else 0
+            pts_long += pts_sig_value   if osc_sig_value_ok       else 0
             pts_long += pts_hw_extreme  if osc_hw_extreme_long_ok else 0
             pts_long += pts_sig_extreme if osc_sig_extreme_long_ok else 0
             pts_long += pts_cloud       if osc_cloud_long         else 0
@@ -733,6 +757,7 @@ class MomentumCheckerV2(Strategy):
             pts_short = 0
             pts_short += pts_hw_sens     if osc_hw_sens_short       else 0
             pts_short += pts_hw_value    if hw_value_ok             else 0
+            pts_short += pts_sig_value   if osc_sig_value_ok        else 0
             pts_short += pts_hw_extreme  if osc_hw_extreme_short_ok else 0
             pts_short += pts_sig_extreme if osc_sig_extreme_short_ok else 0
             pts_short += pts_cloud       if osc_cloud_short         else 0
@@ -784,9 +809,9 @@ class MomentumCheckerV2(Strategy):
                 lowest_low = np.nanmin(np_low[lookback_start:i + 1])
                 calc_entry = c
                 raw_sl = lowest_low - tick_buffer * tick_size
-                risk = calc_entry - raw_sl
-                if risk > sl_max_points:
-                    risk = sl_max_points
+                base_risk = calc_entry - raw_sl
+                min_pct_risk = calc_entry * (sl_min_pct / 100.0)
+                risk = min(max(base_risk, min_pct_risk), sl_max_points)
                 if risk <= 0:
                     continue
                 actual_sl = round_tick(calc_entry - risk)
@@ -801,9 +826,9 @@ class MomentumCheckerV2(Strategy):
                 highest_high = np.nanmax(np_high[lookback_start:i + 1])
                 calc_entry = c
                 raw_sl = highest_high + tick_buffer * tick_size
-                risk = raw_sl - calc_entry
-                if risk > sl_max_points:
-                    risk = sl_max_points
+                base_risk = raw_sl - calc_entry
+                min_pct_risk = calc_entry * (sl_min_pct / 100.0)
+                risk = min(max(base_risk, min_pct_risk), sl_max_points)
                 if risk <= 0:
                     continue
                 actual_sl = round_tick(calc_entry + risk)

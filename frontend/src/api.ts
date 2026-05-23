@@ -171,7 +171,7 @@ export interface PresetMetrics {
     win_rate: number;       // %
     total_trades: number;
     max_drawdown: number;   // %
-    max_drawdown_dollars?: number;  // $ — true peak-to-trough; falls back to %×initial_equity if missing
+    max_drawdown_dollars?: number;  // $ — true peak-to-trough; absent on legacy presets saved before this field existed
 }
 
 /** Single-config preset (legacy format) */

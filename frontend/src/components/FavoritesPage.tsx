@@ -98,7 +98,10 @@ function fmt$(amount: number): string {
 function MetricsBadges({ metrics, initialEquity }: { metrics: PresetMetrics; initialEquity: number }) {
     const retColor = metrics.total_return >= 0 ? 'text-green-400' : 'text-red-400';
     const retUsd = metrics.total_return / 100 * initialEquity;
-    const ddUsd = metrics.max_drawdown_dollars ?? (metrics.max_drawdown / 100 * initialEquity);
+    // DD$ is only shown when the simulator-reported value is present. The legacy
+    // %×initialEquity fallback is structurally wrong since DD% and DD$ now come
+    // from independent peak/trough pairs — better to omit than to mislead.
+    const ddUsd = metrics.max_drawdown_dollars;
     return (
         <div className="flex flex-wrap gap-1 min-w-[200px]">
             <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-gray-700/60 ${retColor}`}>
@@ -108,7 +111,8 @@ function MetricsBadges({ metrics, initialEquity }: { metrics: PresetMetrics; ini
                 {metrics.total_trades} trades
             </span>
             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-gray-700/60 text-red-400">
-                DD {metrics.max_drawdown.toFixed(1)}% <span className="font-normal opacity-70">({fmt$(ddUsd)})</span>
+                DD {metrics.max_drawdown.toFixed(1)}%
+                {ddUsd !== undefined && <span className="font-normal opacity-70"> ({fmt$(ddUsd)})</span>}
             </span>
             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-gray-700/60 text-blue-300">
                 WR {metrics.win_rate.toFixed(0)}%
