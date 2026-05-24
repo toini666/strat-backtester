@@ -89,7 +89,8 @@ const MODE_OPTIONS: { value: BacktestMode; label: string; icon: React.ReactNode;
     { value: 'multi_strat', label: 'Multi-Strat', icon: <GitMerge className="w-3.5 h-3.5" />, color: 'fuchsia' },
 ];
 
-const SLOT_COLORS = ['blue', 'violet'] as const;
+const _SLOT_COLORS = ['blue', 'violet'] as const;
+void _SLOT_COLORS;
 
 export function Sidebar({
     availableData,

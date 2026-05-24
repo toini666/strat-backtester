@@ -115,6 +115,7 @@ class MomentumCheckerV2(Strategy):
         "hw_extreme":             20.0,
         "sig_filter_on":          False,
         "sig_level":              10.0,
+        "sig_range_reject":       False,  # NEW: True → reject entries when |sig| <= sig_level
         "sig_extreme_filter_on":  False,
         "sig_extreme":            20.0,
         "cloud_filter_on":        True,
@@ -250,6 +251,7 @@ class MomentumCheckerV2(Strategy):
         hw_extreme          = float(p["hw_extreme"])
         sig_filter_on       = bool(p.get("sig_filter_on", False))
         sig_level           = float(p.get("sig_level", 10.0))
+        sig_range_reject    = bool(p.get("sig_range_reject", False))
         sig_ext_filter_on   = bool(p["sig_extreme_filter_on"])
         sig_extreme         = float(p["sig_extreme"])
         cloud_filter_on     = bool(p["cloud_filter_on"])
@@ -791,17 +793,27 @@ class MomentumCheckerV2(Strategy):
             # ------------------------------------------------------------
             gap_long_ok = (pts_long - pts_short) >= min_gap
             gap_short_ok = (pts_short - pts_long) >= min_gap
+            # SIG range reject: drop entries when |sig| sits in the median
+            # band (≤ sig_level). Intent: avoid setups firing on weak
+            # oscillator readings where reversals dominate winners.
+            sig_in_range = (
+                sig_range_reject
+                and (not np.isnan(sig_i))
+                and abs(sig_i) <= sig_level
+            )
             long_entry = (
                 pts_long >= long_threshold
                 and gap_long_ok
                 and candle_ok
                 and not is_blackout[i]
+                and not sig_in_range
             )
             short_entry = (
                 pts_short >= short_threshold
                 and gap_short_ok
                 and candle_ok
                 and not is_blackout[i]
+                and not sig_in_range
             )
 
             if long_entry:

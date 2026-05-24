@@ -1,0 +1,918 @@
+//@version=6
+indicator("Gator-MTF v4", shorttitle="Gator-MTF v4", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ============================================
+// NOTES D'ARCHITECTURE — V4
+// ============================================
+// - CHART M1, TRIGGER M7 (request.security, lookahead_off).
+//
+// CONVENTION COULEUR CANAL HMA (chart + trigger) — stratégie MEAN-REVERSION :
+//     canalVert  = HMA1 < HMA2 → canal DESCENDANT → on cherche un LONG (reversal après baisse) → affiché en VERT
+//     canalRouge = HMA1 > HMA2 → canal ASCENDANT  → on cherche un SHORT (reversal après hausse) → affiché en ROUGE
+//   (la couleur reflète l'INTENTION de trade, pas la direction du canal :
+//    vert = on est en recherche de long, rouge = on est en recherche de short.
+//    Conséquence directe : un cross HMA au-dessus du SSL upper sur canal rouge
+//    (HMA ascendant) ouvre une fenêtre SHORT (fade du breakout haussier),
+//    et un cross HMA sous le SSL lower sur canal vert ouvre une fenêtre LONG.)
+//
+// - Entrées : fenêtre ouverte par cross BIDIRECTIONNEL HMA M7 vs SSL upper/lower, gaté par la couleur du canal.
+//     LONG signal  : ta.cross(HMA, SSL upper) ET canal vert (HMA descendant)   → ouvre windowLong
+//                    (cas typique : HMA redescend sous SSL upper après un sommet, début de descent)
+//     SHORT signal : ta.cross(HMA, SSL lower) ET canal rouge (HMA ascendant)   → ouvre windowShort
+//                    (cas typique : HMA remonte au-dessus de SSL lower après un creux, début de remontée)
+//   La fenêtre est exprimée en BOUGIES TRIGGER (par défaut 5 → 35 bougies M1 en chart M1).
+// - 3 conditions binaires :
+//     C1 = couleur canal HMA M7 (canalRouge = asc / canalVert = desc)
+//     C2 = couleur canal HMA M1 (idem)
+//     C3 = couleur MFI Smart Money Flow M1 (oscBull si mfiM1>0, oscBear si mfiM1<0)
+//   Pondération unique = sig hyperwave 4Kings en extrême (un seul seuil, défaut 40).
+//   Long  : sig en extrême OK si oscSig ≤ -seuil.
+//   Short : sig en extrême OK si oscSig ≥ +seuil.
+// - 4 cas activables pour LONG (sur windowLong — miroir pour SHORT sur windowShort) :
+//     A : C1 vert  + C2 vert  + C3 bull → entrée directe
+//     B : C1 vert  + C2 vert  + C3 bear → entrée directe
+//     C : C1 rouge + C2 vert  + C3 bear → marqueur orange, entrée si sig extrême OK
+//     D : C1 rouge + C2 vert  + C3 bull → marqueur orange, entrée si sig extrême OK
+//   Cas E informatif : C1 vert + C2 rouge + C3 bear → marqueur gris, aucune entrée.
+//   (SHORT miroir : windowShort, swap vert↔rouge et bull↔bear)
+// - Sorties : SL initial (lookback + min %), TP partiel à RR i_partialRr (puis SL à BE),
+//   TP final à RR i_finalRr (sortie totale), auto-close 21h Bruxelles, blackouts.
+//   Plus aucune sortie sur cross HMA opposé ni sur HW.
+// - "Un trade max par fenêtre" : suivi via le bar M1 de détection du cross M7.
+
+// ============================================
+// PARAMÈTRES INPUT
+// ============================================
+
+// --- TRIGGER TF (lecture cross HMA/SSL) ---
+grp_trigger = "TRIGGER TF (Détection cross HMA/SSL)"
+i_triggerTf = input.timeframe("7", "Trigger Timeframe", group=grp_trigger, tooltip="TF de détection des cross HMA rapide/lente vs SSL upper/lower. Défaut M7. Chart attendu en M1.")
+
+// --- HMA Ribbon (chart + trigger) ---
+grp_hma   = "HMA RIBBON"
+i_emaLen  = input.int(7,    "Longueur EMA (Source)",       group=grp_hma, minval=1)
+i_hma1Len = input.int(13,   "Longueur HMA Rapide",         group=grp_hma, minval=1)
+i_hma2Len = input.int(21,   "Longueur HMA Lente",          group=grp_hma, minval=1)
+i_ampMult = input.float(2.0, "Multiplicateur d'Amplitude", group=grp_hma, step=0.1, minval=0)
+i_entryWindowBarsTrigger = input.int(5, "Fenêtre entrée après cross (bougies TRIGGER)", group=grp_hma, minval=0, tooltip="Bougies du trigger TF pendant lesquelles les filtres M1 peuvent valider l'entrée après un cross HMA rapide ou lente vs SSL upper/lower. Converti automatiquement en bougies chart via le ratio TF (ex : 5 bougies M7 = 35 bougies M1).")
+
+// --- SSL (trigger) ---
+grp_ssl   = "SSL (trigger)"
+len_ssl   = input.int(60,    "Période SSL",                  group=grp_ssl)
+multy_ssl = input.float(0.2, "Multiplicateur Canal Keltner", group=grp_ssl)
+bColorSSL = input.color(color.new(#00c3ff, 0), "Couleur SSL Haussière", group=grp_ssl)
+sColorSSL = input.color(color.new(#ff0062, 0), "Couleur SSL Baissière", group=grp_ssl)
+
+// --- Affichage ---
+grp_display = "AFFICHAGE"
+i_showChartHmaSsl   = input.bool(true,  "Afficher HMA + SSL du chart (TF courante)", group=grp_display, tooltip="Affiche le canal HMA et le SSL calculés nativement sur la TF du chart. Par défaut activé : c'est le canal opérationnel.")
+i_showTriggerHmaSsl = input.bool(false, "Afficher HMA + SSL du trigger",             group=grp_display, tooltip="Affiche le canal HMA et le SSL de la TF trigger (par défaut M7), via request.security. Désactivé par défaut. Activable en complément pour comparer.")
+i_markerOffsetMult  = input.float(0.5,  "Offset marqueurs cas C/D et E (× hauteur moyenne)", group=grp_display, minval=0.0, step=0.1, tooltip="Multiplicateur appliqué à la hauteur moyenne des 50 dernières bougies pour décaler les marqueurs orange (cas C/D) et gris (cas E) hors de la bougie. 0 = collés à la bougie. Les cercles gris (cas E) sont placés à 2× cette valeur.")
+
+// --- 4Kings Oscillator (chart M1) ---
+grp_osc    = "4KINGS OSCILLATOR (chart M1)"
+simple int mL = input.int(5, "Hyper Wave Length", group=grp_osc, minval=1, maxval=21)
+simple int sL = input.int(3, "Signal Length",     group=grp_osc, minval=2, maxval=10)
+
+// --- Smart Money Flow (chart M1) ---
+// C'est le MFI lissé qui décide bull/bear pour la condition C3, PAS le signal hyperwave 4Kings.
+// (oscSigM1 = momentum 4Kings → sert uniquement au filtre Sig Extrême ci-dessous.)
+grp_mfi  = "SMART MONEY FLOW (M1)"
+simple int i_mfL = input.int(35, "Money Flow Length", group=grp_mfi, minval=10, maxval=55)
+simple int i_mfS = input.int(6,  "Smooth",            group=grp_mfi, minval=2,  maxval=10)
+
+// --- Sig extrême ---
+grp_sig = "SIG EXTRÊME (pondération cas C/D)"
+i_sigExtremeThreshold = input.float(20.0, "Seuil sig extrême", group=grp_sig, minval=0.0, step=1.0, tooltip="Seuil unique en valeur absolue. Entrée LONG validée (cas C/D) si oscSig ≤ -seuil. Entrée SHORT validée si oscSig ≥ +seuil.")
+
+// --- Cas d'entrée activables ---
+grp_cases = "CAS D'ENTRÉE"
+i_caseA_On = input.bool(true, "Cas A : C1 ok + C2 ok + C3 ok (entrée directe)",          group=grp_cases)
+i_caseB_On = input.bool(true, "Cas B : C1 ok + C2 ok + C3 nok (entrée directe)",         group=grp_cases)
+i_caseC_On = input.bool(true, "Cas C : C1 nok + C2 ok + C3 nok (attente sig extrême)",   group=grp_cases)
+i_caseD_On = input.bool(true, "Cas D : C1 nok + C2 ok + C3 ok (attente sig extrême)",    group=grp_cases)
+
+// --- Gestion des risques ---
+grp_risk     = "GESTION DES RISQUES"
+i_slLookback = input.int(1,    "SL : lookback high/low (bougies chart)",  group=grp_risk, minval=1, tooltip="Bougies chart pour le high/low de référence du SL.")
+i_slMinPct   = input.float(0.15, "SL minimum (% du prix)",                group=grp_risk, minval=0.0, step=0.01, tooltip="Distance minimale du SL en %. Si le high/low est plus proche, on force le SL à ce % minimum.")
+i_tickBuffer = input.int(2,     "Buffer SL (en ticks)",                   group=grp_risk, minval=0)
+i_cooldownBars = input.int(7,   "Bougies d'attente post-close (chart)",   group=grp_risk, minval=0)
+i_hwPartialPct = input.float(0.0, "TP partiel %",                         group=grp_risk, minval=0.0, maxval=100.0, tooltip="Quantité allégée au TP partiel (info pour le bot). 0 = pas de TP partiel.")
+i_partialRr  = input.float(0.0, "RR TP partiel",                          group=grp_risk, minval=0.0, step=0.1, tooltip="TP partiel à entry ± risk × RR. SL passe à BE.")
+i_finalRr    = input.float(1.0, "RR TP final (sortie totale)",            group=grp_risk, minval=0.1, step=0.1, tooltip="TP final à entry ± risk × RR. Sortie totale de la position. Doit être > RR TP partiel pour un comportement cohérent.")
+i_oneTradePerWindow = input.bool(true, "Un trade max par fenêtre (par cross trigger)", group=grp_risk, tooltip="Une fenêtre HMA/SSL (cross trigger) ne déclenche qu'un trade.")
+
+// --- Auto-Close ---
+grp_time      = "Auto-Close (Bruxelles)"
+i_autoCloseOn = input.bool(true, "Activer", group=grp_time, inline="autoclose")
+i_autoCloseH  = input.int(22, "Heure",   minval=0, maxval=23, group=grp_time, inline="autoclose")
+i_autoCloseM  = input.int(0,  "Minute",  minval=0, maxval=59, group=grp_time, inline="autoclose")
+
+// --- Blackouts ---
+grp_bo = "Blackout (Bruxelles)"
+i_bo1On     = input.bool(false, "Blackout 1 actif", group=grp_bo, inline="bo1")
+i_bo1StartH = input.int(8,  "Début H", minval=0, maxval=23, group=grp_bo, inline="bo1")
+i_bo1StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo1")
+i_bo1EndH   = input.int(8,  "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo1e")
+i_bo1EndM   = input.int(5,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo1e")
+
+i_bo2On     = input.bool(false, "Blackout 2 actif", group=grp_bo, inline="bo2")
+i_bo2StartH = input.int(11, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo2")
+i_bo2StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo2")
+i_bo2EndH   = input.int(13, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo2e")
+i_bo2EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo2e")
+
+i_bo3On     = input.bool(false, "Blackout 3 actif", group=grp_bo, inline="bo3")
+i_bo3StartH = input.int(14, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo3")
+i_bo3StartM = input.int(30, "M",       minval=0, maxval=59, group=grp_bo, inline="bo3")
+i_bo3EndH   = input.int(14, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo3e")
+i_bo3EndM   = input.int(35, "M",       minval=0, maxval=59, group=grp_bo, inline="bo3e")
+
+i_bo4On     = input.bool(false, "Blackout 4 actif", group=grp_bo, inline="bo4")
+i_bo4StartH = input.int(16, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo4")
+i_bo4StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo4")
+i_bo4EndH   = input.int(20, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo4e")
+i_bo4EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo4e")
+
+i_bo5On     = input.bool(false, "Blackout 5 actif", group=grp_bo, inline="bo5")
+i_bo5StartH = input.int(21, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo5")
+i_bo5StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo5")
+i_bo5EndH   = input.int(23, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo5e")
+i_bo5EndM   = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo5e")
+
+i_bo6On     = input.bool(true,  "Blackout 6 actif", group=grp_bo, inline="bo6")
+i_bo6StartH = input.int(22, "Début H", minval=0, maxval=23, group=grp_bo, inline="bo6")
+i_bo6StartM = input.int(0,  "M",       minval=0, maxval=59, group=grp_bo, inline="bo6")
+i_bo6EndH   = input.int(23, "Fin H",   minval=0, maxval=23, group=grp_bo, inline="bo6e")
+i_bo6EndM   = input.int(59, "M",       minval=0, maxval=59, group=grp_bo, inline="bo6e")
+
+// --- Tableau de statut ---
+grp_tbl      = "TABLEAU"
+simple string i_tblPos  = input.string("top_right", "Position", group=grp_tbl,
+     options=["top_right","top_left","bottom_right","bottom_left",
+              "top_center","bottom_center","middle_right","middle_left","middle_center"])
+simple string i_tblSize = input.string("small", "Taille texte", group=grp_tbl,
+     options=["tiny","small","normal","large","huge"])
+
+// --- Configuration ---
+grp_main    = "CONFIGURATION"
+i_stratName = input.string("GatorMTFv4", "Nom de la stratégie", group=grp_main)
+
+// ============================================
+// VARIABLES D'ÉTAT
+// ============================================
+
+// État de position
+var bool  positionActive    = false
+var int   currentSide       = 0
+var float entryPrice        = na
+var float stopPrice         = na
+var float initialStopPrice  = na
+var float tpPartialPrice    = na
+var float tpFinalPrice      = na
+var int   lastActionBar     = -1
+var int   lastCloseBarIndex = -9999
+var bool  tpPartialHit      = false
+var string firedCaseLabel   = na
+
+// Suivi des cross HMA trigger (déclencheurs des fenêtres) — bar_index chart de la détection
+// Convention mean-reversion : LONG signal = cross HMA vs SSL upper PENDANT canal vert
+//                             SHORT signal = cross HMA vs SSL lower PENDANT canal rouge
+var int  lastFastLongCrossBar  = na
+var int  lastFastShortCrossBar = na
+var int  lastSlowLongCrossBar  = na
+var int  lastSlowShortCrossBar = na
+var int  lastFastTradedBar     = na
+var int  lastSlowTradedBar     = na
+
+// Lignes visuelles
+var line lineEntry     = na
+var line lineStop      = na
+var line lineTpPartial = na
+var line lineTpFinal   = na
+
+// ============================================
+// FONCTIONS UTILITAIRES
+// ============================================
+
+roundToTick(float price) =>
+    math.round(price / syminfo.mintick) * syminfo.mintick
+
+formatTimeframeLabel(string rawTf) =>
+    float tfNum = str.tonumber(rawTf)
+    string result = if not na(tfNum)
+        int tfMinutes = int(tfNum)
+        tfMinutes >= 60 and tfMinutes % 60 == 0 ? "H" + str.tostring(tfMinutes / 60) : "M" + str.tostring(tfMinutes)
+    else if str.endswith(rawTf, "S")
+        "S" + str.substring(rawTf, 0, str.length(rawTf) - 1)
+    else if rawTf == "D"
+        "D1"
+    else if str.endswith(rawTf, "D")
+        "D" + str.substring(rawTf, 0, str.length(rawTf) - 1)
+    else if rawTf == "W"
+        "W1"
+    else if str.endswith(rawTf, "W")
+        "W" + str.substring(rawTf, 0, str.length(rawTf) - 1)
+    else if rawTf == "M"
+        "MO1"
+    else if str.endswith(rawTf, "M")
+        "MO" + str.substring(rawTf, 0, str.length(rawTf) - 1)
+    else
+        rawTf
+    result
+
+getTimeframe() => formatTimeframeLabel(timeframe.period)
+
+isInTimeSlot(int hh, int mm, int startH, int startM, int endH, int endM) =>
+    int curMin   = hh * 60 + mm
+    int startMin = startH * 60 + startM
+    int endMin   = endH * 60 + endM
+    bool endIsDayLastMinute = endH == 23 and endM == 59
+    if startMin <= endMin
+        curMin >= startMin and (endIsDayLastMinute ? curMin <= endMin : curMin < endMin)
+    else
+        curMin >= startMin or (endIsDayLastMinute ? curMin <= endMin : curMin < endMin)
+
+isBlackoutWindow() =>
+    int hh = hour(time_close, "Europe/Brussels")
+    int mm = minute(time_close, "Europe/Brussels")
+    bool b1 = i_bo1On and isInTimeSlot(hh, mm, i_bo1StartH, i_bo1StartM, i_bo1EndH, i_bo1EndM)
+    bool b2 = i_bo2On and isInTimeSlot(hh, mm, i_bo2StartH, i_bo2StartM, i_bo2EndH, i_bo2EndM)
+    bool b3 = i_bo3On and isInTimeSlot(hh, mm, i_bo3StartH, i_bo3StartM, i_bo3EndH, i_bo3EndM)
+    bool b4 = i_bo4On and isInTimeSlot(hh, mm, i_bo4StartH, i_bo4StartM, i_bo4EndH, i_bo4EndM)
+    bool b5 = i_bo5On and isInTimeSlot(hh, mm, i_bo5StartH, i_bo5StartM, i_bo5EndH, i_bo5EndM)
+    bool b6 = i_bo6On and isInTimeSlot(hh, mm, i_bo6StartH, i_bo6StartM, i_bo6EndH, i_bo6EndM)
+    b1 or b2 or b3 or b4 or b5 or b6
+
+isAutoCloseBar() =>
+    int openMin   = hour(time, "Europe/Brussels") * 60 + minute(time, "Europe/Brussels")
+    int closeMin  = hour(time_close, "Europe/Brussels") * 60 + minute(time_close, "Europe/Brussels")
+    int targetMin = i_autoCloseH * 60 + i_autoCloseM
+    closeMin >= openMin ? (targetMin >= openMin and targetMin <= closeMin) : (targetMin >= openMin or targetMin <= closeMin)
+
+bool inBlackout   = isBlackoutWindow()
+bool autoCloseBar = isAutoCloseBar()
+
+// Conversion fenêtre trigger → bougies chart
+int chartSeconds   = timeframe.in_seconds(timeframe.period)
+int triggerSeconds = timeframe.in_seconds(i_triggerTf)
+float tfRatio      = chartSeconds > 0 ? math.max(1.0, triggerSeconds / chartSeconds) : 1.0
+int windowBarsChart = math.max(1, math.round(i_entryWindowBarsTrigger * tfRatio))
+
+// ============================================
+// CHART M1 — HMA + Oscillateur 4Kings (natif)
+// ============================================
+
+float srcEmaM1 = ta.ema(close, i_emaLen)
+float rawH1M1  = ta.hma(srcEmaM1, i_hma1Len)
+float rawH2M1  = ta.hma(srcEmaM1, i_hma2Len)
+float hma1M1   = srcEmaM1 + (rawH1M1 - srcEmaM1) * i_ampMult
+float hma2M1   = srcEmaM1 + (rawH2M1 - srcEmaM1) * i_ampMult
+
+// SSL M1 (natif, affichage uniquement — la logique de cross reste sur le trigger TF)
+float BBMCm1    = ta.wma(2 * ta.wma(close, len_ssl / 2) - ta.wma(close, len_ssl), math.round(math.sqrt(len_ssl)))
+float rangemaM1 = ta.ema(ta.tr, len_ssl)
+float sslBaseM1 = BBMCm1
+float sslUpM1   = BBMCm1 + rangemaM1 * multy_ssl
+float sslLoM1   = BBMCm1 - rangemaM1 * multy_ssl
+
+// Oscillateur 4Kings (signal hyperwave) — sert UNIQUEMENT au filtre Sig Extrême.
+float hiM1     = ta.highest(mL)
+float loM1     = ta.lowest(mL)
+float avM1     = ta.sma(hl2, mL)
+float rngM1    = hiM1 - loM1
+float rawOscM1 = rngM1 != 0 ? (close - math.avg(hiM1, loM1, avM1)) / rngM1 * 100 : 0.0
+float oscSigM1 = ta.ema(ta.linreg(rawOscM1, mL, 0), sL)
+
+// Smart Money Flow lissé (MFI - 50) — décide bull/bear pour C3.
+float mfiM1 = ta.sma(ta.mfi(hl2, i_mfL) - 50, i_mfS)
+
+// Couleur canal HMA M1 — convention mean-reversion (cf. notes d'architecture)
+bool canalRougeM1 = hma1M1 > hma2M1   // canal ascendant → recherche SHORT → ROUGE
+bool canalVertM1  = hma1M1 < hma2M1   // canal descendant → recherche LONG → VERT
+
+// Couleur oscillateur M1 — basée sur le MFI Smart Money Flow (mfiM1 > 0 = pression acheteuse).
+bool oscBullishM1 = mfiM1 > 0
+bool oscBearishM1 = mfiM1 < 0
+
+// Sig en extrême (un seul seuil) — sur le hyperwave 4Kings.
+bool sigExtremeBearM1 = oscSigM1 <= -i_sigExtremeThreshold
+bool sigExtremeBullM1 = oscSigM1 >=  i_sigExtremeThreshold
+
+// ============================================
+// TRIGGER TF — HMA + SSL + détection cross (via request.security)
+// ============================================
+
+triggerCalc() =>
+    float srcEma = ta.ema(close, i_emaLen)
+    float rawH1  = ta.hma(srcEma, i_hma1Len)
+    float rawH2  = ta.hma(srcEma, i_hma2Len)
+    float h1     = srcEma + (rawH1 - srcEma) * i_ampMult
+    float h2     = srcEma + (rawH2 - srcEma) * i_ampMult
+
+    float BBMC    = ta.wma(2 * ta.wma(close, len_ssl / 2) - ta.wma(close, len_ssl), math.round(math.sqrt(len_ssl)))
+    float rangema = ta.ema(ta.tr, len_ssl)
+    float upperk  = BBMC + rangema * multy_ssl
+    float lowerk  = BBMC - rangema * multy_ssl
+
+    // Couleur canal au bar courant (utilisée pour gater les signaux + remontée vers le main scope).
+    bool canalRouge_t = h1 > h2   // ascendant
+    bool canalVert_t  = h1 < h2   // descendant
+
+    // Signaux de cross — bidirectionnels (ta.cross), gatés par la couleur du canal :
+    //   LONG signal  = HMA croise (haut ou bas) le SSL upper PENDANT canal vert (HMA descendant)
+    //                  → typique : HMA repasse sous SSL upper après un sommet, début de descent.
+    //   SHORT signal = HMA croise (haut ou bas) le SSL lower PENDANT canal rouge (HMA ascendant)
+    //                  → typique : HMA repasse au-dessus de SSL lower après un creux, début de remontée.
+    bool fastLongSig  = ta.cross(h1, upperk) and canalVert_t
+    bool fastShortSig = ta.cross(h1, lowerk) and canalRouge_t
+    bool slowLongSig  = ta.cross(h2, upperk) and canalVert_t
+    bool slowShortSig = ta.cross(h2, lowerk) and canalRouge_t
+
+    [h1, h2, BBMC, upperk, lowerk, fastLongSig, fastShortSig, slowLongSig, slowShortSig, canalRouge_t, time]
+
+[hma1T, hma2T, sslBaseT, sslUpT, sslLoT, fastLongSig_t, fastShortSig_t, slowLongSig_t, slowShortSig_t, canalRougeRaw, timeT] = request.security(syminfo.tickerid, i_triggerTf, triggerCalc(), barmerge.gaps_off, barmerge.lookahead_off)
+
+// Détection bougie trigger nouvellement clôturée
+bool newTriggerBar = not na(timeT) and (na(timeT[1]) or timeT != timeT[1])
+
+// Edge-trigger côté chart : on fire UNE FOIS par signal trigger (au passage à un nouveau bar trigger)
+bool fastCrossLong  = newTriggerBar and (fastLongSig_t  == true)
+bool fastCrossShort = newTriggerBar and (fastShortSig_t == true)
+bool slowCrossLong  = newTriggerBar and (slowLongSig_t  == true)
+bool slowCrossShort = newTriggerBar and (slowShortSig_t == true)
+
+// Couleur canal HMA trigger — convention mean-reversion (cf. notes d'architecture)
+bool canalRougeT = canalRougeRaw == true   // canal ascendant → recherche SHORT → ROUGE
+bool canalVertT  = canalRougeRaw == false  // canal descendant → recherche LONG → VERT
+
+if fastCrossLong
+    lastFastLongCrossBar := bar_index
+if fastCrossShort
+    lastFastShortCrossBar := bar_index
+if slowCrossLong
+    lastSlowLongCrossBar := bar_index
+if slowCrossShort
+    lastSlowShortCrossBar := bar_index
+
+// ============================================
+// FENÊTRES D'ENTRÉE
+// ============================================
+
+bool windowFastLong  = not na(lastFastLongCrossBar)  and (bar_index - lastFastLongCrossBar)  <= windowBarsChart
+bool windowFastShort = not na(lastFastShortCrossBar) and (bar_index - lastFastShortCrossBar) <= windowBarsChart
+bool windowSlowLong  = not na(lastSlowLongCrossBar)  and (bar_index - lastSlowLongCrossBar)  <= windowBarsChart
+bool windowSlowShort = not na(lastSlowShortCrossBar) and (bar_index - lastSlowShortCrossBar) <= windowBarsChart
+
+bool windowLong  = windowFastLong  or windowSlowLong
+bool windowShort = windowFastShort or windowSlowShort
+
+// ============================================
+// CONDITIONS D'ENTRÉE — CAS A/B/C/D + CAS E (info)
+// ============================================
+// Pour un long : "ok" = bull. Pour un short : "ok" = bear (miroir).
+
+// --- Setups armés (sans la condition sig extrême pour C/D) ---
+// LONG (mean-reversion : windowLong ouvert par cross HMA/SSL upper PENDANT canal vert)
+bool armedA_Long = windowLong and canalVertT  and canalVertM1  and oscBullishM1
+bool armedB_Long = windowLong and canalVertT  and canalVertM1  and oscBearishM1
+bool armedC_Long = windowLong and canalRougeT and canalVertM1  and oscBearishM1
+bool armedD_Long = windowLong and canalRougeT and canalVertM1  and oscBullishM1
+bool armedE_Long = windowLong and canalVertT  and canalRougeM1 and oscBearishM1
+// SHORT (miroir : windowShort ouvert par cross HMA/SSL lower PENDANT canal rouge)
+bool armedA_Short = windowShort and canalRougeT and canalRougeM1 and oscBearishM1
+bool armedB_Short = windowShort and canalRougeT and canalRougeM1 and oscBullishM1
+bool armedC_Short = windowShort and canalVertT  and canalRougeM1 and oscBullishM1
+bool armedD_Short = windowShort and canalVertT  and canalRougeM1 and oscBearishM1
+bool armedE_Short = windowShort and canalRougeT and canalVertM1  and oscBullishM1
+
+// --- Entrées effectives ---
+bool entryA_Long = i_caseA_On and armedA_Long
+bool entryB_Long = i_caseB_On and armedB_Long
+bool entryC_Long = i_caseC_On and armedC_Long and sigExtremeBearM1
+bool entryD_Long = i_caseD_On and armedD_Long and sigExtremeBearM1
+bool entryA_Short = i_caseA_On and armedA_Short
+bool entryB_Short = i_caseB_On and armedB_Short
+bool entryC_Short = i_caseC_On and armedC_Short and sigExtremeBullM1
+bool entryD_Short = i_caseD_On and armedD_Short and sigExtremeBullM1
+
+bool longSignalRaw  = entryA_Long  or entryB_Long  or entryC_Long  or entryD_Long
+bool shortSignalRaw = entryA_Short or entryB_Short or entryC_Short or entryD_Short
+
+// Label du cas déclenché (priorité A>B>C>D)
+string firedCaseRaw = entryA_Long or entryA_Short ? "A" : entryB_Long or entryB_Short ? "B" : entryC_Long or entryC_Short ? "C" : entryD_Long or entryD_Short ? "D" : ""
+
+// Famille du cross (Fast prioritaire si les deux fenêtres sont actives au même bar — la grille est identique)
+// Mean-reversion : LONG fire sur windowLong, SHORT sur windowShort → on bind l'identification à la bonne fenêtre.
+bool useFastForLong  = windowFastLong
+bool useFastForShort = windowFastShort
+
+// "Un trade par fenêtre" : on bloque si on a déjà tradé la même fenêtre (cross trigger)
+bool fastWindowOk = not i_oneTradePerWindow or na(lastFastTradedBar) or
+   (lastFastLongCrossBar != lastFastTradedBar and lastFastShortCrossBar != lastFastTradedBar)
+bool slowWindowOk = not i_oneTradePerWindow or na(lastSlowTradedBar) or
+   (lastSlowLongCrossBar != lastSlowTradedBar and lastSlowShortCrossBar != lastSlowTradedBar)
+
+bool longWindowOk  = useFastForLong  ? fastWindowOk : slowWindowOk
+bool shortWindowOk = useFastForShort ? fastWindowOk : slowWindowOk
+
+bool longSignal  = longSignalRaw  and longWindowOk
+bool shortSignal = shortSignalRaw and shortWindowOk
+
+// ============================================
+// CALCUL SL & TPs (hybride high/low + min %)
+// ============================================
+
+float slBuffer = i_tickBuffer * syminfo.mintick
+
+float rawSlLongBase  = ta.lowest(low,  i_slLookback) - slBuffer
+float rawSlShortBase = ta.highest(high, i_slLookback) + slBuffer
+
+float minSlDist       = close * (i_slMinPct / 100.0)
+float minSlLongFloor  = close - minSlDist
+float minSlShortFloor = close + minSlDist
+
+float calcStopLong   = rawSlLongBase  > minSlLongFloor  ? minSlLongFloor  : rawSlLongBase
+float calcStopShort  = rawSlShortBase < minSlShortFloor ? minSlShortFloor : rawSlShortBase
+
+float calcEntryLong  = close
+float calcEntryShort = close
+
+bool slLongOk  = calcStopLong  < close
+bool slShortOk = calcStopShort > close
+
+bool cooldownOk = (bar_index - lastCloseBarIndex) >= i_cooldownBars
+
+bool finalLongEntry  = longSignal  and slLongOk  and cooldownOk
+bool finalShortEntry = shortSignal and slShortOk and cooldownOk
+
+// ============================================
+// ALERTES JSON
+// ============================================
+
+triggerAlert(string alertType, string alertSide, float alertEntry, float alertStop, float alertTp) =>
+    string alertTf = getTimeframe()
+    string json = '{\n'
+    json += '  "ticker": "' + syminfo.ticker + '",\n'
+    json += '  "type": "' + alertType + '",\n'
+    json += '  "side": "' + alertSide + '",\n'
+    if alertType == "PARTIAL" or alertType == "CLOSE"
+        if not na(alertEntry)
+            json += '  "entry": ' + str.tostring(alertEntry) + ',\n'
+    else if alertType == "SIGNAL"
+        if not na(alertEntry)
+            json += '  "entry": ' + str.tostring(alertEntry) + ',\n'
+        if not na(alertStop)
+            json += '  "stop": ' + str.tostring(alertStop) + ',\n'
+        if not na(alertTp)
+            json += '  "tp": ' + str.tostring(alertTp) + ',\n'
+    json += '  "strat": "' + i_stratName + '-' + syminfo.ticker + '-' + alertTf + '",\n'
+    json += '  "timeframe": "' + alertTf + '"\n'
+    json += '}'
+    alert(json, alert.freq_once_per_bar_close)
+
+// ============================================
+// GESTION DES POSITIONS
+// ============================================
+
+bool canAct = bar_index > lastActionBar
+
+// --- 0. AUTO-CLOSE FORCÉE ---
+bool forceCloseTriggered = false
+int  forceCloseSide      = 0
+
+if positionActive and i_autoCloseOn and autoCloseBar and canAct
+    forceCloseTriggered := true
+    forceCloseSide      := currentSide
+    positionActive      := false
+    currentSide         := 0
+    lastActionBar       := bar_index
+    lastCloseBarIndex   := bar_index
+    tpPartialHit        := false
+    firedCaseLabel      := na
+    canAct              := false
+    if not na(lineEntry)
+        line.delete(lineEntry)
+        lineEntry := na
+    if not na(lineStop)
+        line.delete(lineStop)
+        lineStop := na
+    if not na(lineTpPartial)
+        line.delete(lineTpPartial)
+        lineTpPartial := na
+    if not na(lineTpFinal)
+        line.delete(lineTpFinal)
+        lineTpFinal := na
+
+// --- 1. ENTRÉE LONGUE ---
+if not positionActive and finalLongEntry and canAct and not inBlackout
+    positionActive   := true
+    currentSide      := 1
+    entryPrice       := roundToTick(calcEntryLong)
+    stopPrice        := roundToTick(calcStopLong)
+    initialStopPrice := stopPrice
+    float riskLong   = entryPrice - initialStopPrice
+    tpPartialPrice   := i_partialRr > 0 and i_hwPartialPct > 0 ? roundToTick(entryPrice + riskLong * i_partialRr) : na
+    tpFinalPrice     := roundToTick(entryPrice + riskLong * i_finalRr)
+    lastActionBar    := bar_index
+    tpPartialHit     := false
+    firedCaseLabel   := firedCaseRaw
+    if useFastForLong
+        lastFastTradedBar := lastFastLongCrossBar
+    else
+        lastSlowTradedBar := lastSlowLongCrossBar
+    lineEntry     := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue, style=line.style_dotted, width=1)
+    lineStop      := line.new(bar_index, stopPrice,  bar_index + 1, stopPrice,  color=color.red,  style=line.style_dotted, width=1)
+    if not na(tpPartialPrice)
+        lineTpPartial := line.new(bar_index, tpPartialPrice, bar_index + 1, tpPartialPrice, color=color.green, style=line.style_dotted, width=1)
+    lineTpFinal   := line.new(bar_index, tpFinalPrice, bar_index + 1, tpFinalPrice, color=color.green, style=line.style_dotted, width=1)
+    triggerAlert("SIGNAL", "BUY", entryPrice, stopPrice, tpFinalPrice)
+
+// --- 2. ENTRÉE COURTE ---
+if not positionActive and finalShortEntry and canAct and not inBlackout
+    positionActive   := true
+    currentSide      := -1
+    entryPrice       := roundToTick(calcEntryShort)
+    stopPrice        := roundToTick(calcStopShort)
+    initialStopPrice := stopPrice
+    float riskShort  = initialStopPrice - entryPrice
+    tpPartialPrice   := i_partialRr > 0 and i_hwPartialPct > 0 ? roundToTick(entryPrice - riskShort * i_partialRr) : na
+    tpFinalPrice     := roundToTick(entryPrice - riskShort * i_finalRr)
+    lastActionBar    := bar_index
+    tpPartialHit     := false
+    firedCaseLabel   := firedCaseRaw
+    if useFastForShort
+        lastFastTradedBar := lastFastShortCrossBar
+    else
+        lastSlowTradedBar := lastSlowShortCrossBar
+    lineEntry     := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, color=color.blue, style=line.style_dotted, width=1)
+    lineStop      := line.new(bar_index, stopPrice,  bar_index + 1, stopPrice,  color=color.red,  style=line.style_dotted, width=1)
+    if not na(tpPartialPrice)
+        lineTpPartial := line.new(bar_index, tpPartialPrice, bar_index + 1, tpPartialPrice, color=color.green, style=line.style_dotted, width=1)
+    lineTpFinal   := line.new(bar_index, tpFinalPrice, bar_index + 1, tpFinalPrice, color=color.green, style=line.style_dotted, width=1)
+    triggerAlert("SIGNAL", "SELL", entryPrice, stopPrice, tpFinalPrice)
+
+// --- 3. SORTIES (SL, TP partiel, BE, TP final) ---
+bool hitStopLoss   = false
+bool hitBreakeven  = false
+bool hitFinalExit  = false
+bool hitTpPartial  = false
+
+if positionActive and canAct and bar_index > lastActionBar
+    if currentSide == 1  // LONG
+        // SL initial (pré-partiel) ou BE (post-partiel)
+        if low <= stopPrice and not tpPartialHit[1]
+            hitStopLoss := true
+        if tpPartialHit and low <= stopPrice and not hitStopLoss
+            hitBreakeven := true
+
+        // TP final (sortie totale) — priorité sur le TP partiel pour gérer les configs RR_final ≤ RR_partial
+        if not na(tpFinalPrice) and high >= tpFinalPrice and not hitStopLoss and not hitBreakeven
+            hitFinalExit := true
+
+        // TP partiel (uniquement si TP final pas touché)
+        if not tpPartialHit and not na(tpPartialPrice) and high >= tpPartialPrice and not hitStopLoss and not hitFinalExit
+            hitTpPartial := true
+            tpPartialHit := true
+            stopPrice    := entryPrice
+            if not na(lineStop)
+                line.delete(lineStop)
+            lineStop := line.new(bar_index, stopPrice, bar_index + 1, stopPrice, color=color.orange, style=line.style_dotted, width=1)
+            if not na(lineTpPartial)
+                line.delete(lineTpPartial)
+                lineTpPartial := na
+            triggerAlert("PARTIAL", "SELL", roundToTick(tpPartialPrice), na, na)
+
+    else if currentSide == -1  // SHORT
+        if high >= stopPrice and not tpPartialHit[1]
+            hitStopLoss := true
+        if tpPartialHit and high >= stopPrice and not hitStopLoss
+            hitBreakeven := true
+
+        if not na(tpFinalPrice) and low <= tpFinalPrice and not hitStopLoss and not hitBreakeven
+            hitFinalExit := true
+
+        if not tpPartialHit and not na(tpPartialPrice) and low <= tpPartialPrice and not hitStopLoss and not hitFinalExit
+            hitTpPartial := true
+            tpPartialHit := true
+            stopPrice    := entryPrice
+            if not na(lineStop)
+                line.delete(lineStop)
+            lineStop := line.new(bar_index, stopPrice, bar_index + 1, stopPrice, color=color.orange, style=line.style_dotted, width=1)
+            if not na(lineTpPartial)
+                line.delete(lineTpPartial)
+                lineTpPartial := na
+            triggerAlert("PARTIAL", "BUY", roundToTick(tpPartialPrice), na, na)
+
+    bool closePosition = hitStopLoss or hitBreakeven or hitFinalExit
+
+    if closePosition
+        string closeSide = currentSide == 1 ? "SELL" : "BUY"
+        float  exitPrice = hitStopLoss ? stopPrice : (hitBreakeven ? entryPrice : tpFinalPrice)
+        triggerAlert("CLOSE", closeSide, roundToTick(exitPrice), na, na)
+
+        positionActive    := false
+        currentSide       := 0
+        firedCaseLabel    := na
+        lastActionBar     := bar_index
+        lastCloseBarIndex := bar_index
+        tpPartialHit      := false
+        if not na(lineEntry)
+            line.delete(lineEntry)
+            lineEntry := na
+        if not na(lineStop)
+            line.delete(lineStop)
+            lineStop := na
+        if not na(lineTpPartial)
+            line.delete(lineTpPartial)
+            lineTpPartial := na
+        if not na(lineTpFinal)
+            line.delete(lineTpFinal)
+            lineTpFinal := na
+    else
+        if not na(lineEntry)
+            line.set_xy1(lineEntry, bar_index, entryPrice)
+            line.set_xy2(lineEntry, bar_index + 1, entryPrice)
+        if not na(lineStop)
+            line.set_xy1(lineStop, bar_index, stopPrice)
+            line.set_xy2(lineStop, bar_index + 1, stopPrice)
+        if not na(lineTpPartial)
+            line.set_xy1(lineTpPartial, bar_index, tpPartialPrice)
+            line.set_xy2(lineTpPartial, bar_index + 1, tpPartialPrice)
+        if not na(lineTpFinal)
+            line.set_xy1(lineTpFinal, bar_index, tpFinalPrice)
+            line.set_xy2(lineTpFinal, bar_index + 1, tpFinalPrice)
+
+// ============================================
+// VISUALISATION
+// ============================================
+
+// Canal HMA chart (natif, TF courante) — convention mean-reversion : canal ascendant = ROUGE (recherche SHORT), canal descendant = VERT (recherche LONG)
+color hmaChartColor = canalRougeM1 ? color.new(color.red, 0) : color.new(color.green, 0)
+float plotHma1Chart = i_showChartHmaSsl ? hma1M1 : na
+float plotHma2Chart = i_showChartHmaSsl ? hma2M1 : na
+p_hma1_chart = plot(plotHma1Chart, "HMA Rapide Chart", color=hmaChartColor, linewidth=1)
+p_hma2_chart = plot(plotHma2Chart, "HMA Lente Chart",  color=hmaChartColor, linewidth=1)
+fill(p_hma1_chart, p_hma2_chart, color=i_showChartHmaSsl ? (canalRougeM1 ? color.new(color.red, 75) : color.new(color.green, 75)) : na, title="Canal HMA Chart")
+
+// Canal HMA trigger (via request.security) — affichage optionnel
+color hmaTriggerColor = canalRougeT ? color.new(color.red, 0) : color.new(color.green, 0)
+float plotHma1Trigger = i_showTriggerHmaSsl ? hma1T : na
+float plotHma2Trigger = i_showTriggerHmaSsl ? hma2T : na
+p_hma1_trigger = plot(plotHma1Trigger, "HMA Rapide Trigger", color=hmaTriggerColor, linewidth=2)
+p_hma2_trigger = plot(plotHma2Trigger, "HMA Lente Trigger",  color=hmaTriggerColor, linewidth=2)
+fill(p_hma1_trigger, p_hma2_trigger, color=i_showTriggerHmaSsl ? (canalRougeT ? color.new(color.red, 85) : color.new(color.green, 85)) : na, title="Canal HMA Trigger")
+
+// Canal SSL chart (natif, TF courante)
+color color_ssl_chart = close > sslUpM1 ? bColorSSL : close < sslLoM1 ? sColorSSL : color.gray
+float plotSslBaseChart = i_showChartHmaSsl ? sslBaseM1 : na
+float plotSslUpChart   = i_showChartHmaSsl ? sslUpM1   : na
+float plotSslLoChart   = i_showChartHmaSsl ? sslLoM1   : na
+p_ssl_mid_chart = plot(plotSslBaseChart, "SSL Baseline Chart", color=color_ssl_chart, linewidth=2)
+p_ssl_up_chart  = plot(plotSslUpChart,   "SSL Upper Chart",    color=color_ssl_chart, linewidth=1)
+p_ssl_lo_chart  = plot(plotSslLoChart,   "SSL Lower Chart",    color=color_ssl_chart, linewidth=1)
+fill(p_ssl_up_chart, p_ssl_lo_chart, color=i_showChartHmaSsl ? color.new(color_ssl_chart, 90) : na, title="Canal SSL Chart")
+
+// Canal SSL trigger — affichage optionnel
+color color_ssl_trigger = close > sslUpT ? bColorSSL : close < sslLoT ? sColorSSL : color.gray
+float plotSslBaseTrigger = i_showTriggerHmaSsl ? sslBaseT : na
+float plotSslUpTrigger   = i_showTriggerHmaSsl ? sslUpT   : na
+float plotSslLoTrigger   = i_showTriggerHmaSsl ? sslLoT   : na
+p_ssl_mid_trigger = plot(plotSslBaseTrigger, "SSL Baseline Trigger", color=color_ssl_trigger, linewidth=2)
+p_ssl_up_trigger  = plot(plotSslUpTrigger,   "SSL Upper Trigger",    color=color_ssl_trigger, linewidth=1)
+p_ssl_lo_trigger  = plot(plotSslLoTrigger,   "SSL Lower Trigger",    color=color_ssl_trigger, linewidth=1)
+fill(p_ssl_up_trigger, p_ssl_lo_trigger, color=i_showTriggerHmaSsl ? color.new(color_ssl_trigger, 95) : na, title="Canal SSL Trigger")
+
+// Window openers (triangles fast aqua / slow fuchsia) — toujours affichés, même si une position est en cours
+// LONG signal (cross HMA/SSL upper + canal vert)  → triangle vers le HAUT sous la bougie
+// SHORT signal (cross HMA/SSL lower + canal rouge) → triangle vers le BAS au-dessus de la bougie
+plotshape(fastCrossLong,  title="Window opener fast LONG",  style=shape.triangleup,   location=location.belowbar, color=color.aqua,    size=size.tiny)
+plotshape(fastCrossShort, title="Window opener fast SHORT", style=shape.triangledown, location=location.abovebar, color=color.aqua,    size=size.tiny)
+plotshape(slowCrossLong,  title="Window opener slow LONG",  style=shape.triangleup,   location=location.belowbar, color=color.fuchsia, size=size.tiny)
+plotshape(slowCrossShort, title="Window opener slow SHORT", style=shape.triangledown, location=location.abovebar, color=color.fuchsia, size=size.tiny)
+
+// Offset visuel = hauteur moyenne des 50 dernières bougies × multiplicateur paramétrable.
+// Permet d'empiler les marqueurs informatifs sans qu'ils se superposent aux triangles, entrées et croix.
+float visualOffset = ta.sma(high - low, 50) * i_markerOffsetMult
+
+// Marqueur orange CONTINU : cas C ou D armé pendant la fenêtre (attente sig extrême)
+bool orangeMarkLong  = (i_caseC_On and armedC_Long  or i_caseD_On and armedD_Long)  and not positionActive
+bool orangeMarkShort = (i_caseC_On and armedC_Short or i_caseD_On and armedD_Short) and not positionActive
+plotshape(orangeMarkLong  ? low  - visualOffset       : na, title="Cas C/D armé L", style=shape.diamond, location=location.absolute, color=color.orange, size=size.tiny)
+plotshape(orangeMarkShort ? high + visualOffset       : na, title="Cas C/D armé S", style=shape.diamond, location=location.absolute, color=color.orange, size=size.tiny)
+
+// Marqueur gris CONTINU : cas E (info, pas d'entrée)
+bool grayMarkLong  = armedE_Long  and not positionActive
+bool grayMarkShort = armedE_Short and not positionActive
+plotshape(grayMarkLong  ? low  - visualOffset * 2.0   : na, title="Cas E info L", style=shape.circle, location=location.absolute, color=color.gray, size=size.tiny)
+plotshape(grayMarkShort ? high + visualOffset * 2.0   : na, title="Cas E info S", style=shape.circle, location=location.absolute, color=color.gray, size=size.tiny)
+
+// Entrées effectives
+bool isNewLong  = positionActive and currentSide ==  1 and not positionActive[1]
+bool isNewShort = positionActive and currentSide == -1 and not positionActive[1]
+plotshape(isNewLong,  title="Entry L", style=shape.circle, location=location.belowbar, color=color.green, size=size.tiny)
+plotshape(isNewShort, title="Entry S", style=shape.circle, location=location.abovebar, color=color.red,   size=size.tiny)
+
+// Sorties
+plotshape(hitStopLoss  and currentSide[1] ==  1, title="SL L",          style=shape.xcross, location=location.belowbar, color=color.red,    size=size.tiny)
+plotshape(hitStopLoss  and currentSide[1] == -1, title="SL S",          style=shape.xcross, location=location.abovebar, color=color.red,    size=size.tiny)
+plotshape(hitBreakeven and currentSide[1] ==  1, title="BE L",          style=shape.xcross, location=location.abovebar, color=color.orange, size=size.tiny)
+plotshape(hitBreakeven and currentSide[1] == -1, title="BE S",          style=shape.xcross, location=location.belowbar, color=color.orange, size=size.tiny)
+plotshape(hitTpPartial and currentSide    ==  1, title="Partial L",     style=shape.xcross, location=location.abovebar, color=color.green,  size=size.tiny)
+plotshape(hitTpPartial and currentSide    == -1, title="Partial S",     style=shape.xcross, location=location.belowbar, color=color.green,  size=size.tiny)
+plotshape(hitFinalExit and currentSide[1] ==  1, title="TP Final L",    style=shape.xcross, location=location.abovebar, color=color.green,  size=size.tiny)
+plotshape(hitFinalExit and currentSide[1] == -1, title="TP Final S",    style=shape.xcross, location=location.belowbar, color=color.green,  size=size.tiny)
+plotshape(forceCloseTriggered and forceCloseSide ==  1, title="Force Close L", style=shape.xcross, location=location.abovebar, color=color.orange, size=size.tiny)
+plotshape(forceCloseTriggered and forceCloseSide == -1, title="Force Close S", style=shape.xcross, location=location.belowbar, color=color.orange, size=size.tiny)
+
+// ============================================
+// STATUS TABLE
+// ============================================
+
+table_position = switch i_tblPos
+    "top_right"     => position.top_right
+    "top_left"      => position.top_left
+    "bottom_right"  => position.bottom_right
+    "bottom_left"   => position.bottom_left
+    "top_center"    => position.top_center
+    "bottom_center" => position.bottom_center
+    "middle_right"  => position.middle_right
+    "middle_left"   => position.middle_left
+    "middle_center" => position.middle_center
+    =>                position.top_right
+
+table_text_size = switch i_tblSize
+    "tiny"   => size.tiny
+    "small"  => size.small
+    "normal" => size.normal
+    "large"  => size.large
+    "huge"   => size.huge
+    =>          size.small
+
+// Tableau debug : col0 = label, col1 = verdict (couleur), col2 = valeurs réelles utilisées pour décider.
+var table statusTable = table.new(table_position, 3, 19, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+
+// Helpers de formatage HH:MM avec leading zero (Pine v6 n'a pas de %02d natif simple).
+pad2(int v) => (v < 10 ? "0" : "") + str.tostring(v)
+
+if barstate.islastconfirmedhistory or barstate.isrealtime
+    color colLabel = color.new(color.gray, 80)
+    color colHead  = color.new(color.blue, 50)
+    color colNeut  = color.new(color.gray, 80)
+
+    // --- Row 0 : Header ---
+    table.cell(statusTable, 0, 0, "Gator-MTF v4 — " + getTimeframe(), text_color=color.white, bgcolor=colHead, text_size=table_text_size)
+    table.cell(statusTable, 1, 0, "Trigger: " + formatTimeframeLabel(i_triggerTf), text_color=color.white, bgcolor=colHead, text_size=table_text_size)
+    table.cell(statusTable, 2, 0, "Valeurs réelles", text_color=color.white, bgcolor=colHead, text_size=table_text_size)
+
+    // --- Row 1 : Blackout ---
+    string blackoutStatus = inBlackout ? "BLACKOUT" : "OK"
+    color  blackoutColor  = inBlackout ? color.red  : color.green
+    string nowHHMM = pad2(hour(time_close, "Europe/Brussels")) + ":" + pad2(minute(time_close, "Europe/Brussels"))
+    table.cell(statusTable, 0, 1, "Blackout", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 1, blackoutStatus, text_color=color.white, bgcolor=color.new(blackoutColor, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 1, "Now BXL: " + nowHHMM, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 2 : Auto-Close ---
+    string autoCloseStatus = autoCloseBar ? "AUTO-CLOSE" : "WAIT"
+    color  autoCloseColor  = autoCloseBar ? color.orange : color.gray
+    string autoCloseTarget = "Cible " + pad2(i_autoCloseH) + ":" + pad2(i_autoCloseM)
+    table.cell(statusTable, 0, 2, "Auto-Close", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 2, autoCloseStatus, text_color=color.white, bgcolor=color.new(autoCloseColor, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 2, autoCloseTarget, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 3 : Position ---
+    string posStatus = positionActive ? (currentSide == 1 ? "LONG" : "SHORT") + (na(firedCaseLabel) ? "" : " (" + firedCaseLabel + ")") : "NONE"
+    color  posColor  = positionActive ? (currentSide == 1 ? color.green : color.red) : color.gray
+    string posDetail = positionActive and not na(entryPrice) ? "Entry " + str.tostring(entryPrice, format.mintick) : "—"
+    table.cell(statusTable, 0, 3, "Position", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 3, posStatus, text_color=color.white, bgcolor=color.new(posColor, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 3, posDetail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 4 : C1 Canal HMA Trigger ---
+    // Test : canalRougeT = HMA1T > HMA2T (ascendant = recherche SHORT), canalVertT = HMA1T < HMA2T (descendant = recherche LONG)
+    string c1Status = canalRougeT ? "ROUGE" : canalVertT ? "VERT" : "FLAT"
+    color  c1Color  = canalRougeT ? color.red : canalVertT ? color.green : color.gray
+    string c1Detail = "H1T " + str.tostring(hma1T, format.mintick) + " | H2T " + str.tostring(hma2T, format.mintick) + " | Δ " + str.tostring(hma1T - hma2T, format.mintick)
+    table.cell(statusTable, 0, 4, "C1 Canal HMA Trigger", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 4, c1Status, text_color=color.white, bgcolor=color.new(c1Color, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 4, c1Detail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 5 : C2 Canal HMA M1 ---
+    // Test : canalRougeM1 = HMA1M1 > HMA2M1 (ascendant = recherche SHORT), canalVertM1 = HMA1M1 < HMA2M1 (descendant = recherche LONG)
+    string c2Status = canalRougeM1 ? "ROUGE" : canalVertM1 ? "VERT" : "FLAT"
+    color  c2Color  = canalRougeM1 ? color.red : canalVertM1 ? color.green : color.gray
+    string c2Detail = "H1 " + str.tostring(hma1M1, format.mintick) + " | H2 " + str.tostring(hma2M1, format.mintick) + " | Δ " + str.tostring(hma1M1 - hma2M1, format.mintick)
+    table.cell(statusTable, 0, 5, "C2 Canal HMA M1", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 5, c2Status, text_color=color.white, bgcolor=color.new(c2Color, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 5, c2Detail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 6 : C3 Osc M1 (Smart Money Flow) ---
+    // Test : oscBearishM1 = mfiM1 < 0 (= pression vendeuse → côté visuel VERT, recherche LONG mean-reversion)
+    //        oscBullishM1 = mfiM1 > 0 (= pression acheteuse → côté visuel ROUGE, recherche SHORT mean-reversion)
+    string c3Status = oscBearishM1 ? "VERT" : oscBullishM1 ? "ROUGE" : "FLAT"
+    color  c3Color  = oscBearishM1 ? color.green : oscBullishM1 ? color.red : color.gray
+    string c3Detail = "MFI " + str.tostring(mfiM1, "#.##") + " vs 0"
+    table.cell(statusTable, 0, 6, "C3 Osc M1", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 6, c3Status, text_color=color.white, bgcolor=color.new(c3Color, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 6, c3Detail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 7 : Sig extrême ---
+    // Test : sigExtremeBullM1 = oscSigM1 >= +seuil  /  sigExtremeBearM1 = oscSigM1 <= -seuil
+    string sigStatus = sigExtremeBullM1 ? "BULL" : sigExtremeBearM1 ? "BEAR" : "—"
+    color  sigColor  = sigExtremeBullM1 ? color.lime : sigExtremeBearM1 ? color.maroon : color.gray
+    string sigDetail = "Sig " + str.tostring(oscSigM1, "#.##") + " vs ±" + str.tostring(i_sigExtremeThreshold, "#.#")
+    table.cell(statusTable, 0, 7, "Sig extrême", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 7, sigStatus, text_color=color.white, bgcolor=color.new(sigColor, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 7, sigDetail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 8 : HMA Rapide Trigger vs SSL upper/lower (clé du bug B) ---
+    // Test : où se trouve hma1T par rapport à sslUpT et sslLoT
+    string hma1Pos       = hma1T > sslUpT ? "AU-DESSUS UP" : hma1T < sslLoT ? "SOUS LO" : "DANS CANAL"
+    color  hma1PosColor  = hma1T > sslUpT ? color.green : hma1T < sslLoT ? color.red : color.gray
+    string hma1Detail    = "H1T " + str.tostring(hma1T, format.mintick) + " | Up " + str.tostring(sslUpT, format.mintick) + " | Lo " + str.tostring(sslLoT, format.mintick)
+    table.cell(statusTable, 0, 8, "HMA Rapide T / SSL", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 8, hma1Pos, text_color=color.white, bgcolor=color.new(hma1PosColor, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 8, hma1Detail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 9 : HMA Lente Trigger vs SSL upper/lower (clé du bug B) ---
+    string hma2Pos       = hma2T > sslUpT ? "AU-DESSUS UP" : hma2T < sslLoT ? "SOUS LO" : "DANS CANAL"
+    color  hma2PosColor  = hma2T > sslUpT ? color.green : hma2T < sslLoT ? color.red : color.gray
+    string hma2Detail    = "H2T " + str.tostring(hma2T, format.mintick) + " | Up " + str.tostring(sslUpT, format.mintick) + " | Lo " + str.tostring(sslLoT, format.mintick)
+    table.cell(statusTable, 0, 9, "HMA Lente T / SSL", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 9, hma2Pos, text_color=color.white, bgcolor=color.new(hma2PosColor, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 9, hma2Detail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 10 : Fenêtre Fast (âge depuis le signal LONG/SHORT) ---
+    string winFastStatus = windowFastLong ? "LONG" : windowFastShort ? "SHORT" : "—"
+    int    winFastAge    = windowFastLong ? bar_index - lastFastLongCrossBar : windowFastShort ? bar_index - lastFastShortCrossBar : -1
+    string winFastDetail = winFastAge >= 0 ? "Δ " + str.tostring(winFastAge) + "/" + str.tostring(windowBarsChart) + " bars chart" : "—"
+    color  winFastBg     = windowFastLong ? color.green : windowFastShort ? color.red : color.gray
+    table.cell(statusTable, 0, 10, "Fenêtre Fast", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 10, winFastStatus, text_color=color.white, bgcolor=color.new(winFastBg, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 10, winFastDetail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 11 : Fenêtre Slow ---
+    string winSlowStatus = windowSlowLong ? "LONG" : windowSlowShort ? "SHORT" : "—"
+    int    winSlowAge    = windowSlowLong ? bar_index - lastSlowLongCrossBar : windowSlowShort ? bar_index - lastSlowShortCrossBar : -1
+    string winSlowDetail = winSlowAge >= 0 ? "Δ " + str.tostring(winSlowAge) + "/" + str.tostring(windowBarsChart) + " bars chart" : "—"
+    color  winSlowBg     = windowSlowLong ? color.green : windowSlowShort ? color.red : color.gray
+    table.cell(statusTable, 0, 11, "Fenêtre Slow", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 11, winSlowStatus, text_color=color.white, bgcolor=color.new(winSlowBg, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 11, winSlowDetail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 12 : Taille fenêtre ---
+    string winBarsStatus = str.tostring(i_entryWindowBarsTrigger) + " trig"
+    string winBarsDetail = "= " + str.tostring(windowBarsChart) + " chart (ratio ×" + str.tostring(tfRatio, "#.##") + ")"
+    table.cell(statusTable, 0, 12, "Taille fenêtre", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 12, winBarsStatus, text_color=color.white, bgcolor=color.new(color.blue, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 12, winBarsDetail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 13 : Cas actifs ---
+    string casesOn = (i_caseA_On ? "A" : "") + (i_caseB_On ? "B" : "") + (i_caseC_On ? "C" : "") + (i_caseD_On ? "D" : "")
+    string armedDetail = "L:" + (armedA_Long ? "A" : "") + (armedB_Long ? "B" : "") + (armedC_Long ? "C" : "") + (armedD_Long ? "D" : "") + (armedE_Long ? "E" : "") + " | S:" + (armedA_Short ? "A" : "") + (armedB_Short ? "B" : "") + (armedC_Short ? "C" : "") + (armedD_Short ? "D" : "") + (armedE_Short ? "E" : "")
+    table.cell(statusTable, 0, 13, "Cas actifs", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 13, casesOn == "" ? "—" : casesOn, text_color=color.white, bgcolor=color.new(color.blue, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 13, armedDetail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 14 : Cas déclenché (entrée potentielle ce bar) ---
+    string lastFiredStatus = firedCaseRaw != "" ? "CAS " + firedCaseRaw : "—"
+    color  firedColor      = firedCaseRaw != "" ? color.lime : color.gray
+    bool   anyLongEntry  = entryA_Long or entryB_Long or entryC_Long or entryD_Long
+    bool   anyShortEntry = entryA_Short or entryB_Short or entryC_Short or entryD_Short
+    string sideStatus = anyLongEntry ? "LONG" : anyShortEntry ? "SHORT" : "—"
+    table.cell(statusTable, 0, 14, "Cas déclenché", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 14, lastFiredStatus, text_color=color.white, bgcolor=color.new(firedColor, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 14, "Side " + sideStatus, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 15 : SL ---
+    string slStatus = positionActive ? str.tostring(roundToTick(stopPrice), format.mintick) + (tpPartialHit ? " (BE)" : "") : "—"
+    string slDetail = positionActive and not na(initialStopPrice) ? "Init " + str.tostring(initialStopPrice, format.mintick) : ""
+    table.cell(statusTable, 0, 15, "SL courant", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 15, slStatus, text_color=color.white, bgcolor=color.new(color.red, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 15, slDetail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 16 : TP partiel ---
+    string tpPartialStatus = positionActive and not na(tpPartialPrice) ? str.tostring(roundToTick(tpPartialPrice), format.mintick) + (tpPartialHit ? " (hit)" : "") : "—"
+    string tpPartialDetail = i_partialRr > 0 ? "RR " + str.tostring(i_partialRr, "#.##") : "off"
+    table.cell(statusTable, 0, 16, "TP partiel", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 16, tpPartialStatus, text_color=color.white, bgcolor=color.new(color.green, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 16, tpPartialDetail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 17 : TP final ---
+    string tpFinalStatus = positionActive and not na(tpFinalPrice) ? str.tostring(roundToTick(tpFinalPrice), format.mintick) : "—"
+    string tpFinalDetail = "RR " + str.tostring(i_finalRr, "#.##")
+    table.cell(statusTable, 0, 17, "TP final", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 17, tpFinalStatus, text_color=color.white, bgcolor=color.new(color.green, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 17, tpFinalDetail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)
+
+    // --- Row 18 : Signal détecté ce bar (edge-triggered, info live) ---
+    string crossThisBar = fastCrossLong ? "FAST LONG" : fastCrossShort ? "FAST SHORT" : slowCrossLong ? "SLOW LONG" : slowCrossShort ? "SLOW SHORT" : "—"
+    bool   anyLongSig   = fastCrossLong or slowCrossLong
+    bool   anyShortSig  = fastCrossShort or slowCrossShort
+    color  crossColor   = anyLongSig ? color.green : anyShortSig ? color.red : color.gray
+    string crossDetail  = newTriggerBar ? "newTriggerBar=true" : "newTriggerBar=false"
+    table.cell(statusTable, 0, 18, "Signal détecté", text_color=color.white, bgcolor=colLabel, text_size=table_text_size)
+    table.cell(statusTable, 1, 18, crossThisBar, text_color=color.white, bgcolor=color.new(crossColor, 70), text_size=table_text_size)
+    table.cell(statusTable, 2, 18, crossDetail, text_color=color.white, bgcolor=colNeut, text_size=table_text_size)

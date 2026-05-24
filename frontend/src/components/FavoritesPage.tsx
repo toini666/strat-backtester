@@ -168,8 +168,8 @@ export function FavoritesPage({ onLoadPreset, multiContext }: FavoritesPageProps
         .sort((a, b) => {
             const infoA = getPresetInfo(a);
             const infoB = getPresetInfo(b);
-            let valA: string | number = sortKey === 'createdAt' ? a.createdAt : (sortKey === 'name' ? a.name : (infoA as Record<string, string>)[sortKey] ?? '');
-            let valB: string | number = sortKey === 'createdAt' ? b.createdAt : (sortKey === 'name' ? b.name : (infoB as Record<string, string>)[sortKey] ?? '');
+            let valA: string | number = sortKey === 'createdAt' ? a.createdAt : (sortKey === 'name' ? a.name : (infoA as unknown as Record<string, string>)[sortKey] ?? '');
+            let valB: string | number = sortKey === 'createdAt' ? b.createdAt : (sortKey === 'name' ? b.name : (infoB as unknown as Record<string, string>)[sortKey] ?? '');
             if (typeof valA === 'string') valA = valA.toLowerCase();
             if (typeof valB === 'string') valB = valB.toLowerCase();
             if (valA < valB) return sortDir === 'asc' ? -1 : 1;

@@ -169,6 +169,8 @@ export interface MultiBacktestResult {
 export interface PresetMetrics {
     total_return: number;   // %
     win_rate: number;       // %
+    sl_rate?: number;       // % — absent on presets saved before this field
+    be_rate?: number;       // % — absent on presets saved before this field
     total_trades: number;
     max_drawdown: number;   // %
     max_drawdown_dollars?: number;  // $ — true peak-to-trough; absent on legacy presets saved before this field existed
@@ -292,6 +294,9 @@ export async function renamePreset(id: string, name: string): Promise<BacktestPr
 export interface BacktestMetrics {
     total_return: number;
     win_rate: number;
+    sl_rate?: number;
+    be_rate?: number;
+    loss_other_rate?: number;
     total_trades: number;
     max_drawdown: number;
     max_drawdown_dollars?: number;

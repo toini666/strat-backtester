@@ -215,6 +215,9 @@ def summarize(result: Dict[str, Any]) -> Dict[str, Any]:
         "net_pnl": round(net, 2),
         "trades": int(m["total_trades"]),
         "win_rate": round(m["win_rate"], 1),
+        "sl_rate": round(m.get("sl_rate", 0.0), 1),
+        "be_rate": round(m.get("be_rate", 0.0), 1),
+        "loss_other_rate": round(m.get("loss_other_rate", 0.0), 1),
         "max_dd_$": round(m["max_drawdown_dollars"], 2),
         "max_dd_%": round(m["max_drawdown"], 2),
         "profit_factor": round(pf, 2) if pf != float("inf") else None,
@@ -228,6 +231,7 @@ def fmt_summary(s: Dict[str, Any]) -> str:
     return (
         f"PnL=${s['net_pnl']:>9,.0f} | DD=${s['max_dd_$']:>6,.0f} | "
         f"N={s['trades']:>4} | WR={s['win_rate']:>5.1f}% | "
+        f"SL={s.get('sl_rate', 0):>4.1f}% | BE={s.get('be_rate', 0):>4.1f}% | "
         f"PF={s['profit_factor']} | "
         f"AW=${s['avg_win']:>6,.0f} | AL=${s['avg_loss']:>6,.0f}"
     )

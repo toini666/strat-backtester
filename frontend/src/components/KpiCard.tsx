@@ -1,4 +1,5 @@
 import { type LucideIcon } from 'lucide-react';
+import { type ReactNode } from 'react';
 
 interface KpiCardProps {
     label: string;
@@ -9,9 +10,10 @@ interface KpiCardProps {
     subColor?: string;
     deltaLabel?: string;
     deltaColor?: string;
+    extraNode?: ReactNode;
 }
 
-export function KpiCard({ label, value, icon: Icon, color, subValue, subColor, deltaLabel, deltaColor }: KpiCardProps) {
+export function KpiCard({ label, value, icon: Icon, color, subValue, subColor, deltaLabel, deltaColor, extraNode }: KpiCardProps) {
     const iconColorClass = color || 'text-gray-400';
 
     return (
@@ -34,6 +36,7 @@ export function KpiCard({ label, value, icon: Icon, color, subValue, subColor, d
                         {deltaLabel} vs prev
                     </div>
                 )}
+                {extraNode}
             </div>
         </div>
     );

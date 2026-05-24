@@ -70,6 +70,13 @@ function ConfigMetricRow({
                 <div>
                     <div className="text-gray-500 uppercase tracking-wide mb-1">Win Rate</div>
                     <div className="font-mono font-bold text-blue-400">{metrics.win_rate.toFixed(1)}%</div>
+                    {(metrics.sl_rate !== undefined || metrics.be_rate !== undefined) && (
+                        <div className="font-mono text-[11px] opacity-60 leading-tight">
+                            <span className="text-red-300">SL {(metrics.sl_rate ?? 0).toFixed(1)}%</span>
+                            {' / '}
+                            <span className="text-yellow-300">BE {(metrics.be_rate ?? 0).toFixed(1)}%</span>
+                        </div>
+                    )}
                 </div>
                 <div>
                     <div className="text-gray-500 uppercase tracking-wide mb-1">Trades</div>
@@ -237,6 +244,13 @@ export function Dashboard({
                     color="text-blue-400"
                     deltaLabel={winRateDelta?.label}
                     deltaColor={winRateDelta?.color}
+                    extraNode={(metrics.sl_rate !== undefined || metrics.be_rate !== undefined) && (
+                        <div className="text-xs font-mono mt-0.5 leading-tight">
+                            <span className="text-red-300">SL {(metrics.sl_rate ?? 0).toFixed(1)}%</span>
+                            <span className="text-gray-500"> · </span>
+                            <span className="text-yellow-300">BE {(metrics.be_rate ?? 0).toFixed(1)}%</span>
+                        </div>
+                    )}
                 />
                 <KpiCard
                     label="Total Trades"
