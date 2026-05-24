@@ -157,6 +157,9 @@ def run_backtest(
         one_trade_per_setup_window=bool(
             simulator_settings.get("one_trade_per_setup_window", False)
         ),
+        one_trade_per_window_mtf=bool(
+            simulator_settings.get("one_trade_per_window_mtf", False)
+        ),
         final_exit_pct=float(simulator_settings.get("final_exit_pct", 0.0)),
         final_exit_min_rr=float(simulator_settings.get("final_exit_min_rr", 0.0)),
         move_to_be_on_fast_hma_cross=bool(
@@ -217,7 +220,6 @@ def summarize(result: Dict[str, Any]) -> Dict[str, Any]:
         "win_rate": round(m["win_rate"], 1),
         "sl_rate": round(m.get("sl_rate", 0.0), 1),
         "be_rate": round(m.get("be_rate", 0.0), 1),
-        "loss_other_rate": round(m.get("loss_other_rate", 0.0), 1),
         "max_dd_$": round(m["max_drawdown_dollars"], 2),
         "max_dd_%": round(m["max_drawdown"], 2),
         "profit_factor": round(pf, 2) if pf != float("inf") else None,

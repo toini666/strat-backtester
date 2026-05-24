@@ -1,0 +1,106 @@
+{
+  "id": "0b7532b5-42aa-4c3c-a9db-d5bf8d957814",
+  "name": "BESTPNL-MNQ GatorMTFv4 - MNQ 1m v2",
+  "createdAt": "2026-05-24T17:12:50.258420Z",
+  "mode": "single",
+  "symbol": "MNQ",
+  "interval": "1m",
+  "startDatetime": "2025-01-02T00:00",
+  "endDatetime": "2026-05-22T22:59",
+  "initialEquity": 50000.0,
+  "riskPerTrade": 0.28,
+  "maxContracts": 20,
+  "strategyName": "GatorMTFv4",
+  "params": {
+    "trigger_tf_minutes": 7,
+    "ema_len": 7,
+    "hma1_len": 13,
+    "hma2_len": 21,
+    "amp_mult": 1.5,
+    "entry_window_bars_trigger": 5,
+    "ssl_len": 20,
+    "ssl_mult": 0.2,
+    "hyper_wave_length": 5,
+    "signal_length": 3,
+    "mf_length": 35,
+    "mf_smooth": 6,
+    "sig_extreme_threshold": 33.0,
+    "case_a_on": true,
+    "case_b_on": true,
+    "case_c_on": false,
+    "case_d_on": true,
+    "sl_lookback": 15,
+    "sl_min_pct": 0.15,
+    "tick_buffer": 6,
+    "cooldown_bars": 90,
+    "hw_partial_pct": 0.0,
+    "partial_rr": 0.0,
+    "final_rr": 1.5,
+    "one_trade_per_window": true,
+    "tick_size": 0.25
+  },
+  "engineSettings": {
+    "auto_close_enabled": true,
+    "auto_close_hour": 22,
+    "auto_close_minute": 0,
+    "blackout_windows": [
+      {
+        "active": false,
+        "start_hour": 8,
+        "start_minute": 0,
+        "end_hour": 8,
+        "end_minute": 5
+      },
+      {
+        "active": false,
+        "start_hour": 11,
+        "start_minute": 0,
+        "end_hour": 13,
+        "end_minute": 0
+      },
+      {
+        "active": false,
+        "start_hour": 14,
+        "start_minute": 30,
+        "end_hour": 14,
+        "end_minute": 35
+      },
+      {
+        "active": false,
+        "start_hour": 16,
+        "start_minute": 0,
+        "end_hour": 20,
+        "end_minute": 0
+      },
+      {
+        "active": false,
+        "start_hour": 21,
+        "start_minute": 0,
+        "end_hour": 23,
+        "end_minute": 0
+      },
+      {
+        "active": false,
+        "start_hour": 22,
+        "start_minute": 0,
+        "end_hour": 23,
+        "end_minute": 59
+      }
+    ],
+    "debug": false,
+    "daily_win_limit_enabled": false,
+    "daily_win_limit": 500.0,
+    "daily_loss_limit_enabled": false,
+    "daily_loss_limit": 700.0,
+    "daily_limit_mode": "after_close"
+  },
+  "metrics": {
+    "total_return": 33.553760000000004,
+    "win_rate": 44.0,
+    "sl_rate": 53.9,
+    "be_rate": 0.2,
+    "total_trades": 2316,
+    "max_drawdown": 3.55,
+    "max_drawdown_dollars": 2161.6
+  }
+}

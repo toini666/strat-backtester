@@ -61,6 +61,16 @@ _STRATEGY_OVERRIDES: dict[str, dict] = {
             {"active": True,  "start_hour": 22, "start_minute": 0,  "end_hour": 23, "end_minute": 59},
         ],
     },
+    "GatorMTFv4": {
+        "blackout_windows": [
+            {"active": False, "start_hour": 8,  "start_minute": 0,  "end_hour": 8,  "end_minute": 5},
+            {"active": False, "start_hour": 11, "start_minute": 0,  "end_hour": 13, "end_minute": 0},
+            {"active": False, "start_hour": 14, "start_minute": 30, "end_hour": 14, "end_minute": 35},
+            {"active": False, "start_hour": 16, "start_minute": 0,  "end_hour": 20, "end_minute": 0},
+            {"active": False, "start_hour": 21, "start_minute": 0,  "end_hour": 23, "end_minute": 0},
+            {"active": True,  "start_hour": 22, "start_minute": 0,  "end_hour": 23, "end_minute": 59},
+        ],
+    },
 }
 
 

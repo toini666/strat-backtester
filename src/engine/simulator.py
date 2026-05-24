@@ -1904,33 +1904,29 @@ def simulate(
     cum_pnl = sum(t["pnl"] for t in active_trades)
     total_return = (cum_pnl / config.initial_equity) * 100
 
-    # Loss breakdown — splits the "not a win" trades into SL hits, breakeven
-    # exits, and "other" (TP-partial exits / EMA-cross / Canal / Auto-Close /
-    # End-of-Data that ended in the red). The BE bucket also captures trades
-    # whose avg exit price is within 2 ticks of the entry price — that's the
-    # "in and out at the same price, fees turn it red" phenomenon the user
-    # tracks visually, and it is NOT the same as `status == "Breakeven"` once
-    # `tp1_full_exit` or `be_at_rr=0` are in play.
+    # Loss breakdown — every losing trade is either BE (flat exit within 2 ticks
+    # of entry, or explicit "Breakeven" status) or SL (everything else). The
+    # 2-tick BE tolerance captures the "in and out at the same price, fees turn
+    # it red" phenomenon the user tracks visually, which is NOT the same as
+    # `status == "Breakeven"` once `tp1_full_exit` or `be_at_rr=0` are in play.
+    # The SL bucket is intentionally broad: a loss exiting via EMA-cross, Canal,
+    # Auto-Close, or End-of-Data is still a loss and counts as SL so that
+    # `win_rate + sl_rate + be_rate == 100%`.
     be_status_set = {"Breakeven"}
-    sl_status_set = {"Stop Loss", "Trailing SL"}
     sl_count = 0
     be_count = 0
-    other_loss_count = 0
     be_tick_tol = 2 * (ts if ts > 0 else 0.25)
     for t in active_trades:
         if t["pnl"] > 0:
             continue
         status = str(t.get("status", ""))
         flat_move = abs(float(t["exit_price"]) - float(t["entry_price"])) <= be_tick_tol
-        if status in sl_status_set:
-            sl_count += 1
-        elif status in be_status_set or flat_move:
+        if status in be_status_set or flat_move:
             be_count += 1
         else:
-            other_loss_count += 1
+            sl_count += 1
     sl_rate = (sl_count / total_trades * 100) if total_trades > 0 else 0.0
     be_rate = (be_count / total_trades * 100) if total_trades > 0 else 0.0
-    other_loss_rate = (other_loss_count / total_trades * 100) if total_trades > 0 else 0.0
 
     # Max drawdown from equity curve.
     # Track % and $ DD independently — they can come from different peak/trough
@@ -1966,7 +1962,6 @@ def simulate(
         "win_rate": float(win_rate),
         "sl_rate": float(sl_rate),
         "be_rate": float(be_rate),
-        "loss_other_rate": float(other_loss_rate),
         "total_trades": int(total_trades),
         "max_drawdown": float(max_dd * 100),
         "max_drawdown_dollars": float(max_dd_dollars),

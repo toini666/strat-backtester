@@ -296,7 +296,6 @@ export interface BacktestMetrics {
     win_rate: number;
     sl_rate?: number;
     be_rate?: number;
-    loss_other_rate?: number;
     total_trades: number;
     max_drawdown: number;
     max_drawdown_dollars?: number;

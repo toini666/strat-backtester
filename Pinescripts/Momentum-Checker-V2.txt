@@ -41,6 +41,7 @@ i_hwExtremeFilterOn  = input.bool(true, "Filtre extrême HW", group=grp_osc, too
 i_hwExtreme          = input.float(20.0, "   Niveau extrême HW (+/-)", group=grp_osc, minval=0.0)
 i_sigFilterOn        = input.bool(false, "Filtre valeur SIG courant", group=grp_osc, tooltip="Ignore le signal si la valeur SIG courante est comprise entre -N et +N (zone neutre du signal).")
 i_sigLevel           = input.float(10.0, "   Seuil SIG (+/-)", group=grp_osc, minval=0.0)
+i_sigRangeReject     = input.bool(false, "Rejet entrée si SIG dans le seuil", group=grp_osc, tooltip="Si activé, rejette TOUTE entrée (long ET short) quand |oscSig| <= Seuil SIG. Filtre symétrique de type 'hard reject' en complément du scoring par points.")
 i_sigExtremeFilterOn = input.bool(true, "Filtre extrême SIG courant", group=grp_osc, tooltip="Long interdit si oscSig courant > +N. Short interdit si oscSig courant < -N.")
 i_sigExtreme         = input.float(40.0, "   Niveau extrême SIG (+/-)", group=grp_osc, minval=0.0)
 i_cloudFilterOn      = input.bool(true,  "Filtre Nuage MFI", group=grp_osc, tooltip="Active le scoring du nuage MFI (position du MFI par rapport à sa référence).")
@@ -631,8 +632,10 @@ int maxPtsShort = maxPtsLong
 // ============================================
 bool gapLongOk  = (ptsLong  - ptsShort) >= i_minGap
 bool gapShortOk = (ptsShort - ptsLong)  >= i_minGap
-bool longEntry  = ptsLong  >= i_longThreshold  and gapLongOk  and candleSizeOk and not inBlackout
-bool shortEntry = ptsShort >= i_shortThreshold and gapShortOk and candleSizeOk and not inBlackout
+// Rejet symétrique long ET short si oscSig est dans la zone neutre |oscSig| <= seuil.
+bool sigInRange = i_sigRangeReject and not na(oscSig) and math.abs(oscSig) <= i_sigLevel
+bool longEntry  = ptsLong  >= i_longThreshold  and gapLongOk  and candleSizeOk and not inBlackout and not sigInRange
+bool shortEntry = ptsShort >= i_shortThreshold and gapShortOk and candleSizeOk and not inBlackout and not sigInRange
 
 // Calcul des niveaux
 // Le risk subit (dans l'ordre) : élargissement au min(% du prix) puis plafond à i_slMaxPoints.
