@@ -4,7 +4,12 @@ indicator("Gator-MTF v4", shorttitle="Gator-MTF v4", overlay=true, max_lines_cou
 // ============================================
 // NOTES D'ARCHITECTURE — V4
 // ============================================
-// - CHART M1, TRIGGER M7 (request.security, lookahead_off).
+// - CHART M1, TRIGGER M7 (request.security, lookahead_on + [1] sur chaque sortie =
+//   idiome canonique Pine v6 non-repaint, garantit qu'on lit toujours la DERNIÈRE
+//   bougie HTF CONFIRMÉE — identique en mode historique et en replay/real-time
+//   (lookahead_off seul est asymétrique : confirmé en historique, mais bougie en
+//    cours de construction en real-time, ce qui faisait que ta.cross fire trop tôt
+//    dans la M7 en replay).
 //
 // CONVENTION COULEUR CANAL HMA (chart + trigger) — stratégie MEAN-REVERSION :
 //     canalVert  = HMA1 < HMA2 → canal DESCENDANT → on cherche un LONG (reversal après baisse) → affiché en VERT
@@ -330,9 +335,13 @@ triggerCalc() =>
     bool slowLongSig  = ta.cross(h2, upperk) and canalVert_t
     bool slowShortSig = ta.cross(h2, lowerk) and canalRouge_t
 
-    [h1, h2, BBMC, upperk, lowerk, fastLongSig, fastShortSig, slowLongSig, slowShortSig, canalRouge_t, time]
+    // [1] sur CHAQUE sortie + barmerge.lookahead_on côté request.security = idiome
+    // canonique TradingView pour "valeurs HTF confirmées only, identique historique
+    // et real-time". Sans ça, en replay, ta.cross fire dès qu'il se produit dans la
+    // M7 en cours, au lieu d'attendre la clôture confirmée comme en historique.
+    [h1[1], h2[1], BBMC[1], upperk[1], lowerk[1], fastLongSig[1], fastShortSig[1], slowLongSig[1], slowShortSig[1], canalRouge_t[1], time[1]]
 
-[hma1T, hma2T, sslBaseT, sslUpT, sslLoT, fastLongSig_t, fastShortSig_t, slowLongSig_t, slowShortSig_t, canalRougeRaw, timeT] = request.security(syminfo.tickerid, i_triggerTf, triggerCalc(), barmerge.gaps_off, barmerge.lookahead_off)
+[hma1T, hma2T, sslBaseT, sslUpT, sslLoT, fastLongSig_t, fastShortSig_t, slowLongSig_t, slowShortSig_t, canalRougeRaw, timeT] = request.security(syminfo.tickerid, i_triggerTf, triggerCalc(), barmerge.gaps_off, barmerge.lookahead_on)
 
 // Détection bougie trigger nouvellement clôturée
 bool newTriggerBar = not na(timeT) and (na(timeT[1]) or timeT != timeT[1])

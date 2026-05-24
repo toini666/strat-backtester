@@ -71,6 +71,21 @@ const STRATEGY_ENGINE_OVERRIDES: Record<string, Partial<BacktestEngineSettings>>
       { active: true, start_hour: 22, start_minute: 0, end_hour: 23, end_minute: 59 },
     ],
   },
+  // Gator-MTF v4 ships with only BO6 active (22:00–23:59) and i_autoCloseH=22
+  // in the PineScript; mirror that so the default UI config matches TV.
+  GatorMTFv4: {
+    auto_close_enabled: true,
+    auto_close_hour: 22,
+    auto_close_minute: 0,
+    blackout_windows: [
+      { active: false, start_hour: 8, start_minute: 0, end_hour: 8, end_minute: 5 },
+      { active: false, start_hour: 11, start_minute: 0, end_hour: 13, end_minute: 0 },
+      { active: false, start_hour: 14, start_minute: 30, end_hour: 14, end_minute: 35 },
+      { active: false, start_hour: 16, start_minute: 0, end_hour: 20, end_minute: 0 },
+      { active: false, start_hour: 21, start_minute: 0, end_hour: 23, end_minute: 0 },
+      { active: true, start_hour: 22, start_minute: 0, end_hour: 23, end_minute: 59 },
+    ],
+  },
 };
 
 function applyStrategyEngineOverrides(

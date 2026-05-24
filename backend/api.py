@@ -68,6 +68,10 @@ STRATEGY_WARMUP_BARS = {
     "RobReversal": 150,         # EMA(13)→52 + MFI(35)+cloud(35)→112 + margin
     "MomentumChecker": 300,     # EMA(30)*4 + HMA(84)→135 + STC(50+12) + MFI(35) + margin
     "MomentumCheckerV2": 300,   # Same as V1 + SSL EMA(60)*4 = 240 (still bounded by 300)
+    # M1 chart but recomposes internally to the trigger TF (default M7). Warmup
+    # must cover the trigger-TF SSL EMA(60) → 240 trigger bars ≈ 1680 M1 trading
+    # minutes; we add ~80 % margin to stay safe at higher trigger TFs.
+    "GatorMTFv4": 3000,
 
 }
 DEFAULT_WARMUP_BARS = 200

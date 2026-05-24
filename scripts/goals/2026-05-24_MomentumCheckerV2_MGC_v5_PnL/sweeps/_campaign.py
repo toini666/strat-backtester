@@ -1,27 +1,35 @@
-"""Campaign-local constants for 2026-05-24 MomentumCheckerV2 MGC v4 (WR focus).
+"""Campaign-local constants for 2026-05-24 MomentumCheckerV2 MGC v5 (PnL focus).
 
-Seed: `BEST3TOP MGC MomentumCheckerV2 v3 WINNER - MGC 7m` (preset in `data/presets.json`).
+Seed: v4 WR WINNER (`BESTWR-MGC MomentumCheckerV2 - MGC 7m v4`) in `data/presets.json`.
 
-Goal: Win-rate >= 50 % with DD <= $2,500 and MAX PnL.
-Budget: 1000 sims. Period extended to full available history.
+Goal: **Maximise PnL** under WR >= 50 % and DD <= $2,500.
+Budget: 500 sims.
 
-User-specified locks:
+Locks (per user):
 - symbol = MGC, interval = 7m, max_contracts = 20
 - initialEquity = $50,000
-- Period extended to full available MGC 7m history (2025-01-02 -> 2026-05-22).
-- Auto_close stays at 22:00 reference Brussels (CME close, per CLAUDE.md).
-- Daily limits start OFF.
+- Period: 2025-01-02 -> 2026-05-22 (full MGC 7m history)
+- max_contracts, daily limits ticker (not directly addressed -> keep daily limits off)
+- start/end dates locked
 
-User explicit license:
-- Free hand on ALL strategy params and blackout windows.
-- *"N'hesite pas a repartir d'une base ou tres peu de conditions sont activees"*
-  -> include a minimal-modules anchor in Phase 1b.
+Free hand on:
+- ALL strategy params
+- Blackout windows (add / remove / shift)
+- risk_per_trade
 
-Math anchor (since MCV2 has tp1_full_exit=True):
-- Break-even WR = 1 / (1 + rr_tp).
-- Seed: rr_tp=3 -> BE_WR=25%, observed WR=39.6% -> edge = +14.6 pp.
-- Expected WR at rr_tp=1.5 (BE_WR=40%) = ~54.6%.
-- Expected WR at rr_tp=1.0 (BE_WR=50%) = ~64.6%.
+Math anchor (MCV2 has tp1_full_exit=True):
+- Break-even WR = 1 / (1 + rr_tp)
+- rr_tp=1.25 -> BE_WR=44.4 %, observed 51.0 %, edge ~6.6 pp
+- rr_tp=1.30 -> BE_WR=43.5 %, edge ~6.6 pp -> ~50.1 % (at WR wall)
+- rr_tp=1.35 -> BE_WR=42.6 %, edge ~6.6 pp -> ~49.2 % (BELOW)
+
+WR margin (advisor): 95 % binomial CI ~+-3 pp on N=1056 -> SOFT WR floor ~51.5 %
+to leave a safety buffer against noise/fresh-period drift.
+
+The lowest-hanging fruit, per the v4 report's Pareto table:
+    ALT_PNL (lb=14, risk=0.41 %, tb=1) -> PnL $28,817 / DD $2,536 / WR 50.9 % / N=1052
+This is **$655 better** than the shipped v4 winner but $36 over DD budget. If we
+can shave $36+ of DD via any lever (BO, threshold, filter), it dominates.
 """
 
 from __future__ import annotations
@@ -30,17 +38,13 @@ from __future__ import annotations
 STRATEGY = "MomentumCheckerV2"
 SYMBOL = "MGC"
 INTERVAL = "7m"
-START = "2025-01-02T00:00"          # full available MGC 7m start
-END = "2026-05-22T22:59"            # full available MGC 7m end
+START = "2025-01-02T00:00"
+END = "2026-05-22T22:59"
 INITIAL_EQUITY = 50_000.0
 MAX_CONTRACTS = 20
 
-# Seed period for reproducibility cross-check (matches BEST3TOP preset metrics)
-SEED_PERIOD_START = "2025-01-07T00:00"
-SEED_PERIOD_END   = "2026-05-15T22:59"
-
-# --- Seed BEST3TOP MGC MomentumCheckerV2 v3 WINNER ------------------------
-# Full param dict mirrored from data/presets.json
+# --- v4 WR WINNER seed ---------------------------------------------------
+# Full param dict mirrored from data/presets.json (BESTWR-MGC v4)
 SEED_PARAMS = {
     "long_prep_threshold": 3,
     "long_threshold": 5,
@@ -48,11 +52,11 @@ SEED_PARAMS = {
     "short_threshold": 5,
     "min_gap": 8,
     "max_candle_pct": 0.25,
-    "sl_lookback": 15,
+    "sl_lookback": 14,
     "sl_max_points": 120.0,
     "sl_min_pct": 0.0,
-    "rr_tp": 3,
-    "tick_buffer": 2,
+    "rr_tp": 1.25,
+    "tick_buffer": 0,
     "be_at_rr": 2,
     "osc_on": True,
     "hyper_wave_length": 5,
@@ -100,7 +104,7 @@ SEED_PARAMS = {
     "pts_alligator": 1,
     "pts_alli_offset": 1,
     "pts_retest_lips": 1,
-    "ut_on": True,
+    "ut_on": False,
     "ut_key": 1.6,
     "ut_atr_period": 10,
     "pts_ut_bot": 1,
@@ -126,15 +130,18 @@ SEED_PARAMS = {
     "pts_hma_slow": 1,
 }
 
-SEED_RISK_PCT = 0.0053  # 0.53 % decimal
+# v4 winner: 0.42 % risk
+SEED_RISK_PCT = 0.0042
 
-# --- BEST3TOP engine settings (5 active blackouts, AC 22:00) --------------
+# v4 winner: 7 active blackouts (5 seed + 07-08 + 12-12:30)
 SEED_BLACKOUTS_ACTIVE = [
+    (7, 0, 8, 0),
+    (12, 0, 12, 30),
     (12, 30, 14, 0),
     (15, 30, 17, 0),
-    (18, 0,  19, 0),
-    (20, 0,  21, 0),
-    (22, 0,  23, 59),
+    (18, 0, 19, 0),
+    (20, 0, 21, 0),
+    (22, 0, 23, 59),
 ]
 SEED_AUTO_CLOSE_H = 22
 SEED_AUTO_CLOSE_M = 0
@@ -195,25 +202,3 @@ def seed_kwargs(**overrides):
         engine_settings=es,
         **overrides,
     )
-
-
-# --- Minimal-modules anchor (per user instruction) ------------------------
-# Start from "very few conditions" then add iteratively (Phases 1b/2+).
-# Keep osc + hma core (osc-off -> 6 trades per MGC v3 finding).
-MINIMAL_PARAMS_OVERRIDE = {
-    "ema_on": False,
-    "st_on": False,
-    "alligator_on": False,
-    "ut_on": False,
-    "stc_on": False,
-    # osc_on=True, hma_on=True kept (core)
-    # Filter knobs all off:
-    "hw_filter_on": False,
-    "hw_extreme_filter_on": False,
-    "sig_filter_on": False,
-    "sig_range_reject": False,
-    "sig_extreme_filter_on": False,
-    "cloud_filter_on": False,
-    "delta_filter_on": False,
-    "cloud_zero_filter_on": False,
-}
