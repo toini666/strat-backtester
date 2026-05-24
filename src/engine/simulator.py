@@ -64,6 +64,12 @@ class SimulatorConfig:
     block_loss_canal_exit_before_tp1: bool = False  # if True, ignore losing HMA exits until TP1/partial
     close_partial_min_rr: float = 0.0     # minimum current RR for close-based partial exits; 0 disables
     one_trade_per_setup_window: bool = False  # v3: only one trade per HMA-slow/SSL setup window per side
+    # Gator-MTF v4: Pine's per-family (fast/slow) "one trade per window" gate.
+    # Each family slot is SHARED between long and short sides — taking a fast
+    # LONG trade blocks subsequent fast SHORT entries until a NEW fast cross
+    # fires on BOTH sides. Activated when the strategy provides the four
+    # cross-bar series + the two ``use_fast_for_*`` flags.
+    one_trade_per_window_mtf: bool = False
     final_exit_pct: float = 0.0          # v3 "% du prix d'entrée en profit": intra-bar TP at entry × (1 ± pct/100), rounded to tick; 0 disables
     # v4 final-exit (canal_exit_mode == "v4_hw_rr") parameters
     final_exit_min_rr: float = 0.0        # v4: RR threshold gating the HW-cross final exit (0 = no gate)
@@ -437,6 +443,30 @@ def simulate(
     )
     last_long_traded_setup_bar = -1
     last_short_traded_setup_bar = -1
+
+    # Gator-MTF v4: per-family (fast/slow) "one trade per window" state.
+    # Each slot stores the cross bar of the trade that locked it (or -1 = na).
+    # Pine semantics: a family is unblocked when BOTH its long-cross-bar and
+    # short-cross-bar are non-na AND different from the locking value.
+    _lflcb_s = signals.get("last_fast_long_cross_bar")
+    _lfscb_s = signals.get("last_fast_short_cross_bar")
+    _lslcb_s = signals.get("last_slow_long_cross_bar")
+    _lsscb_s = signals.get("last_slow_short_cross_bar")
+    _ufl_s = signals.get("use_fast_for_long")
+    _ufs_s = signals.get("use_fast_for_short")
+    np_lflcb = _lflcb_s.values if _lflcb_s is not None else None
+    np_lfscb = _lfscb_s.values if _lfscb_s is not None else None
+    np_lslcb = _lslcb_s.values if _lslcb_s is not None else None
+    np_lsscb = _lsscb_s.values if _lsscb_s is not None else None
+    np_ufl = _ufl_s.values if _ufl_s is not None else None
+    np_ufs = _ufs_s.values if _ufs_s is not None else None
+    has_mtf_window = bool(config.one_trade_per_window_mtf) and (
+        np_lflcb is not None and np_lfscb is not None
+        and np_lslcb is not None and np_lsscb is not None
+        and np_ufl is not None and np_ufs is not None
+    )
+    last_fast_traded_bar = -1
+    last_slow_traded_bar = -1
 
     # Optional SSL baseline for TP2 trigger (overrides inside-canal TP2 logic)
     _ssl_baseline_s = signals.get("ssl_baseline")
@@ -1703,6 +1733,19 @@ def simulate(
                     and int(np_setup_bar_long[i]) == last_long_traded_setup_bar
                 ):
                     continue
+                # Gator-MTF v4: Pine's per-family window-ok check. A family is
+                # locked until BOTH its long-cross and short-cross are non-na
+                # AND different from the locking value — na-aware, matches
+                # Pine's ``na != x`` returning na (falsy).
+                if has_mtf_window:
+                    if bool(np_ufl[i]):
+                        cl = int(np_lflcb[i]); cs = int(np_lfscb[i])
+                        lt = last_fast_traded_bar
+                    else:
+                        cl = int(np_lslcb[i]); cs = int(np_lsscb[i])
+                        lt = last_slow_traded_bar
+                    if lt >= 0 and not (cl >= 0 and cl != lt and cs >= 0 and cs != lt):
+                        continue
                 # Use custom entry price if provided (e.g. retracement level)
                 if np_entry_price_long is not None and not np.isnan(np_entry_price_long[i]):
                     entry_price = _round_tick(np_entry_price_long[i], ts)
@@ -1761,6 +1804,11 @@ def simulate(
                     if pos.early_exit_fired and config.early_exit_fired_mode == "hw_rr":
                         pos.pending_final_exit = True
                 last_long_traded_setup_bar = entry_setup
+                if has_mtf_window:
+                    if bool(np_ufl[i]):
+                        last_fast_traded_bar = int(np_lflcb[i])
+                    else:
+                        last_slow_traded_bar = int(np_lslcb[i])
 
             elif np_short_entry[i]:
                 # v3: skip if the current HMA-slow/SSL setup window already
@@ -1773,6 +1821,15 @@ def simulate(
                     and int(np_setup_bar_short[i]) == last_short_traded_setup_bar
                 ):
                     continue
+                if has_mtf_window:
+                    if bool(np_ufs[i]):
+                        cl = int(np_lflcb[i]); cs = int(np_lfscb[i])
+                        lt = last_fast_traded_bar
+                    else:
+                        cl = int(np_lslcb[i]); cs = int(np_lsscb[i])
+                        lt = last_slow_traded_bar
+                    if lt >= 0 and not (cl >= 0 and cl != lt and cs >= 0 and cs != lt):
+                        continue
                 if np_entry_price_short is not None and not np.isnan(np_entry_price_short[i]):
                     entry_price = _round_tick(np_entry_price_short[i], ts)
                 else:
@@ -1829,6 +1886,11 @@ def simulate(
                     if pos.early_exit_fired and config.early_exit_fired_mode == "hw_rr":
                         pos.pending_final_exit = True
                 last_short_traded_setup_bar = entry_setup
+                if has_mtf_window:
+                    if bool(np_ufs[i]):
+                        last_fast_traded_bar = int(np_lfscb[i])
+                    else:
+                        last_slow_traded_bar = int(np_lsscb[i])
 
     # --- Close any remaining position at end of data ---
     if pos is not None:

@@ -152,7 +152,16 @@ class GatorMTFv4(Strategy):
     def get_simulator_settings(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
         p = self.get_params(params)
         s = dict(self.simulator_settings)
-        s["one_trade_per_setup_window"] = bool(p.get("one_trade_per_window", True))
+        # Pine "un trade par fenêtre" tracks TWO slots (fast/slow), each
+        # SHARED across long and short — taking a fast long blocks future
+        # fast shorts. one_trade_per_window_mtf delegates this Pine-exact
+        # semantics to the simulator using the four cross-bar series + the
+        # two use-fast flags emitted by generate_signals.
+        s["one_trade_per_window_mtf"] = bool(p.get("one_trade_per_window", True))
+        # We deliberately leave the v3-style one_trade_per_setup_window OFF
+        # (that was the wrong per-side collapse). The two are mutually
+        # exclusive in practice.
+        s["one_trade_per_setup_window"] = False
         return s
 
     # ------------------------------------------------------------------
@@ -621,20 +630,19 @@ class GatorMTFv4(Strategy):
         short_signal = short_signal_raw & sl_short_ok
 
         # ------------------------------------------------------------------
-        # 8. One-trade-per-window setup-bar tracking
+        # 8. One-trade-per-window (Pine semantics: per-family, NOT per-side)
         # ------------------------------------------------------------------
-        # Pine's logic uses two slots (fast / slow). Single-slot collapse:
-        # if a fast window is active, take fast's cross bar; otherwise take
-        # slow's. Behaviour matches Pine when only one family is "winning"
-        # at the entry bar (verified case-by-case in the design notes).
-        setup_bar_long = np.where(
-            window_fast_long, last_fast_long_cross_bar,
-            np.where(window_slow_long, last_slow_long_cross_bar, -1),
-        ).astype(np.int64)
-        setup_bar_short = np.where(
-            window_fast_short, last_fast_short_cross_bar,
-            np.where(window_slow_short, last_slow_short_cross_bar, -1),
-        ).astype(np.int64)
+        # Each fenêtre family (fast / slow) has ONE slot shared between long
+        # and short — taking a fast long locks fast for subsequent fast
+        # SHORTS too until a new fast cross fires on BOTH sides. We delegate
+        # the gating to the simulator (`one_trade_per_window_mtf`) and just
+        # provide:
+        #   - the 4 cross-bar series (latest cross bar per family/side)
+        #   - the 2 use_fast_for_{long,short} flags (Pine: useFastForLong =
+        #     windowFastLong, regardless of slow window)
+        # Sentinel -1 ≡ Pine's `na` (no cross fired yet).
+        use_fast_for_long_series = window_fast_long
+        use_fast_for_short_series = window_fast_short
 
         # ------------------------------------------------------------------
         # 9. Build the signals dict for the simulator
@@ -701,8 +709,13 @@ class GatorMTFv4(Strategy):
                 "sl_short": sl_short_rounded,
                 "tp_final_long": tp_final_long,
                 "tp_final_short": tp_final_short,
-                "setup_bar_long": setup_bar_long,
-                "setup_bar_short": setup_bar_short,
+                # MTF per-family one-trade-per-window inputs (debug-visible)
+                "last_fast_long_cross_bar": last_fast_long_cross_bar,
+                "last_fast_short_cross_bar": last_fast_short_cross_bar,
+                "last_slow_long_cross_bar": last_slow_long_cross_bar,
+                "last_slow_short_cross_bar": last_slow_short_cross_bar,
+                "use_fast_for_long": use_fast_for_long_series.astype(int),
+                "use_fast_for_short": use_fast_for_short_series.astype(int),
                 "param_window_bars_chart": window_bars_chart,
                 "param_trigger_tf_min": trigger_tf_min,
             },
@@ -722,7 +735,13 @@ class GatorMTFv4(Strategy):
             "ema_main": pd.Series(np.nan, index=idx),
             "ema_secondary": pd.Series(np.nan, index=idx),
             "cooldown_bars": int(p["cooldown_bars"]),
-            "setup_bar_long": pd.Series(setup_bar_long, index=idx),
-            "setup_bar_short": pd.Series(setup_bar_short, index=idx),
+            # MTF per-family "un trade par fenêtre" — consumed by the
+            # simulator when `one_trade_per_window_mtf=True`.
+            "last_fast_long_cross_bar": pd.Series(last_fast_long_cross_bar, index=idx),
+            "last_fast_short_cross_bar": pd.Series(last_fast_short_cross_bar, index=idx),
+            "last_slow_long_cross_bar": pd.Series(last_slow_long_cross_bar, index=idx),
+            "last_slow_short_cross_bar": pd.Series(last_slow_short_cross_bar, index=idx),
+            "use_fast_for_long": pd.Series(use_fast_for_long_series, index=idx),
+            "use_fast_for_short": pd.Series(use_fast_for_short_series, index=idx),
             "debug_frame": debug_frame,
         }
