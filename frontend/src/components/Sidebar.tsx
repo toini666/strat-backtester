@@ -294,6 +294,15 @@ export function Sidebar({
                 </select>
             );
         }
+        if (key === 'entry_cross_mode') {
+            return (
+                <select className="input-base" value={String(value)} onChange={(e) => handleParamChange(key, e.target.value)}>
+                    <option value="Baseline">Baseline</option>
+                    <option value="Borne proche">Borne proche</option>
+                    <option value="Borne opposée">Borne opposée</option>
+                </select>
+            );
+        }
         if (key === 'early_exit_fired_mode') {
             return (
                 <select className="input-base" value={String(value)} onChange={(e) => handleParamChange(key, e.target.value)}>

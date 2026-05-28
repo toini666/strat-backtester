@@ -21,6 +21,7 @@ len_ssl   = input.int(60,    "Période SSL",                    group=grp_ssl)
 multy_ssl = input.float(0.2, "Multiplicateur Canal Keltner",   group=grp_ssl)
 bColorSSL = input.color(color.new(#00c3ff, 0), "Couleur SSL Haussière", group=grp_ssl)
 sColorSSL = input.color(color.new(#ff0062, 0), "Couleur SSL Baissière", group=grp_ssl)
+i_entryCrossMode = input.string("Baseline", "Mode cross entrée HMA lente", group=grp_ssl, options=["Baseline", "Borne proche", "Borne opposée"], tooltip="Ligne SSL utilisée pour le cross d'entrée de la HMA lente. Baseline = comportement historique (BBMC SSL). Borne proche = la bande SSL la plus proche du sens du cross (lower pour short, upper pour long). Borne opposée = la bande SSL opposée (upper pour short, lower pour long).")
 
 // --- 4Kings Oscillator ---
 grp_osc       = "4KINGS OSCILLATOR"
@@ -51,6 +52,7 @@ i_deltaExtOn   = input.bool(false,  "⑧ Activer extinction deltas",     group=g
 grp_risk       = "GESTION DES RISQUES"
 i_tickBuffer   = input.int(0,      "Buffer SL (en ticks)",         group=grp_risk)
 i_maxSlPoints  = input.float(300.0,"Distance SL max (points)",     group=grp_risk, minval=1.0, tooltip="Trade ignoré si le SL sélectionné se trouve à plus de N points.")
+i_minSlPoints  = input.float(0.0,  "Distance SL min (points)",     group=grp_risk, minval=0.0, tooltip="Si le SL calculé se trouve à moins de N points du prix d'entrée, il est repoussé à exactement N points (plus loin du prix). 0 = désactivé.")
 i_cooldownBars = input.int(1,      "Bougies d'attente post-close", group=grp_risk, minval=0)
 i_maxCandlePct = input.float(0.9,  "Taille max bougie Entry (%)",  group=grp_risk, step=0.1, minval=0.0, tooltip="Trade ignoré si abs(close - open) / close > N%. 0 = désactivé.")
 i_signalCandleSlOn = input.bool(true, "Vérifier bougie signal vs SL", group=grp_risk, tooltip="Si activé, rejette les entrées où le low (long) ou le high (short) de la bougie d'entrée touche le SL.")
@@ -62,6 +64,11 @@ i_finalExitMode    = input.string("HMA rapide/SSL → HW", "Mode sortie finale",
 i_finalExitPct     = input.float(0.1,  "   Sortie finale (% prix entrée)", group=grp_risk, minval=0.0, step=0.01, tooltip="Pourcentage du prix d'entrée déclenchant la sortie finale en mode '% du prix d'entrée en profit'. Ex. 0.01 = 0,01% (facteur ×0,0001). La cible = prix d'entrée ± (entrée × pct / 100), arrondie au mintick. Exécution intrabar (high pour long, low pour short). 0 = désactive le mode.")
 
 simple int HW_SL_LOOKAROUND = 2
+
+// --- EMA sortie étendue ---
+grp_emaExit    = "EMA SORTIE ÉTENDUE"
+i_emaExitExtOn = input.bool(false, "Activer extension TP via EMA",  group=grp_emaExit, tooltip="Si activé, quand la sortie finale HMA rapide/SSL → HW se déclenche, on vérifie le close vs l'EMA. Si on est du bon côté (close > EMA pour long, close < EMA pour short), on reste en position et on sort à la première bougie dont le close traverse l'EMA dans l'autre sens. Sans effet en mode '% du prix d'entrée en profit'.")
+i_emaExitLen   = input.int(20,     "Longueur EMA sortie étendue",   group=grp_emaExit, minval=1)
 
 // --- Auto-Close ---
 grp_time      = "Auto-Close (Bruxelles)"
@@ -162,6 +169,8 @@ var float initialStopPrice  = na
 var bool  lossExitBlocked   = false
 var bool  pendingFinalExitLong  = false
 var bool  pendingFinalExitShort = false
+var bool  emaExtPendingLong     = false
+var bool  emaExtPendingShort    = false
 
 var line lineEntry = na
 var line lineStop  = na
@@ -268,6 +277,14 @@ if hmaFlipUp
     lastHmaFlipUpBar := bar_index
 if hmaFlipDown
     lastHmaFlipDownBar := bar_index
+
+// ============================================
+// EMA SORTIE ÉTENDUE
+// ============================================
+
+float emaExit      = ta.ema(close, i_emaExitLen)
+bool  emaCrossDown = ta.crossunder(close, emaExit)
+bool  emaCrossUp   = ta.crossover(close,  emaExit)
 
 // ============================================
 // 4KINGS OSCILLATOR
@@ -379,14 +396,20 @@ bool oscAllShortOk = hwDirShortOk and hwExtremeShortOk and sigExtremeShortOk and
 // ============================================
 
 // Setup V3 long:
-//   - HMA lente passe de dessus à dessous la baseline SSL
+//   - HMA lente passe de dessus à dessous la ligne SSL sélectionnée (i_entryCrossMode)
 //   - La fenêtre d'entrée reste ouverte pendant N bougies
 // Setup V3 short:
-//   - HMA lente passe de dessous à dessus la baseline SSL
+//   - HMA lente passe de dessous à dessus la ligne SSL sélectionnée (i_entryCrossMode)
 //   - La fenêtre d'entrée reste ouverte pendant N bougies
 
-bool slowHmaCrossLong  = hma2 < BBMC_ssl and hma2[1] > BBMC_ssl[1]
-bool slowHmaCrossShort = hma2 > BBMC_ssl and hma2[1] < BBMC_ssl[1]
+// Sélection de la ligne SSL pour le cross d'entrée selon i_entryCrossMode.
+// LONG (HMA lente cross vers le bas) : proche = upper, opposée = lower.
+// SHORT (HMA lente cross vers le haut) : proche = lower, opposée = upper.
+float entryRefLong  = i_entryCrossMode == "Borne proche" ? upperk_ssl : i_entryCrossMode == "Borne opposée" ? lowerk_ssl : BBMC_ssl
+float entryRefShort = i_entryCrossMode == "Borne proche" ? lowerk_ssl : i_entryCrossMode == "Borne opposée" ? upperk_ssl : BBMC_ssl
+
+bool slowHmaCrossLong  = hma2 < entryRefLong  and hma2[1] > entryRefLong[1]
+bool slowHmaCrossShort = hma2 > entryRefShort and hma2[1] < entryRefShort[1]
 bool fastHmaExitLong   = hma1 > BBMC_ssl and hma1[1] < BBMC_ssl[1]
 bool fastHmaExitShort  = hma1 < BBMC_ssl and hma1[1] > BBMC_ssl[1]
 
@@ -429,8 +452,13 @@ float bullHwRangeLow = ta.lowest(low, bullHwSlLen)
 float bearHwRangeHigh = ta.highest(high, bearHwSlLen)
 float bullHwSlBase = bullHwTradeSlReady ? bullHwRangeLow : na
 float bearHwSlBase = bearHwTradeSlReady ? bearHwRangeHigh : na
-float slLong         = bullHwSlBase - slBuffer
-float slShort        = bearHwSlBase + slBuffer
+float slLongRaw    = bullHwSlBase - slBuffer
+float slShortRaw   = bearHwSlBase + slBuffer
+// Distance SL min : si le SL calculé est plus proche que le minimum, on le repousse à exactement N points.
+// Long : SL en dessous du close → on prend le min (= le plus bas) entre raw et close - minPoints.
+// Short : SL au-dessus du close → on prend le max (= le plus haut) entre raw et close + minPoints.
+float slLong  = na(slLongRaw)  ? na : (i_minSlPoints > 0.0 ? math.min(slLongRaw,  close - i_minSlPoints) : slLongRaw)
+float slShort = na(slShortRaw) ? na : (i_minSlPoints > 0.0 ? math.max(slShortRaw, close + i_minSlPoints) : slShortRaw)
 float slDistLong  = close - slLong
 float slDistShort = slShort - close
 
@@ -481,6 +509,8 @@ if positionActive and i_autoCloseOn and autoCloseBar and canAct
     lossExitBlocked     := false
     pendingFinalExitLong  := false
     pendingFinalExitShort := false
+    emaExtPendingLong     := false
+    emaExtPendingShort    := false
     canAct              := false
     if not na(lineEntry)
         line.delete(lineEntry)
@@ -551,20 +581,31 @@ if positionActive and canAct and bar_index > lastActionBar
         // TP Final V3 - 2 modes selon i_finalExitMode:
         //   1. "HMA rapide/SSL → HW" : signal = cross HMA rapide / baseline SSL,
         //      exécution = à la clôture de la prochaine hyperwave confirmée (peu importe son sens).
+        //      Si i_emaExitExtOn et close > emaExit au moment du signal, on arme une extension
+        //      exclusive : la sortie ne se fait plus que sur emaCrossDown (close traverse l'EMA
+        //      vers le bas). Les signaux HMA→HW ultérieurs sont ignorés tant que l'extension est active.
         //   2. "% du prix d'entrée en profit" : sortie au touche dès que high >= entry × (1 + pct/100), arrondi au mintick.
         if i_finalExitMode == "HMA rapide/SSL → HW"
-            if fastHmaExitLong
-                pendingFinalExitLong := true
-            bool exitCondLong = pendingFinalExitLong and (hwCrossOver or hwCrossUnder)
-            bool allowFinalExitLong = not i_blockLossExitBeforePartial or tpPartialHit or close >= entryPrice
-            if exitCondLong and not allowFinalExitLong and not hitBreakeven and not hitStopLoss
-                lossExitBlocked := true
-            if exitCondLong and allowFinalExitLong and not hitBreakeven and not hitStopLoss
-                hitCanalExit := true
+            if emaExtPendingLong
+                if emaCrossDown and not hitBreakeven and not hitStopLoss
+                    hitCanalExit := true
+            else
+                if fastHmaExitLong
+                    pendingFinalExitLong := true
+                bool exitCondLong = pendingFinalExitLong and (hwCrossOver or hwCrossUnder)
+                bool allowFinalExitLong = not i_blockLossExitBeforePartial or tpPartialHit or close >= entryPrice
+                if exitCondLong and not allowFinalExitLong and not hitBreakeven and not hitStopLoss
+                    lossExitBlocked := true
+                if exitCondLong and allowFinalExitLong and not hitBreakeven and not hitStopLoss
+                    if i_emaExitExtOn and not na(emaExit) and close > emaExit
+                        emaExtPendingLong    := true
+                        pendingFinalExitLong := false
+                    else
+                        hitCanalExit := true
 
-            // Sortie alternative après blocage : close sous le canal HMA
-            if lossExitBlocked and close < canalLower and not hitBreakeven and not hitStopLoss and not hitCanalExit
-                hitCanalExit := true
+                // Sortie alternative après blocage : close sous le canal HMA
+                if lossExitBlocked and close < canalLower and not hitBreakeven and not hitStopLoss and not hitCanalExit
+                    hitCanalExit := true
         else if i_finalExitMode == "% du prix d'entrée en profit" and i_finalExitPct > 0
             float targetLong = roundToTick(entryPrice * (1.0 + i_finalExitPct / 100.0))
             if high >= targetLong and not hitBreakeven and not hitStopLoss
@@ -595,20 +636,31 @@ if positionActive and canAct and bar_index > lastActionBar
         // TP Final V3 - 2 modes selon i_finalExitMode:
         //   1. "HMA rapide/SSL → HW" : signal = cross HMA rapide / baseline SSL,
         //      exécution = à la clôture de la prochaine hyperwave confirmée (peu importe son sens).
+        //      Si i_emaExitExtOn et close < emaExit au moment du signal, on arme une extension
+        //      exclusive : la sortie ne se fait plus que sur emaCrossUp (close traverse l'EMA
+        //      vers le haut). Les signaux HMA→HW ultérieurs sont ignorés tant que l'extension est active.
         //   2. "% du prix d'entrée en profit" : sortie au touche dès que low <= entry × (1 - pct/100), arrondi au mintick.
         if i_finalExitMode == "HMA rapide/SSL → HW"
-            if fastHmaExitShort
-                pendingFinalExitShort := true
-            bool exitCondShort = pendingFinalExitShort and (hwCrossOver or hwCrossUnder)
-            bool allowFinalExitShort = not i_blockLossExitBeforePartial or tpPartialHit or close <= entryPrice
-            if exitCondShort and not allowFinalExitShort and not hitBreakeven and not hitStopLoss
-                lossExitBlocked := true
-            if exitCondShort and allowFinalExitShort and not hitBreakeven and not hitStopLoss
-                hitCanalExit := true
+            if emaExtPendingShort
+                if emaCrossUp and not hitBreakeven and not hitStopLoss
+                    hitCanalExit := true
+            else
+                if fastHmaExitShort
+                    pendingFinalExitShort := true
+                bool exitCondShort = pendingFinalExitShort and (hwCrossOver or hwCrossUnder)
+                bool allowFinalExitShort = not i_blockLossExitBeforePartial or tpPartialHit or close <= entryPrice
+                if exitCondShort and not allowFinalExitShort and not hitBreakeven and not hitStopLoss
+                    lossExitBlocked := true
+                if exitCondShort and allowFinalExitShort and not hitBreakeven and not hitStopLoss
+                    if i_emaExitExtOn and not na(emaExit) and close < emaExit
+                        emaExtPendingShort    := true
+                        pendingFinalExitShort := false
+                    else
+                        hitCanalExit := true
 
-            // Sortie alternative après blocage : close au-dessus du canal HMA
-            if lossExitBlocked and close > canalUpper and not hitBreakeven and not hitStopLoss and not hitCanalExit
-                hitCanalExit := true
+                // Sortie alternative après blocage : close au-dessus du canal HMA
+                if lossExitBlocked and close > canalUpper and not hitBreakeven and not hitStopLoss and not hitCanalExit
+                    hitCanalExit := true
         else if i_finalExitMode == "% du prix d'entrée en profit" and i_finalExitPct > 0
             float targetShort = roundToTick(entryPrice * (1.0 - i_finalExitPct / 100.0))
             if low <= targetShort and not hitBreakeven and not hitStopLoss
@@ -659,6 +711,8 @@ if positionActive and canAct and bar_index > lastActionBar
         lossExitBlocked   := false
         pendingFinalExitLong  := false
         pendingFinalExitShort := false
+        emaExtPendingLong     := false
+        emaExtPendingShort    := false
         if not na(lineEntry)
             line.delete(lineEntry)
             lineEntry := na
@@ -692,6 +746,9 @@ p_ssl_mid = plot(BBMC_ssl,   "SSL Baseline",      color=color_ssl, linewidth=2)
 p_ssl_up  = plot(upperk_ssl, "SSL Upper Channel", color=color_ssl, linewidth=1)
 p_ssl_lo  = plot(lowerk_ssl, "SSL Lower Channel", color=color_ssl, linewidth=1)
 fill(p_ssl_up, p_ssl_lo, color=color.new(color_ssl, 90), title="Canal SSL")
+
+// EMA sortie étendue (visible uniquement si l'extension est activée)
+plot(i_emaExitExtOn ? emaExit : na, "EMA Sortie étendue", color=color.new(color.purple, 0), linewidth=1)
 
 // Entrées
 bool isNewLong  = positionActive and currentSide == 1  and not positionActive[1]
@@ -758,7 +815,8 @@ if barstate.islast
     // ── Setup HMA lente / SSL ──────────────────────────────
     int barsSinceLongSetup  = na(lastLongSetupBar)  ? na : bar_index - lastLongSetupBar
     int barsSinceShortSetup = na(lastShortSetupBar) ? na : bar_index - lastShortSetupBar
-    string setupStr = "Setup HMA lente/SSL (max " + str.tostring(i_entryWindowBars) + ")"
+    string setupCrossMode = i_entryCrossMode == "Borne proche" ? "proche" : i_entryCrossMode == "Borne opposée" ? "opposée" : "baseline"
+    string setupStr = "Setup HMA lente/SSL " + setupCrossMode + " (max " + str.tostring(i_entryWindowBars) + ")"
     table.cell(tbl, 0, 2, setupStr, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
     table.cell(tbl, 1, 2, entryWindowLongOk  ? "✓ " + str.tostring(barsSinceLongSetup)  : "✗", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(entryWindowLongOk))
     table.cell(tbl, 2, 2, entryWindowShortOk ? "✓ " + str.tostring(barsSinceShortSetup) : "✗", text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(entryWindowShortOk))
@@ -770,7 +828,8 @@ if barstate.islast
     table.cell(tbl, 2, 3, f_icon(hmaShortOk), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(hmaShortOk))
 
     // ── Cross courant HMA lente / SSL ──────────────────────
-    table.cell(tbl, 0, 4, "Cross HMA lente/SSL", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    string crossModeShort = i_entryCrossMode == "Borne proche" ? "proche" : i_entryCrossMode == "Borne opposée" ? "opposée" : "baseline"
+    table.cell(tbl, 0, 4, "Cross HMA lente/SSL (" + crossModeShort + ")", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
     table.cell(tbl, 1, 4, f_icon(slowHmaCrossLong),  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(slowHmaCrossLong))
     table.cell(tbl, 2, 4, f_icon(slowHmaCrossShort), text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(slowHmaCrossShort))
 
@@ -851,7 +910,10 @@ if barstate.islast
     string slShortSrc = "HW-" + str.tostring(bearHwSlAge) + "b"
     string slLongStr  = na(bullHwSlBase) ? "Pas HW bull >2" : not logicalSlLong ? "Invalide (SL>Px)" : not signalCandleSlLongOk ? "Bougie <= SL" : (na(slDistLong) ? "—" : slLongSrc + " " + str.tostring(slDistLong,  "#.#") + " pts")
     string slShortStr = na(bearHwSlBase) ? "Pas HW bear >2" : not logicalSlShort ? "Invalide (SL<Px)" : not signalCandleSlShortOk ? "Bougie >= SL" : (na(slDistShort) ? "—" : slShortSrc + " " + str.tostring(slDistShort, "#.#") + " pts")
-    table.cell(tbl, 0, 13, "SL depuis HW-2 (max " + str.tostring(i_maxSlPoints, "#") + ")", text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
+    string slRangeLabel = i_minSlPoints > 0.0
+         ? "SL depuis HW-2 (" + str.tostring(i_minSlPoints, "#") + "-" + str.tostring(i_maxSlPoints, "#") + ")"
+         : "SL depuis HW-2 (max " + str.tostring(i_maxSlPoints, "#") + ")"
+    table.cell(tbl, 0, 13, slRangeLabel, text_color=TXT_WHITE, text_size=i_tblSize, text_halign=text.align_left)
     table.cell(tbl, 1, 13, slLongStr,  text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(slLongOk))
     table.cell(tbl, 2, 13, slShortStr, text_color=TXT_WHITE, text_size=i_tblSize, bgcolor=f_bg(slShortOk))
 
@@ -889,7 +951,7 @@ if barstate.islast
     // ── TP Final ──────────────────────────────────────────
     string tpFinalLabel = i_finalExitMode == "% du prix d'entrée en profit"
          ? "TP Final (+" + str.tostring(i_finalExitPct, "#.###") + "%)"
-         : "TP Final (HMA rapide/SSL → HW)"
+         : (i_emaExitExtOn ? "TP Final (HMA → HW → EMA" + str.tostring(i_emaExitLen) + ")" : "TP Final (HMA rapide/SSL → HW)")
 
     string tpFinalStatusL = "—"
     string tpFinalStatusS = "—"
@@ -897,9 +959,10 @@ if barstate.islast
     color  tpFinalColorS  = f_bgNa()
 
     if positionActive and i_finalExitMode == "HMA rapide/SSL → HW"
+        bool   emaExtArmed    = (currentSide == 1 and emaExtPendingLong) or (currentSide == -1 and emaExtPendingShort)
         bool   tpFinalPending = (currentSide == 1 and pendingFinalExitLong) or (currentSide == -1 and pendingFinalExitShort)
-        string s = tpFinalPending ? "attente HW" : "actif"
-        color  c = tpFinalPending ? color.new(color.orange, 35) : color.new(color.lime, 40)
+        string s = emaExtArmed ? "attente cross EMA" : (tpFinalPending ? "attente HW" : "actif")
+        color  c = emaExtArmed ? color.new(color.aqua, 35) : (tpFinalPending ? color.new(color.orange, 35) : color.new(color.lime, 40))
         if currentSide == 1
             tpFinalStatusL := s
             tpFinalColorL  := c
@@ -929,7 +992,7 @@ if barstate.islast
 alertcondition(hmaFlipUp,   title="HMA Inversion Haussière", message="HMA Canal: inversion haussière (vert → rouge)")
 alertcondition(hmaFlipDown, title="HMA Inversion Baissière", message="HMA Canal: inversion baissière (rouge → vert)")
 alertcondition(hmaFlipUp or hmaFlipDown, title="HMA Inversion (toutes directions)", message="HMA Canal: inversion détectée")
-alertcondition(slowHmaCrossLong,  title="V3 Setup Long HMA lente/SSL",  message="V3: HMA lente sous baseline SSL après clôture")
-alertcondition(slowHmaCrossShort, title="V3 Setup Short HMA lente/SSL", message="V3: HMA lente au-dessus baseline SSL après clôture")
+alertcondition(slowHmaCrossLong,  title="V3 Setup Long HMA lente/SSL",  message="V3: HMA lente cross descendant la ligne SSL (mode entrée) - setup long")
+alertcondition(slowHmaCrossShort, title="V3 Setup Short HMA lente/SSL", message="V3: HMA lente cross montant la ligne SSL (mode entrée) - setup short")
 alertcondition(fastHmaExitLong,   title="V3 TP Long HMA rapide/SSL",    message="V3: HMA rapide au-dessus baseline SSL après clôture")
 alertcondition(fastHmaExitShort,  title="V3 TP Short HMA rapide/SSL",   message="V3: HMA rapide sous baseline SSL après clôture")

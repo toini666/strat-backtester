@@ -176,6 +176,7 @@ def run_backtest(
             simulator_settings.get("tp_mode_slow_hma_cross", False)
         ),
         report_tp_if_mfi_ok=bool(simulator_settings.get("report_tp_if_mfi_ok", False)),
+        ema_exit_ext_on=bool(simulator_settings.get("ema_exit_ext_on", False)),
         daily_win_limit_enabled=engine_settings.daily_win_limit_enabled,
         daily_win_limit=engine_settings.daily_win_limit,
         daily_loss_limit_enabled=engine_settings.daily_loss_limit_enabled,

@@ -72,6 +72,11 @@ class HMASSLOsciV3(HMASSLOsciV2):
         # Risk management
         "tick_buffer": 0,
         "max_sl_points": 300.0,
+        # Minimum SL distance from entry close (in points). When the natural
+        # SL computed from the HW lookback is closer to entry than this
+        # threshold, the SL is pushed out to exactly ``min_sl_points`` away.
+        # Default 0 disables the floor (legacy v3 behavior).
+        "min_sl_points": 0.0,
         "cooldown_bars": 1,
         "max_candle_pct": 0.9,
         "signal_candle_sl_on": False,
@@ -83,6 +88,18 @@ class HMASSLOsciV3(HMASSLOsciV2):
         # "% du prix d'entrée en profit" (intra-bar TP at entry × (1 ± final_exit_pct/100), rounded to tick).
         "final_exit_mode": "HMA rapide/SSL → HW",
         "final_exit_pct": 0.1,
+        # v3.1 — Entry cross reference. Which SSL line the slow HMA must cross
+        # to open the entry window. "Baseline" (default) = BBMC_ssl (legacy v3
+        # behavior). "Borne proche" = upper for long / lower for short (earlier
+        # signal). "Borne opposée" = lower for long / upper for short (later).
+        "entry_cross_mode": "Baseline",
+        # v3.1 — EMA extension of the HMA→HW final exit. When ON, at the
+        # moment the standard HMA→HW final exit would close the trade, if
+        # close is on the favorable side of EMA(close, ema_exit_len), the
+        # trade stays open and only closes on the opposite EMA cross. Only
+        # active under final_exit_mode == "HMA rapide/SSL → HW".
+        "ema_exit_ext_on": False,
+        "ema_exit_len": 20,
         # Injected by engine
         "tick_size": 0.25,
     }
@@ -104,6 +121,7 @@ class HMASSLOsciV3(HMASSLOsciV2):
         "sig_extreme": [15.0, 20.0, 25.0],
         "hw_range": [5.0, 10.0, 15.0],
         "max_sl_points": [100.0, 200.0, 300.0],
+        "min_sl_points": [0.0, 5.0, 10.0, 20.0],
         "cooldown_bars": [0, 1, 2],
         "max_candle_pct": [0.0, 0.5, 0.9],
         "hw_partial_pct": [0.0, 25.0, 50.0],
@@ -113,6 +131,9 @@ class HMASSLOsciV3(HMASSLOsciV2):
         "signal_candle_sl_on": [True, False],
         "one_trade_per_entry_window": [True, False],
         "final_exit_pct": [0.05, 0.1, 0.15, 0.2],
+        "entry_cross_mode": ["Baseline", "Borne proche", "Borne opposée"],
+        "ema_exit_ext_on": [True, False],
+        "ema_exit_len": [10, 20, 50],
     }
 
     def get_simulator_settings(self, params=None):
@@ -134,6 +155,9 @@ class HMASSLOsciV3(HMASSLOsciV2):
         settings["one_trade_per_setup_window"] = bool(
             p.get("one_trade_per_entry_window", True)
         )
+        # v3.1: EMA extension of the HMA→HW final exit. Only meaningful in the
+        # legacy "HMA rapide/SSL → HW" branch; ignored under v3_fixed_points.
+        settings["ema_exit_ext_on"] = bool(p.get("ema_exit_ext_on", False))
         return settings
 
     def generate_signals(
@@ -169,10 +193,13 @@ class HMASSLOsciV3(HMASSLOsciV2):
 
         tick_buf = p["tick_buffer"]
         max_sl_points = p["max_sl_points"]
+        min_sl_points = float(p.get("min_sl_points", 0.0))
         max_candle_pct = p["max_candle_pct"]
         signal_candle_sl_on = p.get("signal_candle_sl_on", True)
         hw_partial_enabled = float(p.get("hw_partial_pct", 25.0)) > 0
         tick_size = p["tick_size"]
+        entry_cross_mode = p.get("entry_cross_mode", "Baseline")
+        ema_exit_len = int(p.get("ema_exit_len", 20))
 
         close = data["Close"]
         open_ = data["Open"]
@@ -199,6 +226,24 @@ class HMASSLOsciV3(HMASSLOsciV2):
             self._compute_mfi_cloud(mfi_vals, mfL)
         )
 
+        # v3.1 — entry cross reference depends on entry_cross_mode. We keep
+        # BBMC_ssl as the reference for the FAST HMA / SSL exit (unchanged
+        # per the briefing) and only switch the SLOW HMA cross reference.
+        if entry_cross_mode == "Borne proche":
+            entry_ref_long_s = ssl_upper_s
+            entry_ref_short_s = ssl_lower_s
+        elif entry_cross_mode == "Borne opposée":
+            entry_ref_long_s = ssl_lower_s
+            entry_ref_short_s = ssl_upper_s
+        else:  # "Baseline" (or any unknown value) → legacy v3 behavior
+            entry_ref_long_s = bbmc_s
+            entry_ref_short_s = bbmc_s
+
+        # v3.1 — EMA used by the optional final-exit extension.  We always
+        # compute the series + cross signals; the simulator only acts on them
+        # when ema_exit_ext_on is true (via SimulatorConfig).
+        ema_exit_s = close.ewm(span=ema_exit_len, adjust=False).mean()
+
         np_close = close.values
         np_open = open_.values
         np_high = high.values
@@ -209,6 +254,34 @@ class HMASSLOsciV3(HMASSLOsciV2):
         np_canal_upper = canal_upper_s.values
         np_canal_lower = canal_lower_s.values
         np_canal_green = canal_green_s.values
+        np_entry_ref_long = entry_ref_long_s.values
+        np_entry_ref_short = entry_ref_short_s.values
+        np_ema_exit = ema_exit_s.values
+
+        # ta.crossunder(close, ema) = close < ema and close[1] >= ema[1]
+        # ta.crossover (close, ema) = close > ema and close[1] <= ema[1]
+        ema_cross_down_arr = np.zeros(n, dtype=bool)
+        ema_cross_up_arr = np.zeros(n, dtype=bool)
+        if n > 0:
+            valid = ~(np.isnan(np_close) | np.isnan(np_ema_exit))
+            shift_valid = np.zeros(n, dtype=bool)
+            shift_valid[1:] = valid[:-1] & valid[1:]
+            prev_close = np.empty(n, dtype=np_close.dtype)
+            prev_ema = np.empty(n, dtype=np_ema_exit.dtype)
+            prev_close[0] = np.nan
+            prev_ema[0] = np.nan
+            prev_close[1:] = np_close[:-1]
+            prev_ema[1:] = np_ema_exit[:-1]
+            ema_cross_down_arr = (
+                shift_valid
+                & (np_close < np_ema_exit)
+                & (prev_close >= prev_ema)
+            )
+            ema_cross_up_arr = (
+                shift_valid
+                & (np_close > np_ema_exit)
+                & (prev_close <= prev_ema)
+            )
         np_osc = osc_sig.values if osc_sig is not None else np.full(n, np.nan)
         np_sgd = osc_sgd.values if osc_sgd is not None else np.full(n, np.nan)
         np_mfi = mfi_vals
@@ -346,20 +419,33 @@ class HMASSLOsciV3(HMASSLOsciV2):
 
             # v3 HMA-slow / SSL-baseline crosses (close-basis on the
             # indicator series, equivalent to ``ta.crossover/under``).
+            # Entry-cross reference depends on entry_cross_mode (default
+            # "Baseline" = BBMC_ssl, i.e. legacy v3 behavior). The fast HMA
+            # exit cross stays anchored to BBMC_ssl regardless.
             if i > 0:
                 bbmc_p = np_bbmc[i - 1]
                 hma2_p = np_hma2[i - 1]
                 hma1_p = np_hma1[i - 1]
+                ref_long = np_entry_ref_long[i]
+                ref_long_p = np_entry_ref_long[i - 1]
+                ref_short = np_entry_ref_short[i]
+                ref_short_p = np_entry_ref_short[i - 1]
                 if (
                     not np.isnan(hma2)
-                    and not np.isnan(bbmc)
+                    and not np.isnan(ref_long)
                     and not np.isnan(hma2_p)
-                    and not np.isnan(bbmc_p)
+                    and not np.isnan(ref_long_p)
                 ):
-                    if hma2 < bbmc and hma2_p > bbmc_p:
+                    if hma2 < ref_long and hma2_p > ref_long_p:
                         slow_cross_long_arr[i] = True
                         last_long_setup_bar = i
-                    if hma2 > bbmc and hma2_p < bbmc_p:
+                if (
+                    not np.isnan(hma2)
+                    and not np.isnan(ref_short)
+                    and not np.isnan(hma2_p)
+                    and not np.isnan(ref_short_p)
+                ):
+                    if hma2 > ref_short and hma2_p < ref_short_p:
                         slow_cross_short_arr[i] = True
                         last_short_setup_bar = i
                 if (
@@ -550,6 +636,12 @@ class HMASSLOsciV3(HMASSLOsciV2):
                     window_start = 0
                 bull_range_low = float(np.min(np_low[window_start : i + 1]))
                 sl_raw_long = bull_range_low - sl_buffer
+                # Floor: SL must sit at least ``min_sl_points`` below entry
+                # close. If the natural SL is too tight, push it out.
+                if min_sl_points > 0:
+                    sl_floor_long = c - min_sl_points
+                    if sl_raw_long > sl_floor_long:
+                        sl_raw_long = sl_floor_long
             else:
                 sl_raw_long = np.nan
 
@@ -560,6 +652,10 @@ class HMASSLOsciV3(HMASSLOsciV2):
                     window_start = 0
                 bear_range_high = float(np.max(np_high[window_start : i + 1]))
                 sl_raw_short = bear_range_high + sl_buffer
+                if min_sl_points > 0:
+                    sl_floor_short = c + min_sl_points
+                    if sl_raw_short < sl_floor_short:
+                        sl_raw_short = sl_floor_short
             else:
                 sl_raw_short = np.nan
 
@@ -650,6 +746,11 @@ class HMASSLOsciV3(HMASSLOsciV2):
                 "fast_exit_short": fast_exit_short_arr.astype(int),
                 "setup_bar_long": setup_bar_long_arr,
                 "setup_bar_short": setup_bar_short_arr,
+                "entry_ref_long": entry_ref_long_s,
+                "entry_ref_short": entry_ref_short_s,
+                "ema_exit": ema_exit_s,
+                "ema_cross_down": ema_cross_down_arr.astype(int),
+                "ema_cross_up": ema_cross_up_arr.astype(int),
                 "logical_sl_long": logical_sl_long_arr.astype(int),
                 "logical_sl_short": logical_sl_short_arr.astype(int),
                 "signal_candle_sl_long_ok": signal_candle_sl_long_ok_arr.astype(int),
@@ -666,6 +767,9 @@ class HMASSLOsciV3(HMASSLOsciV2):
                 "param_entry_window_bars": entry_window_bars,
                 "param_ssl_len": ssl_len,
                 "param_ssl_mult": ssl_mult,
+                "param_entry_cross_mode": entry_cross_mode,
+                "param_ema_exit_len": ema_exit_len,
+                "param_min_sl_points": min_sl_points,
             },
             index=data.index,
         )
@@ -696,6 +800,12 @@ class HMASSLOsciV3(HMASSLOsciV2):
             "hw_cross_under": pd.Series(hw_cross_under_arr, index=data.index),
             "setup_bar_long": pd.Series(setup_bar_long_arr, index=data.index),
             "setup_bar_short": pd.Series(setup_bar_short_arr, index=data.index),
+            # v3.1 — EMA-extension series consumed by the simulator when the
+            # ``ema_exit_ext_on`` flag is set on the SimulatorConfig. They are
+            # emitted unconditionally; gating happens in the simulator.
+            "ema_exit": pd.Series(np_ema_exit, index=data.index),
+            "ema_cross_down": pd.Series(ema_cross_down_arr, index=data.index),
+            "ema_cross_up": pd.Series(ema_cross_up_arr, index=data.index),
             "ema_main": src_ema,
             "ema_secondary": src_ema,
             "cooldown_bars": p["cooldown_bars"],

@@ -95,6 +95,13 @@ class SimulatorConfig:
     # the trade's side, defer the exit to the next HW. Applies only to the
     # fast-HMA + HW path.
     report_tp_if_mfi_ok: bool = False
+    # v3.1: EMA extension of the HMA→HW final exit. When True, at the moment
+    # the v3 ``v3_fast_hma_ssl`` branch would close the position, if the close
+    # is on the favorable side of the EMA series provided by the strategy
+    # (``ema_exit``), arm an exclusive extension that will only close on the
+    # opposite EMA cross (``ema_cross_down`` for longs, ``ema_cross_up`` for
+    # shorts). Backwards-compat: defaults to False → behaves like legacy v3.
+    ema_exit_ext_on: bool = False
 
     daily_win_limit_enabled: bool = False
     daily_win_limit: float = 500.0
@@ -141,6 +148,9 @@ class _Position:
     pending_final_exit: bool = False  # v3/v4: fast HMA/SSL cross fired; waiting for next hyperwave cross to actually exit
     entry_setup_bar: int = -1         # v3: the setup-window bar this trade was opened in
     early_exit_fired: bool = False    # v4: at entry, hma1 was already on the wrong side of BBMC_ssl (signal lost)
+    # v3.1 — EMA-extension state. When True the v3 final-exit branch ignores
+    # all HMA→HW / loss-block logic and waits for an opposite EMA cross.
+    ema_ext_pending: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +403,20 @@ def simulate(
     is_v3_exit_mode = config.canal_exit_mode == "v3_fast_hma_ssl"
     is_v3_fixed_exit_mode = config.canal_exit_mode == "v3_fixed_points"
     is_v4_exit_mode = config.canal_exit_mode == "v4_hw_rr"
+
+    # v3.1 — EMA extension of the v3 final exit. Series come from the strategy
+    # (``ema_exit``, ``ema_cross_down``, ``ema_cross_up``). They are read only
+    # in the ``is_v3_exit_mode`` branch and only when ``ema_exit_ext_on``.
+    _ema_exit_s = signals.get("ema_exit")
+    _ema_cross_down_s = signals.get("ema_cross_down")
+    _ema_cross_up_s = signals.get("ema_cross_up")
+    np_ema_exit_ext = _ema_exit_s.values if _ema_exit_s is not None else None
+    np_ema_cross_down = (
+        _ema_cross_down_s.values if _ema_cross_down_s is not None else None
+    )
+    np_ema_cross_up = (
+        _ema_cross_up_s.values if _ema_cross_up_s is not None else None
+    )
 
     # v4: structural-state series read by the simulator
     #   hma1_above_ssl[i]   = True when hma1 > BBMC_ssl at bar i (used to detect
@@ -1510,34 +1534,81 @@ def simulate(
                         # position on a later bar.  Order mirrors v3
                         # PineScript: arm pending → exit-cond → loss-block
                         # fallback → partial.
-                        fast_exit_fired = False
-                        if pos.side == 1 and np_fast_exit_long is not None and bar_idx < len(np_fast_exit_long):
-                            fast_exit_fired = bool(np_fast_exit_long[bar_idx])
-                        elif pos.side == -1 and np_fast_exit_short is not None and bar_idx < len(np_fast_exit_short):
-                            fast_exit_fired = bool(np_fast_exit_short[bar_idx])
-                        if fast_exit_fired:
-                            pos.pending_final_exit = True
-                        hw_cross_any = False
-                        if np_hw_cross_over is not None and bar_idx < len(np_hw_cross_over):
-                            hw_cross_any = hw_cross_any or bool(np_hw_cross_over[bar_idx])
-                        if np_hw_cross_under is not None and bar_idx < len(np_hw_cross_under):
-                            hw_cross_any = hw_cross_any or bool(np_hw_cross_under[bar_idx])
-                        exit_cond_fired = pos.pending_final_exit and hw_cross_any
-                        if exit_cond_fired:
-                            if allow_canal_exit:
+                        #
+                        # v3.1 — EMA-extension branch. Once the extension is
+                        # armed (``pos.ema_ext_pending``), the position
+                        # ignores every HMA→HW signal (no rearm, no loss-block,
+                        # no canal fallback). The trade only closes on the
+                        # opposite EMA cross provided by the strategy.
+                        if pos.ema_ext_pending:
+                            ema_cross_opposite = False
+                            if (
+                                pos.side == 1
+                                and np_ema_cross_down is not None
+                                and bar_idx < len(np_ema_cross_down)
+                            ):
+                                ema_cross_opposite = bool(np_ema_cross_down[bar_idx])
+                            elif (
+                                pos.side == -1
+                                and np_ema_cross_up is not None
+                                and bar_idx < len(np_ema_cross_up)
+                            ):
+                                ema_cross_opposite = bool(np_ema_cross_up[bar_idx])
+                            if ema_cross_opposite:
                                 _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
                                 return True
-                            else:
-                                pos.loss_exit_blocked = True
-                        # Fallback: once loss_exit_blocked is latched, exit on
-                        # close out of the opposite canal side.
-                        if pos is not None and pos.loss_exit_blocked:
-                            if pos.side == 1 and close_price < cl:
-                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
-                                return True
-                            elif pos.side == -1 and close_price > cu:
-                                _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
-                                return True
+                        else:
+                            fast_exit_fired = False
+                            if pos.side == 1 and np_fast_exit_long is not None and bar_idx < len(np_fast_exit_long):
+                                fast_exit_fired = bool(np_fast_exit_long[bar_idx])
+                            elif pos.side == -1 and np_fast_exit_short is not None and bar_idx < len(np_fast_exit_short):
+                                fast_exit_fired = bool(np_fast_exit_short[bar_idx])
+                            if fast_exit_fired:
+                                pos.pending_final_exit = True
+                            hw_cross_any = False
+                            if np_hw_cross_over is not None and bar_idx < len(np_hw_cross_over):
+                                hw_cross_any = hw_cross_any or bool(np_hw_cross_over[bar_idx])
+                            if np_hw_cross_under is not None and bar_idx < len(np_hw_cross_under):
+                                hw_cross_any = hw_cross_any or bool(np_hw_cross_under[bar_idx])
+                            exit_cond_fired = pos.pending_final_exit and hw_cross_any
+                            if exit_cond_fired:
+                                if allow_canal_exit:
+                                    # v3.1 — arm the EMA extension if the
+                                    # close is on the favorable side of EMA
+                                    # exit. Strict comparison (matches Pine
+                                    # ``close > emaExit`` / ``close < emaExit``).
+                                    ema_val = (
+                                        np_ema_exit_ext[bar_idx]
+                                        if np_ema_exit_ext is not None
+                                        and bar_idx < len(np_ema_exit_ext)
+                                        else np.nan
+                                    )
+                                    ema_favorable = False
+                                    if config.ema_exit_ext_on and not np.isnan(ema_val):
+                                        if pos.side == 1 and close_price > ema_val:
+                                            ema_favorable = True
+                                        elif pos.side == -1 and close_price < ema_val:
+                                            ema_favorable = True
+                                    if ema_favorable:
+                                        pos.ema_ext_pending = True
+                                        pos.pending_final_exit = False
+                                    else:
+                                        _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                        return True
+                                else:
+                                    pos.loss_exit_blocked = True
+                            # Fallback: once loss_exit_blocked is latched,
+                            # exit on close out of the opposite canal side.
+                            # NB: this fallback path is gated by the
+                            # ``else`` above — it never runs while the EMA
+                            # extension is armed, mirroring Pine.
+                            if pos is not None and pos.loss_exit_blocked:
+                                if pos.side == 1 and close_price < cl:
+                                    _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                    return True
+                                elif pos.side == -1 and close_price > cu:
+                                    _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
+                                    return True
                     elif config.inverse_canal_exit:
                         if pos.side == 1 and close_price > cu and allow_canal_exit:
                             _close_position(close_price, exit_bar_time, exit_exec_time, "Canal Exit")
