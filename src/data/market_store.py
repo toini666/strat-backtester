@@ -26,14 +26,14 @@ BRUSSELS_TZ = "Europe/Brussels"
 # Map symbol short names to current active contract IDs
 # Updated as contracts roll over
 SYMBOL_CONTRACTS = {
-    "MNQ": "CON.F.US.MNQ.M26",
-    "MES": "CON.F.US.MES.M26",
-    "MYM": "CON.F.US.MYM.M26",
-    "MGC": "CON.F.US.MGC.M26",
-    "MBT": "CON.F.US.MBT.K26",
-    "M2K": "CON.F.US.M2K.M26",
-    # Roll to N26 from the CME session opening on 2026-05-15 00:00 Brussels (= 2026-05-14 22:00 UTC).
-    "MCL": "CON.F.US.MCLE.N26",
+    # Roll to U26 from the CME session opening on 2026-06-15 00:00 Brussels (= 2026-06-14 22:00 UTC).
+    "MNQ": "CON.F.US.MNQ.U26",
+    "MES": "CON.F.US.MES.U26",
+    "MYM": "CON.F.US.MYM.U26",
+    # Roll to Q26 from the CME session opening on 2026-05-28 00:00 Brussels (= 2026-05-27 22:00 UTC).
+    "MGC": "CON.F.US.MGC.Q26",
+    # Roll to Q26 from the CME session opening on 2026-06-17 00:00 Brussels (= 2026-06-16 22:00 UTC).
+    "MCL": "CON.F.US.MCLE.Q26",
 }
 
 # Timeframes to generate from 1m data
